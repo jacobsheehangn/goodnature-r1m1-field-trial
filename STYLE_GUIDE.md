@@ -345,3 +345,11 @@ All Goodnature-orange primary buttons use **white text** in default, hover, focu
 - Form controls render at least 16 px to avoid iOS focus zoom.
 - Bottom controls clear Safari chrome using safe-area padding.
 - User zoom remains enabled.
+
+
+## Metrics inside cards
+
+- A section has one outer boundary only.
+- Metrics inside a section card are content, not nested cards.
+- Metrics use transparent backgrounds with no border or shadow.
+- Do not apply the generic card treatment to `st.metric`.

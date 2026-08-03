@@ -98,3 +98,11 @@ dependency was removed because it is not published on public pip.
 
 The browser test targets the exact password textbox role and name, avoiding
 Streamlit's separate **Show password** button.
+
+
+## v8.6.48 live-test stability
+
+- Login waits up to 120 seconds for Render cold starts.
+- Tests accept either the login form or an already-authenticated home screen.
+- Sidebar tests ignore hidden, off-screen Streamlit controls.
+- Terminology checks inspect rendered page text.

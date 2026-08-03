@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.47 Login Test Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.49 Metric Surface Fix"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -465,6 +465,30 @@ def site_name(data, site_id):
 
 def trap_row(data, trap_id):
     return data["Traps"][data["Traps"]["Trap ID"] == trap_id].iloc[0]
+
+
+def trap_location_label(trap) -> str:
+    """Return user-facing trap location without legacy route terminology."""
+    if trap is None:
+        return "No location recorded"
+
+    raw_location = str(trap.get("Location", "") or "").strip()
+    raw_order = trap.get("Route Order", "")
+
+    try:
+        trap_number = int(float(raw_order))
+    except (TypeError, ValueError):
+        trap_number = None
+
+    if not raw_location:
+        return f"Trap {trap_number}" if trap_number is not None else "No location recorded"
+
+    if re.fullmatch(r"Route point\s*\d+", raw_location, flags=re.IGNORECASE):
+        return f"Trap {trap_number}" if trap_number is not None else re.sub(
+            r"Route point", "Trap", raw_location, flags=re.IGNORECASE
+        )
+
+    return raw_location
 
 
 def active_visit(data, site_id):
@@ -1195,7 +1219,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"],
 [data-testid="stForm"],
 [data-testid="stExpander"],
-[data-testid="stMetric"],
 [data-testid="stFileUploader"],
 [data-testid="stCameraInput"],
 [data-testid="stDataFrame"],
@@ -1203,12 +1226,21 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
   border-color: var(--line) !important;
 }
 [data-testid="stExpander"],
-[data-testid="stMetric"],
 [data-testid="stFileUploader"],
 [data-testid="stCameraInput"] {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
   border-radius: 16px !important;
+}
+
+/* Metrics are content inside a section card, not another card. */
+[data-testid="stMetric"] {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
 }
 [data-testid="stDataFrame"] {
   border: 1px solid var(--line) !important;
@@ -1565,7 +1597,7 @@ elif page == "site":
             c1,c2 = st.columns([.22,1], vertical_alignment="center")
             c1.markdown(f"**{int(float(tr['Route Order'])) if str(tr['Route Order']).strip() else '—'}**")
             c2.markdown(f"**{tr['Trap ID']}**")
-            c2.caption(tr["Location"] or "No location recorded")
+            c2.caption(trap_location_label(tr))
 
 elif page == "start_visit":
     sid = st.session_state.site_id
@@ -1599,7 +1631,7 @@ elif page == "visit":
                 "Check saved",
                 recorded=[f"{saved['trap_id']} · {len(done)} of {len(traps)} complete"],
                 updated=[consequence_text] if consequence_text else [],
-                next_action=f"{remaining[0]} · {nxt['Location'] or 'No location recorded'}",
+                next_action=f"{remaining[0]} · {trap_location_label(nxt)}",
             )
             st.button(
                 "Check next trap",
@@ -1627,13 +1659,13 @@ elif page == "visit":
             with app_card():
                 st.caption("FIRST TRAP" if is_first else "NEXT TRAP")
                 st.subheader(next_trap)
-                st.write(tr["Location"] or "No location recorded")
+                st.write(trap_location_label(tr))
                 st.caption(f"Trap {tr['Route Order']} · {tr['Build Version']}")
                 if st.button("Check trap" if is_first else "Check next trap", type="primary"):
                     go("check", site_id=sid, visit_id=vid, trap_id=next_trap)
             with st.expander("Choose another trap"):
                 st.caption("Use this only when you need to check a different trap next.")
-                other = st.selectbox("Trap", remaining, format_func=lambda x:f"{x} — {trap_row(data,x)['Location']}")
+                other = st.selectbox("Trap", remaining, format_func=lambda x: f"{x} — {trap_location_label(trap_row(data, x))}")
                 if st.button("Check selected trap"): go("check", site_id=sid, visit_id=vid, trap_id=other)
         else:
             message_panel("success", "Every trap has been accounted for.", ["Finish the site when you are ready to leave."])
@@ -1650,7 +1682,7 @@ elif page == "visit":
             with app_card():
                 cols=st.columns([.22,1,.42], vertical_alignment="center")
                 cols[0].markdown(f"**{int(float(tr['Route Order'])) if str(tr['Route Order']).strip() else '—'}**")
-                cols[1].markdown(f"**{trap_id}**"); cols[1].caption(tr["Location"] or "No location")
+                cols[1].markdown(f"**{trap_id}**"); cols[1].caption(trap_location_label(tr))
                 cols[2].write("✓" if status == "Checked" else status)
     if remaining and st.button("Pause and return to Trap sites"):
         go("sites")
@@ -1666,7 +1698,7 @@ elif page == "check":
     progress_number = len(done) + (0 if trap_id in done else 1)
     st.markdown(
         f'<div class="field-sticky-header"><div class="trap">{html.escape(str(trap_id))}</div>'
-        f'<div class="meta">Trap {progress_number} of {total_traps} · {html.escape(site_name(data,sid))}<br>{html.escape(str(tr["Location"] or "No location"))}</div></div>',
+        f'<div class="meta">Trap {progress_number} of {total_traps} · {html.escape(site_name(data,sid))}<br>{html.escape(trap_location_label(tr))}</div></div>',
         unsafe_allow_html=True,
     )
     if st.button("← Back to traps"): go("visit",site_id=sid,visit_id=vid)
@@ -1781,7 +1813,7 @@ elif page == "check_confirm":
     assessable = p["finding"] not in ["Trap missing", "Unable to check"]
     will_start = bool(p["relured"] and p["ready"] and camera_ready and assessable)
     st.button("← Edit check", on_click=set_page, args=("check",), kwargs={"site_id": sid, "visit_id": vid, "trap_id": trap_id})
-    header("Confirm check", f"{trap_id} · {tr['Location']}")
+    header("Confirm check", f"{trap_id} · {trap_location_label(tr)}")
 
     st.markdown("### You recorded")
     with app_card():
@@ -1904,7 +1936,7 @@ elif page == "network":
                 with app_card():
                     c1,c2,c3,c4,action=st.columns([1.15,1.25,1.0,1.25,0.75],vertical_alignment="center")
                     c1.markdown(f"**{trap_id}**"); c1.caption(site_name(data,tr["Site ID"]))
-                    c2.write(tr["Location"] or "—"); c2.caption(f"Trap {tr['Route Order']}")
+                    c2.write(trap_location_label(tr)); c2.caption(f"Trap {tr['Route Order']}")
                     c3.write(tr["Build Version"] or "—"); c3.caption(tr["Product"])
                     c4.write("Active window" if w is not None else "No active window"); c4.caption(f"Last checked {last_checked}")
                     if action.button("View",key=f"network_view_{trap_id}",use_container_width=True):
@@ -1916,7 +1948,7 @@ elif page == "network":
             if matches.empty:
                 st.session_state.pop("network_trap",None); st.rerun()
             tr=matches.iloc[0]
-            st.subheader(trap_id); st.caption(f"{site_name(data,tr['Site ID'])} · {tr['Location']}")
+            st.subheader(trap_id); st.caption(f"{site_name(data,tr['Site ID'])} · {trap_location_label(tr)}")
             st.write(f"**Trap type:** {tr['Product']}"); st.write(f"**Build:** {tr['Build Version']}"); st.write(f"**Camera:** {tr['Camera ID']}")
             w=open_window(data,trap_id); st.write(f"**Current window:** {w['Window ID'] if w is not None else 'None'}")
             st.divider(); st.markdown("#### Recent history")
@@ -2463,10 +2495,10 @@ elif page == "setup":
                         c1, c2, c3, c4, action = st.columns([1.05, 1.25, 1.0, 1.0, 0.7], vertical_alignment="center")
                         c1.markdown(f"**{trap_id}**")
                         c1.caption(tr["Product"])
-                        c2.write(tr["Location"] or "—")
+                        c2.write(trap_location_label(tr))
                         c2.caption(site_name(data, tr["Site ID"]))
                         c3.write(tr["Build Version"] or "—")
-                        c3.caption(f"Route {tr['Route Order']}")
+                        c3.caption(f"Trap {tr['Route Order']}")
                         c4.write(tr["Camera ID"] or "No camera")
                         c4.caption(tr["Status"])
                         if action.button("Edit", key=f"setup_edit_trap_{trap_id}"):
@@ -2481,7 +2513,7 @@ elif page == "setup":
                     build_options=data["Builds"][data["Builds"]["Product"]==product]["Build Version"].tolist() or [""]
                     build=st.selectbox("Build",build_options,index=(build_options.index(existing["Build Version"]) if existing is not None and existing["Build Version"] in build_options else 0))
                     site_options=data["Sites"]["Site ID"].tolist(); site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x))
-                    location=st.text_input("Location description",value=existing["Location"] if existing is not None else "")
+                    location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
                     order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
                     deployment=parse_dt(existing["Deployment Start"]) if existing is not None else now()
@@ -2792,7 +2824,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.47 · Login Test Fix")
+st.sidebar.caption("v8.6.49 · Metric Surface Fix")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

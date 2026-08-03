@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.47 Login Test Fix
+# R1/M1 Field Trial App — v8.6.49 Metric Surface Fix
 
 ## Deployment requirement
 
@@ -289,3 +289,20 @@ See `TESTING_GUIDE.md`.
 - Avoids matching Streamlit's separate **Show password** button.
 - Tightens the sign-in button locator.
 - No app behaviour or trial data changed.
+
+
+## v8.6.48 live gate stability
+
+- Login tests tolerate Render cold starts and already-authenticated sessions.
+- Mobile sidebar tests select only visible, on-screen controls.
+- Legacy persistent values such as `Route point 1` display as `Trap 1`.
+- Internal workbook fields remain unchanged.
+
+
+## v8.6.49 metric surface fix
+
+- Removed the nested border and background from Streamlit metrics.
+- The surrounding section card remains the single visual boundary.
+- Audited all metrics: 3 total, all 3 inside section cards.
+- Added a live browser regression test for metric border and shadow styles.
+- No data or calculation changes.
