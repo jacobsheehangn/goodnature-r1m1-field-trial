@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.42 Explicit Photo Capture"
+APP_TITLE = "R1/M1 Field Trial — v8.6.44 Automated Release Gate"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -651,7 +651,7 @@ def add_pending_photo(
 
 
 def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
-    """Explicit camera/upload flow. No device prompt until the user chooses an action."""
+    """Upload-only photo flow. No camera stream or device camera request."""
     photo_key = photo_session_key(visit_id, trap_id)
     mode_key = photo_capture_mode_key(visit_id, trap_id)
     nonce_key = photo_widget_nonce_key(visit_id, trap_id)
@@ -666,17 +666,8 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
         key=f"photo_type_{trap_id}_{visit_id}",
     )
 
-    action_cols = st.columns(2)
-    camera_label = "Take another photo" if photos else "Take photo"
-    upload_label = "Upload another image" if photos else "Upload image"
-    if action_cols[0].button(
-        camera_label,
-        key=f"open_camera_{trap_id}_{visit_id}",
-        use_container_width=True,
-    ):
-        st.session_state[mode_key] = "camera"
-        st.rerun()
-    if action_cols[1].button(
+    upload_label = "Add another photo" if photos else "Add photo"
+    if st.button(
         upload_label,
         key=f"open_upload_{trap_id}_{visit_id}",
         use_container_width=True,
@@ -687,39 +678,12 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
     mode = st.session_state.get(mode_key, "")
     nonce = int(st.session_state.get(nonce_key, 0))
 
-    if mode == "camera":
+    if mode == "upload":
         with app_card():
-            st.markdown("**Take photo**")
-            st.caption("Your camera is opened only because you chose Take photo.")
-            captured = st.camera_input(
-                "Camera",
-                key=f"camera_capture_{trap_id}_{visit_id}_{nonce}",
-                label_visibility="collapsed",
+            st.markdown("**Add photo**")
+            st.caption(
+                "Choose one or more images from this device. On mobile, use the phone's normal image picker."
             )
-            if captured is not None:
-                added = add_pending_photo(
-                    visit_id,
-                    trap_id,
-                    captured.getvalue(),
-                    captured.type or "image/jpeg",
-                    photo_type,
-                    "Camera",
-                )
-                st.session_state[mode_key] = ""
-                st.session_state[nonce_key] = nonce + 1
-                st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = (
-                    "Photo added." if added else "That photo is already attached."
-                )
-                st.rerun()
-            if st.button("Cancel camera", key=f"cancel_camera_{trap_id}_{visit_id}"):
-                st.session_state[mode_key] = ""
-                st.session_state[nonce_key] = nonce + 1
-                st.rerun()
-
-    elif mode == "upload":
-        with app_card():
-            st.markdown("**Upload image**")
-            st.caption("Choose one or more existing images from this device.")
             uploaded = st.file_uploader(
                 "Choose images",
                 type=["jpg", "jpeg", "png", "webp"],
@@ -744,12 +708,13 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
                         duplicate_count += 1
                 st.session_state[mode_key] = ""
                 st.session_state[nonce_key] = nonce + 1
-                message = f"{added_count} image{'s' if added_count != 1 else ''} added."
+                message = f"{added_count} photo{'s' if added_count != 1 else ''} added."
                 if duplicate_count:
                     message += f" {duplicate_count} duplicate{'s' if duplicate_count != 1 else ''} skipped."
                 st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
                 st.rerun()
-            if st.button("Cancel upload", key=f"cancel_upload_{trap_id}_{visit_id}"):
+
+            if st.button("Cancel", key=f"cancel_upload_{trap_id}_{visit_id}"):
                 st.session_state[mode_key] = ""
                 st.session_state[nonce_key] = nonce + 1
                 st.rerun()
@@ -776,6 +741,7 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
                 ):
                     st.session_state[photo_key].pop(photo_index)
                     st.rerun()
+
 
 
 def compress_photo_bytes(raw_bytes: bytes) -> bytes:
@@ -1444,6 +1410,67 @@ li[role="option"][aria-selected="true"] {
 .mobile-save-anchor {
   display: none !important;
 }
+
+/* v8.6.43 — final mobile control and navigation visibility */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--brand-orange) !important;
+}
+
+label[data-baseweb="checkbox"] > div:first-child,
+[data-testid="stCheckbox"] label > div:first-child {
+  background: #ffffff !important;
+  border: 2px solid #444a53 !important;
+  box-shadow: none !important;
+}
+label[data-baseweb="checkbox"]:has(input:checked) > div:first-child,
+[data-testid="stCheckbox"] label:has(input:checked) > div:first-child {
+  background: var(--brand-orange) !important;
+  border-color: var(--brand-orange) !important;
+}
+label[data-baseweb="checkbox"] svg,
+[data-testid="stCheckbox"] svg {
+  color: #ffffff !important;
+  fill: #ffffff !important;
+  stroke: #ffffff !important;
+}
+
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"],
+button[kind="header"],
+header button[aria-label*="sidebar" i],
+section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+  background: #ffffff !important;
+  color: #202124 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  z-index: 1002 !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] *,
+[data-testid="stSidebarCollapseButton"] *,
+[data-testid="collapsedControl"] *,
+button[kind="header"] *,
+header button[aria-label*="sidebar" i] *,
+section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
+  color: #202124 !important;
+  fill: #202124 !important;
+  stroke: #202124 !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 700px) {
+  [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stSidebarCollapseButton"],
+  [data-testid="collapsedControl"],
+  button[kind="header"],
+  header button[aria-label*="sidebar" i],
+  section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+    min-width: 2.75rem !important;
+    min-height: 2.75rem !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1668,7 +1695,7 @@ elif page == "check":
             animal_bagged=st.checkbox(f"Animal bagged and labelled {bag_id}",key=f"bagged_{trap_id}_{vid}")
 
             st.markdown("#### Photograph the animal")
-            st.caption("Take a clear photo before removing the animal. Include the head and ears where possible. Photos are linked to this check and bag ID.")
+            st.caption("Add a clear photo before removing the animal. Include the head and ears where possible. Photos are linked to this check and bag ID.")
             render_check_photo_capture(vid, trap_id)
         elif finding=="Trap fired, no animal":
             st.warning("Camera review will determine whether this was a missed kill, false activation or non-target event.")
@@ -2765,7 +2792,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.42 · Explicit Photo Capture")
+st.sidebar.caption("v8.6.44 · Automated Release Gate")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

@@ -313,3 +313,35 @@ Use three groups: **You recorded**, **After saving, the app will**, and **Next**
 ## Locked decision — primary buttons
 
 All Goodnature-orange primary buttons use **white text** in default, hover, focus and pressed states. This is the single app-wide rule.
+
+
+## Current field UI baseline — v8.6.43
+
+### Surfaces
+- White page with light-grey grouped surfaces.
+- Every meaningful field section has a visible border.
+- Standard surface: `#F8F8F6`.
+- Standard border: `#C9CDD2`.
+- Goodnature orange is reserved for primary and selected states.
+
+### Selection controls
+- Unselected radios and checkboxes use white interiors with dark outlines.
+- Selected radios and checkboxes use Goodnature orange.
+- Do not use solid black selection controls.
+- Select fields use complete one-pixel borders and consistent rounded corners.
+
+### Navigation
+- Mobile sidebar open and close controls must be dark on the light header.
+- App navigation is the left sidebar.
+- Do not hide or clip Streamlit toolbar controls.
+
+### Photos
+- Do not use an embedded browser camera stream.
+- Add photos through the device's standard image picker.
+- Support multiple images, thumbnails and removal before saving.
+- Saved photos remain linked to the check, window, trap, site and bag ID.
+
+### Mobile
+- Form controls render at least 16 px to avoid iOS focus zoom.
+- Bottom controls clear Safari chrome using safe-area padding.
+- User zoom remains enabled.

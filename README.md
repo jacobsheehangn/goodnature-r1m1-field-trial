@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.42 Explicit Photo Capture
+# R1/M1 Field Trial App — v8.6.44 Automated Release Gate
 
 ## Deployment requirement
 
@@ -241,3 +241,28 @@ Photo flow:
 6. save all images with the trap check
 
 The camera exists only after an explicit **Take photo** action. Manual upload supports one or more JPG, PNG or WebP images. Duplicate images are skipped.
+
+
+## v8.6.43 upload-only photos
+
+- Removed the embedded camera widget throughout the app.
+- **Add photo** opens the device's standard image picker.
+- Multiple images, thumbnails, duplicate detection and removal remain.
+- Hardened mobile sidebar open/close icon contrast.
+- Unselected radio buttons and checkboxes now use white interiors with dark outlines.
+- Updated the style guide to capture the current approved baseline.
+
+
+## v8.6.44 automated release gate
+
+Added:
+
+- static source checks
+- workbook integrity checks
+- Playwright desktop and mobile smoke tests
+- screenshot capture
+- one-command local runner
+- GitHub Actions workflow
+- environment-variable credential handling
+
+See `TESTING_GUIDE.md`.
