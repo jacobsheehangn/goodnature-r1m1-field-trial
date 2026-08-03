@@ -74,3 +74,15 @@ Browser automation cannot guarantee the exact native picker behaviour on a physi
 - thumbnails appear
 - images persist after save
 - Safari bottom chrome does not cover controls
+
+
+## Current staging values
+
+Use these as repository secrets, not committed files:
+
+- `R1M1_TEST_URL`: `https://r1m1-field-trial.onrender.com/`
+- `R1M1_TEST_PASSWORD`: the current staging password
+
+In GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
+
+After adding both secrets, open **Actions → R1M1 release gate → Run workflow**.

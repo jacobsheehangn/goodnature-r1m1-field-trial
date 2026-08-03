@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.44 Automated Release Gate
+# R1/M1 Field Trial App — v8.6.45 Hardened Release Gate
 
 ## Deployment requirement
 
@@ -266,3 +266,11 @@ Added:
 - environment-variable credential handling
 
 See `TESTING_GUIDE.md`.
+
+
+## v8.6.45 hardened release gate
+
+- Added a self-contained Playwright `page` fixture.
+- Removed reliance on the optional pytest-playwright plugin.
+- Browser preflight failures now explain how to install Chromium.
+- GitHub Actions remains the recommended live test runner.
