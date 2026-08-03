@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.49 Metric Surface Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.51 Live Test Hardening"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -1026,21 +1026,21 @@ st.markdown("""
 :root {
   color-scheme: light !important;
   --brand-orange: #f36c21;
-  --brand-orange-hover: rgba(243,108,33,.86);
-  --brand-orange-pressed: #df5e18;
-  --brand-orange-soft: #fff3eb;
-  --text: #2f303a;
-  --muted: #71737d;
-  --line: #c9cdd2;
-  --panel: #f8f8f6;
-  --blue-bg: #eaf3ff;
-  --blue-text: #0b57a3;
-  --green-bg: #eaf8ef;
-  --green-text: #176a38;
-  --amber-bg: #fff6df;
-  --amber-text: #815d00;
-  --red-bg: #fff0f0;
-  --red-text: #a42c2c;
+  --brand-orange-hover: #e9621c;
+  --brand-orange-pressed: #cf5515;
+  --brand-orange-soft: #fff1e8;
+  --text: #25262d;
+  --muted: #6f7178;
+  --line: #d7d9dd;
+  --panel: #f7f7f5;
+  --blue-bg: #edf4fb;
+  --blue-text: #235f93;
+  --green-bg: #eaf7ef;
+  --green-text: #22683d;
+  --amber-bg: #fff3d9;
+  --amber-text: #775900;
+  --red-bg: #fff0ea;
+  --red-text: #9b3b29;
 }
 
 html,
@@ -1212,8 +1212,8 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
-  box-shadow: 0 0 0 1px var(--line) inset !important;
-  border-radius: 16px !important;
+  box-shadow: none !important;
+  border-radius: 14px !important;
 }
 
 [data-testid="stVerticalBlockBorderWrapper"],
@@ -1230,7 +1230,7 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stCameraInput"] {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
-  border-radius: 16px !important;
+  border-radius: 14px !important;
 }
 
 /* Metrics are content inside a section card, not another card. */
@@ -1501,6 +1501,74 @@ section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
   section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
     min-width: 2.75rem !important;
     min-height: 2.75rem !important;
+  }
+}
+
+/* v8.6.50 — Goodnature native visual alignment, adapted for field use */
+
+/* Primary remains orange. Secondary is quiet and neutral. */
+button[kind="secondary"],
+[data-testid="stBaseButton-secondary"] {
+  background: #f3f3f1 !important;
+  color: var(--text) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+button[kind="secondary"]:hover,
+[data-testid="stBaseButton-secondary"]:hover {
+  background: #ececea !important;
+  border-color: transparent !important;
+}
+
+/* Tertiary actions may use orange text without a filled surface. */
+.tertiary-action button,
+button[data-variant="tertiary"] {
+  background: transparent !important;
+  color: var(--brand-orange) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Destructive actions are distinct from the normal orange primary action. */
+.destructive-action button {
+  background: #fff0ea !important;
+  color: #9b3b29 !important;
+  border-color: #efc9bc !important;
+}
+
+/* Section cards: one clear boundary, no heavy nesting. */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 2px 10px rgba(37,38,45,.035) !important;
+}
+
+/* Semantic panels follow the native app: pale state colour, short message, optional action. */
+.message-panel,
+[data-testid="stAlert"] {
+  border-width: 1px !important;
+  box-shadow: none !important;
+}
+.message-panel.guidance {background: var(--blue-bg); border-color: #d8e6f2;}
+.message-panel.success {background: var(--green-bg); border-color: #cfe7d7;}
+.message-panel.warning {background: var(--amber-bg); border-color: #ead8a9;}
+.message-panel.error {background: var(--red-bg); border-color: #efc9bc;}
+
+/* Keep field labels explicit and readable; do not copy native-app density. */
+[data-testid="stWidgetLabel"] p,
+label p {
+  font-weight: 600 !important;
+}
+
+/* Maintain large field tap targets even while visual weight is reduced. */
+@media (max-width: 700px) {
+  div.stButton > button,
+  div.stFormSubmitButton > button,
+  div.stDownloadButton > button {
+    min-height: 3.1rem;
   }
 }
 </style>
@@ -2824,7 +2892,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.49 · Metric Surface Fix")
+st.sidebar.caption("v8.6.51 · Live Test Hardening")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

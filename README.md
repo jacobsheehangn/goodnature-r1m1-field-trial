@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.49 Metric Surface Fix
+# R1/M1 Field Trial App — v8.6.51 Live Test Hardening
 
 ## Deployment requirement
 
@@ -306,3 +306,26 @@ See `TESTING_GUIDE.md`.
 - Audited all metrics: 3 total, all 3 inside section cards.
 - Added a live browser regression test for metric border and shadow styles.
 - No data or calculation changes.
+
+
+## v8.6.50 native-aligned field UI
+
+Controlled alignment with the Goodnature native app:
+
+- refined neutral and semantic colour tokens
+- softened card borders and shadows
+- standardised 14 px section radius
+- clarified primary, secondary, tertiary and destructive action hierarchy
+- retained larger field controls, sidebar navigation and explicit labels
+- replaced the style guide with a Streamlit-specific Goodnature field UI guide
+
+
+## v8.6.51 live test hardening
+
+- waits for the visible main Trap sites screen rather than hidden staging/sidebar text
+- avoids strict-mode collisions from duplicate Streamlit elements
+- scans multiple Streamlit sidebar-control variants
+- clicks only controls that are visible and inside the viewport
+- adds explicit waits before Start checking
+- scopes Performance navigation to the sidebar
+- no app behaviour or trial data changes

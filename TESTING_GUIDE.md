@@ -106,3 +106,10 @@ Streamlit's separate **Show password** button.
 - Tests accept either the login form or an already-authenticated home screen.
 - Sidebar tests ignore hidden, off-screen Streamlit controls.
 - Terminology checks inspect rendered page text.
+
+
+## v8.6.51 live-test selectors
+
+The live suite now uses visible main-content markers and sidebar-scoped locators.
+It does not use hidden staging text or duplicated sidebar text as proof that login
+has completed.
