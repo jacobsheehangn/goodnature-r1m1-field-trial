@@ -92,3 +92,9 @@ After adding both secrets, open **Actions → R1M1 release gate → Run workflow
 
 The release gate uses `openpyxl` for workbook checks. The previous `artifact-tool`
 dependency was removed because it is not published on public pip.
+
+
+## v8.6.47 login selector
+
+The browser test targets the exact password textbox role and name, avoiding
+Streamlit's separate **Show password** button.

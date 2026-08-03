@@ -18,10 +18,10 @@ pytestmark = pytest.mark.skipif(
 
 def sign_in(page: Page) -> None:
     page.goto(BASE_URL, wait_until="networkidle")
-    password = page.get_by_label(re.compile("password", re.I))
+    password = page.get_by_role("textbox", name="Password", exact=True)
     expect(password).to_be_visible()
     password.fill(PASSWORD)
-    page.get_by_role("button", name=re.compile("sign in|log in", re.I)).click()
+    page.get_by_role("button", name=re.compile(r"^(sign in|log in)$", re.I)).click()
     page.wait_for_load_state("networkidle")
     expect(page.get_by_text(re.compile("Trap sites|STAGING", re.I)).first).to_be_visible()
 

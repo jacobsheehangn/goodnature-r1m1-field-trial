@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.46 GitHub-Compatible Release Gate
+# R1/M1 Field Trial App — v8.6.47 Login Test Fix
 
 ## Deployment requirement
 
@@ -281,3 +281,11 @@ See `TESTING_GUIDE.md`.
 - Removed the unavailable `artifact-tool` test dependency.
 - Workbook release checks now use `openpyxl`.
 - App behaviour and trial data are unchanged.
+
+
+## v8.6.47 login test fix
+
+- Targets the password textbox exactly in Playwright.
+- Avoids matching Streamlit's separate **Show password** button.
+- Tightens the sign-in button locator.
+- No app behaviour or trial data changed.
