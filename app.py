@@ -7,6 +7,7 @@ import os
 import shutil
 import re
 from io import BytesIO
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
@@ -17,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.39 Compact Staging Banner"
+APP_TITLE = "R1/M1 Field Trial — v8.6.42 Explicit Photo Capture"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -320,7 +321,7 @@ def create_sample_data() -> Dict[str, pd.DataFrame]:
             product = "M1" if i % 4 == 0 else "R1"
             build = "M1 Build 3.7" if product == "M1" else "R1 Build 4.3"
             camera_id = f"CAM-{site}-{i:03d}" if i == 1 else ""
-            traps.append([f"{product}-{site}-{i:03d}", product, build, site, str(i), f"Route point {i}", camera_id, dtstr(now() - timedelta(days=14)), "", "Active", ""])
+            traps.append([f"{product}-{site}-{i:03d}", product, build, site, str(i), f"Trap {i}", camera_id, dtstr(now() - timedelta(days=14)), "", "Active", ""])
     data["Traps"] = pd.DataFrame(traps, columns=SHEETS["Traps"])
     start = now() - timedelta(hours=60)
     for _, t in data["Traps"].iterrows():
@@ -542,8 +543,11 @@ def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag
 
 
 def go(page: str, **kwargs):
+    """Navigate and reset the next page to its top."""
     st.session_state.page = page
-    for k, v in kwargs.items(): st.session_state[k] = v
+    for k, v in kwargs.items():
+        st.session_state[k] = v
+    st.session_state.scroll_to_top_once = True
     st.rerun()
 
 
@@ -560,6 +564,7 @@ def request_scroll_to_top():
 
 
 def scroll_to_top_once():
+    """Reset Streamlit's current page after navigation and rerender settling."""
     if not st.session_state.pop("scroll_to_top_once", False):
         return
     components.html(
@@ -568,17 +573,36 @@ def scroll_to_top_once():
         (() => {
           const parent = window.parent;
           const doc = parent.document;
-          const targets = [
-            doc.querySelector('[data-testid="stMainScrollContainer"]'),
-            doc.querySelector('section.main'),
-            doc.scrollingElement,
-            doc.documentElement
-          ].filter(Boolean);
-          requestAnimationFrame(() => {
+
+          const reset = () => {
+            const targets = [
+              doc.querySelector('[data-testid="stMainScrollContainer"]'),
+              doc.querySelector('[data-testid="stAppViewContainer"] .main'),
+              doc.querySelector('section.main'),
+              doc.scrollingElement,
+              doc.documentElement,
+              doc.body
+            ].filter(Boolean);
+
             targets.forEach((target) => {
-              try { target.scrollTo({top: 0, left: 0, behavior: 'auto'}); } catch (_) { target.scrollTop = 0; }
+              try {
+                target.scrollTo({top: 0, left: 0, behavior: 'auto'});
+              } catch (_) {
+                target.scrollTop = 0;
+                target.scrollLeft = 0;
+              }
             });
-          });
+
+            try {
+              parent.scrollTo({top: 0, left: 0, behavior: 'auto'});
+            } catch (_) {
+              parent.scrollTo(0, 0);
+            }
+          };
+
+          reset();
+          requestAnimationFrame(reset);
+          [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
         })();
         </script>
         """,
@@ -589,6 +613,169 @@ def scroll_to_top_once():
 
 def photo_session_key(visit_id: str, trap_id: str) -> str:
     return f"captured_photos_{visit_id}_{trap_id}"
+
+
+def photo_capture_mode_key(visit_id: str, trap_id: str) -> str:
+    return f"photo_capture_mode_{visit_id}_{trap_id}"
+
+
+def photo_widget_nonce_key(visit_id: str, trap_id: str) -> str:
+    return f"photo_widget_nonce_{visit_id}_{trap_id}"
+
+
+def add_pending_photo(
+    visit_id: str,
+    trap_id: str,
+    raw_bytes: bytes,
+    mime_type: str,
+    photo_type: str,
+    source: str,
+) -> bool:
+    """Add one unique image to the pending trap check."""
+    photo_key = photo_session_key(visit_id, trap_id)
+    st.session_state.setdefault(photo_key, [])
+    token = hashlib.sha256(raw_bytes).hexdigest()
+    existing_tokens = {photo.get("token") for photo in st.session_state[photo_key]}
+    if token in existing_tokens:
+        return False
+    st.session_state[photo_key].append({
+        "bytes": raw_bytes,
+        "mime": mime_type or "image/jpeg",
+        "photo_type": photo_type,
+        "captured_time": dtstr(),
+        "notes": "",
+        "source": source,
+        "token": token,
+    })
+    return True
+
+
+def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
+    """Explicit camera/upload flow. No device prompt until the user chooses an action."""
+    photo_key = photo_session_key(visit_id, trap_id)
+    mode_key = photo_capture_mode_key(visit_id, trap_id)
+    nonce_key = photo_widget_nonce_key(visit_id, trap_id)
+    st.session_state.setdefault(photo_key, [])
+    st.session_state.setdefault(mode_key, "")
+    st.session_state.setdefault(nonce_key, 0)
+
+    photos = st.session_state[photo_key]
+    photo_type = st.selectbox(
+        "Photo type",
+        ["Animal in trap", "Head / ears", "Strike location", "Trap condition", "Other"],
+        key=f"photo_type_{trap_id}_{visit_id}",
+    )
+
+    action_cols = st.columns(2)
+    camera_label = "Take another photo" if photos else "Take photo"
+    upload_label = "Upload another image" if photos else "Upload image"
+    if action_cols[0].button(
+        camera_label,
+        key=f"open_camera_{trap_id}_{visit_id}",
+        use_container_width=True,
+    ):
+        st.session_state[mode_key] = "camera"
+        st.rerun()
+    if action_cols[1].button(
+        upload_label,
+        key=f"open_upload_{trap_id}_{visit_id}",
+        use_container_width=True,
+    ):
+        st.session_state[mode_key] = "upload"
+        st.rerun()
+
+    mode = st.session_state.get(mode_key, "")
+    nonce = int(st.session_state.get(nonce_key, 0))
+
+    if mode == "camera":
+        with app_card():
+            st.markdown("**Take photo**")
+            st.caption("Your camera is opened only because you chose Take photo.")
+            captured = st.camera_input(
+                "Camera",
+                key=f"camera_capture_{trap_id}_{visit_id}_{nonce}",
+                label_visibility="collapsed",
+            )
+            if captured is not None:
+                added = add_pending_photo(
+                    visit_id,
+                    trap_id,
+                    captured.getvalue(),
+                    captured.type or "image/jpeg",
+                    photo_type,
+                    "Camera",
+                )
+                st.session_state[mode_key] = ""
+                st.session_state[nonce_key] = nonce + 1
+                st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = (
+                    "Photo added." if added else "That photo is already attached."
+                )
+                st.rerun()
+            if st.button("Cancel camera", key=f"cancel_camera_{trap_id}_{visit_id}"):
+                st.session_state[mode_key] = ""
+                st.session_state[nonce_key] = nonce + 1
+                st.rerun()
+
+    elif mode == "upload":
+        with app_card():
+            st.markdown("**Upload image**")
+            st.caption("Choose one or more existing images from this device.")
+            uploaded = st.file_uploader(
+                "Choose images",
+                type=["jpg", "jpeg", "png", "webp"],
+                accept_multiple_files=True,
+                key=f"photo_upload_{trap_id}_{visit_id}_{nonce}",
+            )
+            if uploaded:
+                added_count = 0
+                duplicate_count = 0
+                for uploaded_file in uploaded:
+                    added = add_pending_photo(
+                        visit_id,
+                        trap_id,
+                        uploaded_file.getvalue(),
+                        uploaded_file.type or "image/jpeg",
+                        photo_type,
+                        "Upload",
+                    )
+                    if added:
+                        added_count += 1
+                    else:
+                        duplicate_count += 1
+                st.session_state[mode_key] = ""
+                st.session_state[nonce_key] = nonce + 1
+                message = f"{added_count} image{'s' if added_count != 1 else ''} added."
+                if duplicate_count:
+                    message += f" {duplicate_count} duplicate{'s' if duplicate_count != 1 else ''} skipped."
+                st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
+                st.rerun()
+            if st.button("Cancel upload", key=f"cancel_upload_{trap_id}_{visit_id}"):
+                st.session_state[mode_key] = ""
+                st.session_state[nonce_key] = nonce + 1
+                st.rerun()
+
+    feedback_key = f"photo_feedback_{visit_id}_{trap_id}"
+    feedback = st.session_state.pop(feedback_key, None)
+    if feedback:
+        st.success(feedback)
+
+    if photos:
+        st.caption(
+            f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save with this check"
+        )
+        for photo_index, photo in enumerate(list(photos)):
+            with app_card():
+                st.image(
+                    photo["bytes"],
+                    caption=f"{photo.get('photo_type', 'Photo')} · {photo.get('source', 'Image')}",
+                    width=180,
+                )
+                if st.button(
+                    "Remove photo",
+                    key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
+                ):
+                    st.session_state[photo_key].pop(photo_index)
+                    st.rerun()
 
 
 def compress_photo_bytes(raw_bytes: bytes) -> bytes:
@@ -770,9 +957,21 @@ def recalculate_window(data, idx: int) -> None:
     data["Windows"].at[idx, "Valid"] = "Yes" if usable == "Yes" and target in ["Yes", "No"] else "No"
 
 
+
+@contextmanager
+def app_card():
+    """A bordered Streamlit container with an app-owned marker for reliable styling."""
+    with st.container(border=True):
+        st.markdown(
+            '<span class="app-card-marker" aria-hidden="true"></span>',
+            unsafe_allow_html=True,
+        )
+        yield
+
+
 def workflow_context(rows):
     st.markdown("### Task context")
-    with st.container(border=True):
+    with app_card():
         for label, value in rows:
             if value not in (None, ""):
                 st.markdown(f"- **{html.escape(str(label))}:** {html.escape(str(value))}")
@@ -832,330 +1031,18 @@ def show_flash():
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.markdown("""
 <style>
-
-:root {
-  color-scheme: light !important;
-}
-
-html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
-  background: #FFFFFF !important;
-  color: #202124 !important;
-}
-
-[data-testid="stAppViewContainer"] * {
-  color-scheme: light !important;
-}
-
-h1, h2, h3, h4, h5, h6,
-p, label, span, small,
-[data-testid="stMarkdownContainer"],
-[data-testid="stCaptionContainer"],
-[data-testid="stMetricLabel"],
-[data-testid="stMetricValue"] {
-  color: #202124;
-}
-
-[data-testid="stSidebar"] {
-  background: #F4F4F2 !important;
-}
-
-[data-testid="stSidebar"] * {
-  color: #202124;
-}
-
-div[data-baseweb="input"] > div,
-div[data-baseweb="textarea"] > div,
-div[data-baseweb="select"] > div,
-div[data-testid="stForm"] {
-  background: #FFFFFF !important;
-  color: #202124 !important;
-  border-color: #B8BDC4 !important;
-}
-
-input, textarea {
-  background: #FFFFFF !important;
-  color: #202124 !important;
-  -webkit-text-fill-color: #202124 !important;
-  caret-color: #202124 !important;
-}
-
-input::placeholder, textarea::placeholder {
-  color: #6A7078 !important;
-  opacity: 1 !important;
-}
-
-button[kind="primary"],
-button[data-testid="stBaseButton-primary"] {
-  background: #F27022 !important;
-  border-color: #F27022 !important;
-  color: #FFFFFF !important;
-}
-
-button[kind="primary"] *,
-button[data-testid="stBaseButton-primary"] * {
-  color: #FFFFFF !important;
-}
-
-button[kind="secondary"],
-button[data-testid="stBaseButton-secondary"] {
-  background: #FFFFFF !important;
-  color: #202124 !important;
-  border-color: #B8BDC4 !important;
-}
-
-button[kind="secondary"] *,
-button[data-testid="stBaseButton-secondary"] * {
-  color: #202124 !important;
-}
-
-[data-testid="stForm"] {
-  border: 1px solid #B8BDC4 !important;
-}
-
-@media (prefers-color-scheme: dark) {
-  html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
-    background: #FFFFFF !important;
-    color: #202124 !important;
-  }
-}
-
-
-
-/* v8.6.39 — compact staging banner */
-.staging-banner {
-  background: #FFF9C9;
-  border: 1px solid #E4D976;
-  border-radius: 12px;
-  color: #202124;
-  margin: 0 0 1.25rem 0;
-  padding: 0.7rem 1rem;
-  line-height: 1.35;
-}
-
-.staging-banner,
-.staging-banner * {
-  color: #202124 !important;
-}
-
-.staging-banner-mobile {
-  display: none;
-}
-
-.staging-banner-desktop {
-  display: inline;
-}
-
-@media (max-width: 700px) {
-  .staging-banner {
-    margin-bottom: 1rem;
-    padding: 0.55rem 0.8rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .staging-banner-mobile {
-    display: inline;
-  }
-
-  .staging-banner-desktop {
-    display: none;
-  }
-}
-
-/* v8.6.38 — global surface hierarchy and mobile chrome */
-
-/* Shared surface tokens */
-:root {
-  --gn-page-bg: #FFFFFF;
-  --gn-surface-bg: #F8F8F6;
-  --gn-surface-bg-strong: #F4F4F2;
-  --gn-border: #C9CDD2;
-  --gn-border-strong: #AEB4BC;
-  --gn-text: #202124;
-  --gn-muted: #6A7078;
-  --gn-orange: #F27022;
-}
-
-/* Restore visual grouping for cards, forms and bordered sections */
-[data-testid="stVerticalBlockBorderWrapper"],
-[data-testid="stForm"],
-div[data-testid="stExpander"],
-div[data-testid="stMetric"],
-div[data-testid="stDataFrame"],
-div[data-testid="stTable"],
-div[data-testid="stAlert"],
-div[data-testid="stFileUploader"],
-div[data-testid="stCameraInput"],
-section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
-  border-color: var(--gn-border) !important;
-}
-
-[data-testid="stVerticalBlockBorderWrapper"],
-div[data-testid="stExpander"],
-div[data-testid="stMetric"],
-div[data-testid="stFileUploader"],
-div[data-testid="stCameraInput"] {
-  background: var(--gn-surface-bg) !important;
-  border: 1px solid var(--gn-border) !important;
-  border-radius: 16px !important;
-}
-
-/* Keep semantic alerts distinct */
-div[data-testid="stAlert"] {
-  border-width: 1px !important;
-  border-style: solid !important;
-  border-radius: 14px !important;
-}
-
-/* Restore common custom card/section shells used across the app */
-.site-card,
-.trap-card,
-.task-card,
-.review-card,
-.summary-card,
-.evidence-card,
-.performance-card,
-.confirm-card,
-.success-card,
-.field-card,
-.setup-card,
-.section-card,
-.card,
-.panel,
-.surface,
-.field-sticky-header {
-  background: var(--gn-surface-bg) !important;
-  border: 1px solid var(--gn-border) !important;
-  border-radius: 16px !important;
-}
-
-/* Preserve selected/active card emphasis */
-.site-card.selected,
-.trap-card.selected,
-.task-card.selected,
-.review-card.selected,
-.card.selected,
-.panel.selected,
-[aria-selected="true"] {
-  border-color: var(--gn-orange) !important;
-}
-
-/* Sidebar navigation buttons */
-section[data-testid="stSidebar"] button[kind="secondary"],
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
-  background: #FFFFFF !important;
-  color: var(--gn-text) !important;
-  border: 1px solid var(--gn-border) !important;
-}
-
-section[data-testid="stSidebar"] button[kind="secondary"] *,
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] * {
-  color: var(--gn-text) !important;
-}
-
-/* Active sidebar navigation is orange with white text */
-section[data-testid="stSidebar"] button[kind="primary"],
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
-  background: var(--gn-orange) !important;
-  border-color: var(--gn-orange) !important;
-  color: #FFFFFF !important;
-}
-
-section[data-testid="stSidebar"] button[kind="primary"] *,
-section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] * {
-  color: #FFFFFF !important;
-}
-
-/* Streamlit mobile header: compact, light, and still tappable */
-header[data-testid="stHeader"] {
-  background: #FFFFFF !important;
-  height: 3.25rem !important;
-  min-height: 3.25rem !important;
-  border-bottom: 1px solid #ECEEF1 !important;
-}
-
-header[data-testid="stHeader"] [data-testid="stToolbar"] {
-  height: 3.25rem !important;
-  min-height: 3.25rem !important;
-  background: #FFFFFF !important;
-}
-
-header[data-testid="stHeader"] button,
-header[data-testid="stHeader"] svg {
-  color: var(--gn-text) !important;
-  fill: currentColor !important;
-}
-
-/* Keep app content clear of browser chrome and iPhone safe area */
-[data-testid="stAppViewContainer"] > .main {
-  padding-bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
-}
-
-section[data-testid="stSidebar"] > div {
-  padding-bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
-}
-
-@media (max-width: 700px) {
-  header[data-testid="stHeader"] {
-    height: 3rem !important;
-    min-height: 3rem !important;
-  }
-
-  header[data-testid="stHeader"] [data-testid="stToolbar"] {
-    height: 3rem !important;
-    min-height: 3rem !important;
-  }
-
-  [data-testid="stAppViewContainer"] > .main {
-    padding-top: 3rem !important;
-    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
-  }
-
-  section[data-testid="stSidebar"] > div {
-    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
-  }
-
-  /* Ensure the final control/card can scroll above Safari's bottom bar */
-  [data-testid="stAppViewContainer"] .block-container {
-    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
-  }
-
-  /* Retain borders on mobile where Streamlit may otherwise flatten surfaces */
-  [data-testid="stVerticalBlockBorderWrapper"],
-  div[data-testid="stExpander"],
-  div[data-testid="stMetric"],
-  div[data-testid="stFileUploader"],
-  div[data-testid="stCameraInput"],
-  .site-card,
-  .trap-card,
-  .task-card,
-  .review-card,
-  .summary-card,
-  .evidence-card,
-  .performance-card,
-  .confirm-card,
-  .success-card,
-  .field-card,
-  .setup-card,
-  .section-card,
-  .card,
-  .panel,
-  .surface {
-    border: 1px solid var(--gn-border) !important;
-    background: var(--gn-surface-bg) !important;
-  }
-}
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+
 :root {
+  color-scheme: light !important;
   --brand-orange: #f36c21;
   --brand-orange-hover: rgba(243,108,33,.86);
   --brand-orange-pressed: #df5e18;
   --brand-orange-soft: #fff3eb;
   --text: #2f303a;
   --muted: #71737d;
-  --line: #e4e5e9;
-  --panel: #f7f8fa;
+  --line: #c9cdd2;
+  --panel: #f8f8f6;
   --blue-bg: #eaf3ff;
   --blue-text: #0b57a3;
   --green-bg: #eaf8ef;
@@ -1165,14 +1052,29 @@ section[data-testid="stSidebar"] > div {
   --red-bg: #fff0f0;
   --red-text: #a42c2c;
 }
-html, body, [class*="css"], [data-testid="stAppViewContainer"] {
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: var(--text);
+
+html,
+body,
+[data-testid="stApp"],
+[data-testid="stAppViewContainer"] {
+  background: #ffffff !important;
+  color: var(--text) !important;
+  color-scheme: light !important;
 }
-.block-container {max-width: 1220px; padding-top: 5.25rem; padding-bottom: 3rem;}
-[data-testid="stSidebar"] {min-width: 230px; background: #fafaf8;}
-[data-testid="stSidebar"] [data-testid="stImage"] {margin: .25rem 0 1.25rem 0;}
-h1, h2, h3, h4, h5, h6 {font-family: 'Inter', sans-serif !important; font-weight: 700 !important; letter-spacing: -0.025em;}
+
+html,
+body,
+[class*="css"],
+[data-testid="stAppViewContainer"] {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Inter', sans-serif !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.025em;
+  color: var(--text) !important;
+}
 h1 {font-size: clamp(2.2rem, 4vw, 3.6rem) !important; line-height: 1.06 !important; margin-bottom: .45rem !important;}
 h2 {font-size: 1.75rem !important; margin-top: 2rem !important;}
 h3 {font-size: 1.3rem !important; margin-top: 1.5rem !important;}
@@ -1181,7 +1083,69 @@ p, li, [data-testid="stMarkdownContainer"] {font-size: 1rem; line-height: 1.55;}
 .helper-text {font-size: .98rem; color: var(--muted); margin: .35rem 0 1rem 0;}
 [data-testid="stWidgetLabel"] p, label p {font-size: 1rem !important; font-weight: 600 !important; color: var(--text) !important;}
 [data-testid="stCaptionContainer"] p, .stCaption {font-size: .92rem !important; color: var(--muted) !important;}
-div.stButton > button, div.stFormSubmitButton > button, div.stDownloadButton > button {
+[data-testid="stMetricValue"] {font-size: 1.65rem; font-weight: 700; color: var(--text) !important;}
+[data-testid="stMetricLabel"] {color: var(--text) !important;}
+
+.block-container {
+  max-width: 1220px;
+  padding-top: 5.25rem;
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom));
+}
+
+/* Keep Streamlit system chrome visible. */
+header[data-testid="stHeader"] {
+  background: #ffffff !important;
+  border-bottom: 1px solid #eceef1 !important;
+}
+header[data-testid="stHeader"] [data-testid="stToolbar"] {
+  background: transparent !important;
+  overflow: visible !important;
+}
+header[data-testid="stHeader"] button,
+header[data-testid="stHeader"] svg {
+  color: var(--text) !important;
+  fill: currentColor !important;
+}
+
+/* Sidebar navigation. */
+[data-testid="stSidebar"] {
+  min-width: 230px;
+  background: #fafaf8 !important;
+}
+[data-testid="stSidebar"] [data-testid="stImage"] {margin: .25rem 0 1.25rem 0;}
+[data-testid="stSidebar"] > div {
+  padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] span,
+[data-testid="stSidebar"] label {color: var(--text);}
+
+[data-testid="stSidebar"] button[kind="secondary"],
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] {
+  background: #ffffff !important;
+  border-color: var(--line) !important;
+  color: var(--text) !important;
+}
+[data-testid="stSidebar"] button[kind="secondary"] *,
+[data-testid="stSidebar"] [data-testid="stBaseButton-secondary"] * {
+  color: var(--text) !important;
+}
+[data-testid="stSidebar"] button[kind="primary"],
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
+  background: var(--brand-orange) !important;
+  border-color: var(--brand-orange) !important;
+  color: #ffffff !important;
+  box-shadow: none !important;
+}
+[data-testid="stSidebar"] button[kind="primary"] *,
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] * {
+  color: #ffffff !important;
+}
+
+/* Buttons. */
+div.stButton > button,
+div.stFormSubmitButton > button,
+div.stDownloadButton > button {
   border-radius: 9px;
   font-family: 'Inter', sans-serif;
   font-weight: 700;
@@ -1190,52 +1154,113 @@ div.stButton > button, div.stFormSubmitButton > button, div.stDownloadButton > b
   padding-left: 1.15rem;
   padding-right: 1.15rem;
 }
-/* Goodnature brand is reserved for primary actions and active navigation. */
-button[kind="primary"], [data-testid="stBaseButton-primary"] {
+button[kind="primary"],
+[data-testid="stBaseButton-primary"] {
   background: var(--brand-orange) !important;
-  color: #ffffff !important;
   border-color: var(--brand-orange) !important;
   color: #ffffff !important;
 }
-button[kind="primary"]:hover, [data-testid="stBaseButton-primary"]:hover {
+button[kind="primary"] *,
+[data-testid="stBaseButton-primary"] * {color: #ffffff !important;}
+button[kind="primary"]:hover,
+[data-testid="stBaseButton-primary"]:hover {
   background: var(--brand-orange-hover) !important;
   border-color: transparent !important;
   color: #ffffff !important;
 }
-button[kind="primary"]:active, [data-testid="stBaseButton-primary"]:active {
+button[kind="primary"]:active,
+[data-testid="stBaseButton-primary"]:active {
   background: var(--brand-orange-pressed) !important;
   border-color: var(--brand-orange-pressed) !important;
-  color: #ffffff !important;
 }
-button[kind="primary"]:focus-visible, [data-testid="stBaseButton-primary"]:focus-visible {
+button[kind="primary"]:focus-visible,
+[data-testid="stBaseButton-primary"]:focus-visible {
   outline: 3px solid rgba(243,108,33,.28) !important;
   outline-offset: 2px;
 }
-[data-testid="stSidebar"] button[kind="primary"],
-[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {
-  background: var(--brand-orange-soft) !important;
-  border-color: var(--brand-orange) !important;
+button[kind="secondary"],
+[data-testid="stBaseButton-secondary"] {
+  background: #ffffff !important;
   color: var(--text) !important;
-  box-shadow: inset 4px 0 0 var(--brand-orange);
+  border-color: var(--line) !important;
 }
-/* Site cards: preserve the existing layout while balancing outer whitespace.
-   The site heading is rendered with a dedicated class so Streamlit's global h3
-   margin cannot add an extra 24 px above the content. */
+button[kind="secondary"] *,
+[data-testid="stBaseButton-secondary"] * {color: var(--text) !important;}
+
+/* Inputs and forms. */
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div,
+[data-testid="stForm"] {
+  background: #ffffff !important;
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+}
+input, textarea {
+  background: #ffffff !important;
+  color: var(--text) !important;
+  -webkit-text-fill-color: var(--text) !important;
+  caret-color: var(--text) !important;
+}
+input::placeholder, textarea::placeholder {
+  color: #6a7078 !important;
+  opacity: 1 !important;
+}
+[data-testid="stForm"] {
+  border: 1px solid var(--line) !important;
+  border-radius: 12px !important;
+}
+[data-testid="stForm"] div.stFormSubmitButton {margin-top: .35rem;}
+[data-testid="stForm"] div.stFormSubmitButton > button {width: auto;}
+.element-container:has(div.stButton),
+.element-container:has(div.stFormSubmitButton) {margin-top: .35rem;}
+
+/* App-owned marked cards plus Streamlit wrapper fallback. */
+.app-card-marker {display: none !important;}
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  box-shadow: 0 0 0 1px var(--line) inset !important;
+  border-radius: 16px !important;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stForm"],
+[data-testid="stExpander"],
+[data-testid="stMetric"],
+[data-testid="stFileUploader"],
+[data-testid="stCameraInput"],
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+  border-color: var(--line) !important;
+}
+[data-testid="stExpander"],
+[data-testid="stMetric"],
+[data-testid="stFileUploader"],
+[data-testid="stCameraInput"] {
+  background: var(--panel) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 16px !important;
+}
+[data-testid="stDataFrame"] {
+  border: 1px solid var(--line) !important;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
 .site-card-title {
   margin-top: 0 !important;
   margin-bottom: .75rem !important;
 }
-.site-card-marker {
-  display: none;
+
+.message-panel {
+  border-radius: 12px;
+  padding: 1.15rem 1.35rem;
+  margin: .65rem 0 1.35rem 0;
+  border: 1px solid transparent;
 }
-
-/* Actions should stay visually attached to the content they affect. */
-[data-testid="stForm"] div.stFormSubmitButton {margin-top: .35rem;}
-[data-testid="stForm"] div.stFormSubmitButton > button {width: auto;}
-.element-container:has(div.stButton), .element-container:has(div.stFormSubmitButton) {margin-top: .35rem;}
-
-[data-testid="stMetricValue"] {font-size: 1.65rem; font-weight: 700;}
-.message-panel {border-radius: 12px; padding: 1.15rem 1.35rem; margin: .65rem 0 1.35rem 0; border: 1px solid transparent;}
 .message-panel.guidance {background: var(--blue-bg); color: var(--blue-text); border-color: #d4e7ff;}
 .message-panel.success {background: var(--green-bg); color: var(--green-text); border-color: #cfead9;}
 .message-panel.warning {background: var(--amber-bg); color: var(--amber-text); border-color: #f2dfaa;}
@@ -1243,26 +1268,83 @@ button[kind="primary"]:focus-visible, [data-testid="stBaseButton-primary"]:focus
 .message-title {font-weight: 700; font-size: 1.05rem; line-height: 1.45;}
 .message-detail {font-weight: 400; font-size: .96rem; margin-top: .35rem; line-height: 1.45;}
 [data-testid="stAlert"] {border-radius: 12px;}
-[data-testid="stDataFrame"] {border: 1px solid var(--line); border-radius: 10px; overflow: hidden;}
 hr {border-color: var(--line);}
+
+.staging-banner {
+  background: #fff9c9;
+  border: 1px solid #e4d976;
+  border-radius: 12px;
+  color: var(--text);
+  margin: 0 0 1.25rem 0;
+  padding: .7rem 1rem;
+  line-height: 1.35;
+}
+.staging-banner, .staging-banner * {color: var(--text) !important;}
+.staging-banner-mobile {display: none;}
+.staging-banner-desktop {display: inline;}
+
+.field-sticky-header {
+  background: rgba(255,255,255,.97);
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--brand-orange);
+  border-radius: 12px;
+}
+.route-card-current {border-left: 5px solid var(--brand-orange) !important;}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  [data-testid="stApp"],
+  [data-testid="stAppViewContainer"] {
+    background: #ffffff !important;
+    color: var(--text) !important;
+    color-scheme: light !important;
+  }
+}
+
 @media (max-width: 700px) {
-  .block-container {padding-top: 3.25rem; padding-left: .85rem; padding-right: .85rem; padding-bottom: 6rem;}
+  .block-container {
+    padding-top: 4.25rem;
+    padding-left: .85rem;
+    padding-right: .85rem;
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom));
+  }
+
   h1 {font-size: 1.95rem !important; line-height: 1.05 !important; margin-bottom: .4rem !important;}
   h2 {font-size: 1.4rem !important;}
   h3 {font-size: 1.18rem !important;}
+
+  /* Prevent iOS Safari form-focus auto-zoom. */
+  input,
+  textarea,
+  select,
+  [data-baseweb="select"] input {
+    font-size: 16px !important;
+  }
+
+  .staging-banner {
+    margin-bottom: 1rem;
+    padding: .55rem .8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .staging-banner-mobile {display: inline;}
+  .staging-banner-desktop {display: none;}
+
   .message-panel {padding: .9rem 1rem; margin-bottom: 1rem;}
-  div.stButton > button, div.stFormSubmitButton > button, div.stDownloadButton > button {
+
+  div.stButton > button,
+  div.stFormSubmitButton > button,
+  div.stDownloadButton > button {
     width: 100%;
     min-height: 3.1rem;
   }
+
   .field-sticky-header {
     position: sticky;
     top: .35rem;
     z-index: 999;
-    background: rgba(255,255,255,.97);
-    border: 1px solid var(--line);
-    border-left: 5px solid var(--brand-orange);
-    border-radius: 12px;
     padding: .7rem .85rem;
     margin: -.25rem 0 .8rem 0;
     box-shadow: 0 4px 14px rgba(24,24,27,.08);
@@ -1270,14 +1352,98 @@ hr {border-color: var(--line);}
   }
   .field-sticky-header .trap {font-weight: 800; font-size: 1.18rem; line-height: 1.2;}
   .field-sticky-header .meta {font-size: .9rem; color: var(--muted); margin-top: .2rem;}
-  .mobile-save-anchor {height: .1rem;}
-  .element-container:has(.mobile-save-anchor) + .element-container {
-    position: sticky; bottom: .45rem; z-index: 998; background: rgba(255,255,255,.96);
-    padding: .55rem 0 .15rem 0; border-radius: 12px;
+[data-testid="stSidebar"] > div {
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
   }
-  .route-card-current {border-left: 5px solid var(--brand-orange) !important;}
 }
 
+/* v8.6.41 — shared field-control and navigation fixes */
+:root {
+  --primary-color: #f36c21;
+  --st-primary-color: #f36c21;
+}
+
+/* App sidebar controls must remain visible on a light header. */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapseButton"],
+button[data-testid="stSidebarCollapsedControl"],
+button[data-testid="stSidebarCollapseButton"] {
+  color: var(--text) !important;
+  background: #ffffff !important;
+  opacity: 1 !important;
+}
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapseButton"] svg,
+button[data-testid="stSidebarCollapsedControl"] svg,
+button[data-testid="stSidebarCollapseButton"] svg {
+  color: var(--text) !important;
+  fill: var(--text) !important;
+  stroke: var(--text) !important;
+  opacity: 1 !important;
+}
+
+/* Radio controls: white unselected surface, orange selected state. */
+input[type="radio"] {
+  accent-color: var(--brand-orange) !important;
+}
+label[data-baseweb="radio"] > div:first-child {
+  background: #ffffff !important;
+  border: 2px solid #444a53 !important;
+  box-shadow: none !important;
+}
+label[data-baseweb="radio"]:has(input:checked) > div:first-child {
+  background: #ffffff !important;
+  border-color: var(--brand-orange) !important;
+}
+label[data-baseweb="radio"]:has(input:checked) > div:first-child > div {
+  background: var(--brand-orange) !important;
+}
+label[data-baseweb="radio"] > div:last-child,
+label[data-baseweb="radio"] p {
+  color: var(--text) !important;
+}
+
+/* Select controls: one complete border and consistent light surface. */
+div[data-baseweb="select"] > div {
+  min-height: 3rem;
+  background: #ffffff !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 10px !important;
+  box-shadow: none !important;
+  overflow: hidden !important;
+}
+div[data-baseweb="select"] > div:focus-within {
+  border-color: var(--brand-orange) !important;
+  box-shadow: 0 0 0 2px rgba(243,108,33,.18) !important;
+}
+div[data-baseweb="select"] > div > div {
+  background: transparent !important;
+  color: var(--text) !important;
+}
+div[data-baseweb="select"] svg {
+  color: var(--text) !important;
+  fill: var(--text) !important;
+}
+div[data-baseweb="popover"],
+ul[role="listbox"] {
+  background: #ffffff !important;
+  color: var(--text) !important;
+}
+li[role="option"] {
+  background: #ffffff !important;
+  color: var(--text) !important;
+}
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"] {
+  background: var(--brand-orange-soft) !important;
+  color: var(--text) !important;
+}
+
+/* The field CTA follows normal document flow. */
+.mobile-save-anchor {
+  display: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1335,8 +1501,7 @@ if page == "sites":
         active = active_visit(data, sid); last = latest_completed_visit(data, sid)
         interval = int(float(s["Visit Interval Days"] or 3)); last_dt = parse_dt(last["End Time"]) if last is not None else None
         next_dt = last_dt + timedelta(days=interval) if last_dt else now()
-        with st.container(border=True):
-            st.markdown('<span class="site-card-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+        with app_card():
             st.markdown(
                 f'<h3 class="site-card-title">{html.escape(str(s["Site Name"]))}</h3>',
                 unsafe_allow_html=True,
@@ -1359,7 +1524,7 @@ elif page == "site":
     if st.button("← Trap sites"): go("sites")
     traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")].copy()
     traps["_order"] = pd.to_numeric(traps["Route Order"], errors="coerce"); traps = traps.sort_values("_order")
-    header(s["Site Name"], f"{len(traps)} traps in route order")
+    header(s["Site Name"], f"{len(traps)} traps")
     with st.expander("Visit details", expanded=False):
         st.session_state.field_operator = st.text_input("Operator", value=st.session_state.field_operator, key="site_operator")
         st.caption("The visit date and start time are recorded automatically when checking begins.")
@@ -1367,9 +1532,9 @@ elif page == "site":
         active = active_visit(data, sid)
         vid = active["Visit ID"] if active is not None else start_visit_now(data, sid, st.session_state.field_operator)
         go("visit", site_id=sid, visit_id=vid)
-    st.markdown("### Route")
+    st.markdown("### Traps")
     for _, tr in traps.iterrows():
-        with st.container(border=True):
+        with app_card():
             c1,c2 = st.columns([.22,1], vertical_alignment="center")
             c1.markdown(f"**{int(float(tr['Route Order'])) if str(tr['Route Order']).strip() else '—'}**")
             c2.markdown(f"**{tr['Trap ID']}**")
@@ -1432,15 +1597,15 @@ elif page == "visit":
         if remaining:
             next_trap = remaining[0]; tr=trap_row(data,next_trap)
             is_first = len(done) == 0
-            with st.container(border=True):
+            with app_card():
                 st.caption("FIRST TRAP" if is_first else "NEXT TRAP")
                 st.subheader(next_trap)
                 st.write(tr["Location"] or "No location recorded")
-                st.caption(f"Route {tr['Route Order']} · {tr['Build Version']}")
+                st.caption(f"Trap {tr['Route Order']} · {tr['Build Version']}")
                 if st.button("Check trap" if is_first else "Check next trap", type="primary"):
                     go("check", site_id=sid, visit_id=vid, trap_id=next_trap)
             with st.expander("Choose another trap"):
-                st.caption("Use this only when access means you need to work out of route order.")
+                st.caption("Use this only when you need to check a different trap next.")
                 other = st.selectbox("Trap", remaining, format_func=lambda x:f"{x} — {trap_row(data,x)['Location']}")
                 if st.button("Check selected trap"): go("check", site_id=sid, visit_id=vid, trap_id=other)
         else:
@@ -1449,13 +1614,13 @@ elif page == "visit":
                 idx=data["Visits"].index[data["Visits"]["Visit ID"]==vid][0]
                 data["Visits"].at[idx,"End Time"]=dtstr(); data["Visits"].at[idx,"Status"]="Complete"; save_data(data)
                 go("sites")
-    with st.expander(f"View route progress · {len(done)} of {len(traps)} complete", expanded=False):
+    with st.expander(f"View trap progress · {len(done)} of {len(traps)} complete", expanded=False):
         for _, tr in traps.iterrows():
             trap_id = tr["Trap ID"]
             status = "Checked" if trap_id in done else ("Next" if remaining and trap_id == remaining[0] else "Remaining")
             css = "route-card-current" if status == "Next" else ""
             st.markdown(f'<div class="{css}"></div>', unsafe_allow_html=True)
-            with st.container(border=True):
+            with app_card():
                 cols=st.columns([.22,1,.42], vertical_alignment="center")
                 cols[0].markdown(f"**{int(float(tr['Route Order'])) if str(tr['Route Order']).strip() else '—'}**")
                 cols[1].markdown(f"**{trap_id}**"); cols[1].caption(tr["Location"] or "No location")
@@ -1474,15 +1639,15 @@ elif page == "check":
     progress_number = len(done) + (0 if trap_id in done else 1)
     st.markdown(
         f'<div class="field-sticky-header"><div class="trap">{html.escape(str(trap_id))}</div>'
-        f'<div class="meta">{html.escape(str(tr["Location"] or "No location"))} · Route {route_number} · {progress_number} of {total_traps}<br>{html.escape(site_name(data,sid))}</div></div>',
+        f'<div class="meta">Trap {progress_number} of {total_traps} · {html.escape(site_name(data,sid))}<br>{html.escape(str(tr["Location"] or "No location"))}</div></div>',
         unsafe_allow_html=True,
     )
-    if st.button("← Back to route"): go("visit",site_id=sid,visit_id=vid)
+    if st.button("← Back to traps"): go("visit",site_id=sid,visit_id=vid)
     if w is None:
         message_panel("error", "This trap has no active test window.", ["Do not record a check until the missing window has been resolved in Trial history or Setup."])
         st.stop()
     st.caption(f"Current window · {tr['Build Version']} · started {human_dt(w['Start Time'])}")
-    with st.container(border=True):
+    with app_card():
         st.markdown("### 1. What did you find?")
         finding=st.radio("Choose the closest match",FINDINGS, index=None, label_visibility="collapsed", key=f"finding_{trap_id}_{vid}")
         if finding is None:
@@ -1504,38 +1669,7 @@ elif page == "check":
 
             st.markdown("#### Photograph the animal")
             st.caption("Take a clear photo before removing the animal. Include the head and ears where possible. Photos are linked to this check and bag ID.")
-            photo_key = photo_session_key(vid, trap_id)
-            if photo_key not in st.session_state:
-                st.session_state[photo_key] = []
-            photo_type = st.selectbox(
-                "Photo type",
-                ["Animal in trap", "Head / ears", "Strike location", "Trap condition", "Other"],
-                key=f"photo_type_{trap_id}_{vid}",
-            )
-            captured = st.camera_input("Take photo", key=f"camera_capture_{trap_id}_{vid}")
-            if captured is not None:
-                photo_bytes = captured.getvalue()
-                capture_token = hashlib.sha256(photo_bytes).hexdigest()
-                token_key = f"last_photo_token_{trap_id}_{vid}"
-                if st.session_state.get(token_key) != capture_token:
-                    st.session_state[photo_key].append({
-                        "bytes": photo_bytes,
-                        "mime": captured.type or "image/jpeg",
-                        "photo_type": photo_type,
-                        "captured_time": dtstr(),
-                        "notes": "",
-                    })
-                    st.session_state[token_key] = capture_token
-                    st.success("Photo added to this check.")
-            if st.session_state[photo_key]:
-                st.caption(f"{len(st.session_state[photo_key])} photo{'s' if len(st.session_state[photo_key]) != 1 else ''} ready to save")
-                for photo_index, photo in enumerate(list(st.session_state[photo_key])):
-                    with st.container(border=True):
-                        st.image(photo["bytes"], caption=photo.get("photo_type", "Photo"), use_container_width=True)
-                        if st.button("Remove photo", key=f"remove_photo_{trap_id}_{vid}_{photo_index}"):
-                            st.session_state[photo_key].pop(photo_index)
-                            st.session_state.pop(f"last_photo_token_{trap_id}_{vid}", None)
-                            st.rerun()
+            render_check_photo_capture(vid, trap_id)
         elif finding=="Trap fired, no animal":
             st.warning("Camera review will determine whether this was a missed kill, false activation or non-target event.")
         elif finding in ["Trap missing", "Unable to check"]:
@@ -1582,7 +1716,6 @@ elif page == "check":
             c1,c2=st.columns(2); d=c1.date_input("Check date",value=now().date(),key=f"check_date_{trap_id}_{vid}"); tm=c2.time_input("Check time",value=now().time(),key=f"check_time_{trap_id}_{vid}")
         else:
             d=None; tm=None
-        st.markdown('<div class="mobile-save-anchor"></div>',unsafe_allow_html=True)
         submitted=st.button("Review check",type="primary",key=f"review_check_{trap_id}_{vid}")
     if submitted:
         errors=[]
@@ -1611,8 +1744,7 @@ elif page == "check":
                 trap_state="Not assessed"; ready=False; trap_function="Unsure"
             photos = st.session_state.get(photo_session_key(vid, trap_id), []) if has_animal else []
             st.session_state.pending_check={"check_time":check_time,"finding":finding,"species":species,"rat_type":rat_type,"condition":condition,"bag_id":bag_id,"animal_bagged":animal_bagged,"lure":lure,"relured":relured,"trap_state":trap_state,"ready":ready,"trap_function":trap_function,"site_condition":site_condition,"camera":camera,"covers":covers,"adjusted":adjusted,"notes":notes,"photo_count":len(photos)}
-            request_scroll_to_top()
-            st.session_state.page="check_confirm"; st.rerun()
+            go("check_confirm", site_id=sid, visit_id=vid, trap_id=trap_id)
 
 elif page == "check_confirm":
     sid,vid,trap_id=st.session_state.site_id,st.session_state.visit_id,st.session_state.trap_id; p=st.session_state.pending_check
@@ -1625,7 +1757,7 @@ elif page == "check_confirm":
     header("Confirm check", f"{trap_id} · {tr['Location']}")
 
     st.markdown("### You recorded")
-    with st.container(border=True):
+    with app_card():
         st.markdown(f"- **Finding:** {p['finding']}")
         st.markdown(f"- **Trap condition:** {p['trap_state']}")
         st.markdown(f"- **Fresh lure added:** {'Yes' if p.get('relured') else 'No'}")
@@ -1639,7 +1771,7 @@ elif page == "check_confirm":
             st.markdown(f"- **Site condition:** {p['site_condition']}")
 
     st.markdown("### After saving, the app will")
-    with st.container(border=True):
+    with app_card():
         st.markdown("- Close the current test window at the recorded check time")
         if assessable and camera_assigned:
             st.markdown("- Create a camera review task linked to this trap and test window")
@@ -1660,8 +1792,7 @@ elif page == "check_confirm":
             st.caption("Reason: " + ", ".join(reasons) + ".")
 
     st.markdown("### Next")
-    st.write("Save this check, then continue to the next trap in the route.")
-    st.markdown('<div class="mobile-save-anchor"></div>', unsafe_allow_html=True)
+    st.write("Save this check, then continue to the next trap.")
     if st.button("Save check",type="primary"):
         active=open_window(data,trap_id)
         if active is None:
@@ -1704,7 +1835,9 @@ elif page == "check_confirm":
             st.session_state.pop("pending_check",None)
             st.session_state.pop(f"bag_id_{vid}_{trap_id}",None)
             st.session_state.pop(photo_session_key(vid, trap_id), None)
-            st.session_state.pop(f"last_photo_token_{trap_id}_{vid}", None)
+            st.session_state.pop(photo_capture_mode_key(vid, trap_id), None)
+            st.session_state.pop(photo_widget_nonce_key(vid, trap_id), None)
+            st.session_state.pop(f"photo_feedback_{vid}_{trap_id}", None)
             created_tasks=[]
             if assessable and camera_assigned: created_tasks.append("Camera review")
             if p["finding"]=="Dead animal found": created_tasks.append("necropsy task")
@@ -1719,7 +1852,6 @@ elif page == "check_confirm":
             if saved_photo_files:
                 task_text = (task_text + " " if task_text else "") + f"{len(saved_photo_files)} photo{'s' if len(saved_photo_files) != 1 else ''} saved."
             st.session_state.saved_check={"trap_id":trap_id,"task_text":task_text,"new_window":will_start,"assessable":assessable}
-            request_scroll_to_top()
             go("visit",site_id=sid,visit_id=vid)
 
 elif page == "network":
@@ -1742,10 +1874,10 @@ elif page == "network":
                 trap_id = tr["Trap ID"]; w = open_window(data, trap_id)
                 checks = data["Checks"][data["Checks"]["Trap ID"] == trap_id]
                 last_checked = human_dt(checks.iloc[-1]["Check Time"]) if not checks.empty else "—"
-                with st.container(border=True):
+                with app_card():
                     c1,c2,c3,c4,action=st.columns([1.15,1.25,1.0,1.25,0.75],vertical_alignment="center")
                     c1.markdown(f"**{trap_id}**"); c1.caption(site_name(data,tr["Site ID"]))
-                    c2.write(tr["Location"] or "—"); c2.caption(f"Route {tr['Route Order']}")
+                    c2.write(tr["Location"] or "—"); c2.caption(f"Trap {tr['Route Order']}")
                     c3.write(tr["Build Version"] or "—"); c3.caption(tr["Product"])
                     c4.write("Active window" if w is not None else "No active window"); c4.caption(f"Last checked {last_checked}")
                     if action.button("View",key=f"network_view_{trap_id}",use_container_width=True):
@@ -1796,7 +1928,7 @@ elif page == "followups":
             st.caption("Review a task directly from its row.")
             for _,item_row in fu.iterrows():
                 row_fid=item_row["Follow-up ID"]
-                with st.container(border=True):
+                with app_card():
                     c1,c2,c3,action=st.columns([1.1,1.25,1.65,0.62],vertical_alignment="center")
                     c1.markdown(f"**{item_row['Trap ID']}**"); c1.caption(site_name(data,item_row["Site ID"]))
                     c2.write(item_row["Follow-up Type"]); c2.caption(item_row["Priority"])
@@ -2021,7 +2153,7 @@ elif page == "windows":
                 st.caption("Review a completed window directly from its row.")
             for _, wr_row in view.sort_values("Start Time", ascending=False).iterrows():
                 row_wid = wr_row["Window ID"]
-                with st.container(border=True):
+                with app_card():
                     c1, c2, c3, c4, action = st.columns([1.05, 1.1, 1.15, 1.1, 0.9], vertical_alignment="center")
                     c1.markdown(f"**{row_wid}**")
                     c1.caption(wr_row["Trap ID"])
@@ -2053,7 +2185,7 @@ elif page == "windows":
 
 elif page == "results":
     header("Performance", "See whether kills are humane and happen within the agreed time-to-kill target.")
-    with st.container(border=True):
+    with app_card():
         product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
         product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
         builds=data["Builds"][data["Builds"]["Product"]==product]
@@ -2105,21 +2237,21 @@ elif page == "results":
     st.subheader("Performance at a glance")
     outcome_card,time_card,evidence_card=st.columns(3)
     with outcome_card:
-        with st.container(border=True):
+        with app_card():
             st.markdown("#### Kill outcome")
             st.metric("Good kills",len(humane))
             st.caption(f"Bad kills: {len(non_humane)}")
             st.write(f"**{humane_rate:.1f}% humane**" if humane_rate is not None else "**No completed humane assessments**")
             if len(final_pending): st.caption(f"{len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment")
     with time_card:
-        with st.container(border=True):
+        with app_card():
             st.markdown("#### Time to kill")
             st.metric("Met <24 hr target",f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—")
             st.caption(f"Missed target: {len(missed_target)}")
             st.write(f"**Median: {human_duration(minutes=interaction_to_kill)}**" if interaction_to_kill is not None else "**No usable timing yet**")
             if len(timing_pending): st.caption(f"{len(timing_pending)} kill{'s' if len(timing_pending)!=1 else ''} without usable timing")
     with evidence_card:
-        with st.container(border=True):
+        with app_card():
             st.markdown("#### Evidence")
             st.metric("Kill assessments complete",f"{len(kill_evidence_complete)} of {len(physical_kills)}")
             st.caption(f"Camera reviews complete: {len(camera_reviews_complete)} of {len(camera_windows)}")
@@ -2300,7 +2432,7 @@ elif page == "setup":
                 view = view.assign(_route_num=pd.to_numeric(view["Route Order"], errors="coerce"))
                 for _, tr in view.sort_values(["Site ID", "_route_num"]).iterrows():
                     trap_id = tr["Trap ID"]
-                    with st.container(border=True):
+                    with app_card():
                         c1, c2, c3, c4, action = st.columns([1.05, 1.25, 1.0, 1.0, 0.7], vertical_alignment="center")
                         c1.markdown(f"**{trap_id}**")
                         c1.caption(tr["Product"])
@@ -2324,7 +2456,7 @@ elif page == "setup":
                     site_options=data["Sites"]["Site ID"].tolist(); site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x))
                     location=st.text_input("Location description",value=existing["Location"] if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
-                    order=st.number_input("Route order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
+                    order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
                     deployment=parse_dt(existing["Deployment Start"]) if existing is not None else now()
                     dep_date=st.date_input("Deployment start date",value=deployment.date() if deployment else now().date())
                     dep_time=st.time_input("Deployment start time",value=deployment.time() if deployment else now().time())
@@ -2344,7 +2476,7 @@ elif page == "setup":
                                 st.error("Close the active test window before changing this trap's build.")
                             else: data["Traps"].loc[idx,SHEETS["Traps"]]=row; save_data(data); set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."]); st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
                         else:
-                            data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True); save_data(data); set_flash("success", f"{trap_id} added.", ["The trap is now available in its site route."]); st.session_state.pop("setup_mode",None); st.rerun()
+                            data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True); save_data(data); set_flash("success", f"{trap_id} added.", ["The trap is now available at its site."]); st.session_state.pop("setup_mode",None); st.rerun()
                 if st.button("Cancel",key="cancel_trap_panel"): st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
     elif section == "Trap sites":
         mode = st.session_state.get("site_mode")
@@ -2359,7 +2491,7 @@ elif page == "setup":
             for _, site_row in data["Sites"].sort_values("Site Name").iterrows():
                 sid = site_row["Site ID"]
                 trap_count = len(data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")])
-                with st.container(border=True):
+                with app_card():
                     c1, c2, c3, action = st.columns([1.3, 1.0, 1.15, 0.7], vertical_alignment="center")
                     c1.markdown(f"**{site_row['Site Name']}**")
                     c1.caption(sid)
@@ -2378,7 +2510,7 @@ elif page == "setup":
                     name=st.text_input("Site name",value=ex["Site Name"] if ex is not None else "")
                     interval=3
                     st.number_input("Visit interval days",min_value=3,max_value=3,step=1,value=3,disabled=True,help="The trial method is currently fixed at a 3-day check interval.")
-                    coverage=st.selectbox("Mobile coverage confirmed",["Yes","No"],index=0 if ex is not None and ex.get("Mobile Coverage Confirmed","")=="Yes" else 1,help="Only activate sites with reliable mobile data coverage across the trap route.")
+                    coverage=st.selectbox("Mobile coverage confirmed",["Yes","No"],index=0 if ex is not None and ex.get("Mobile Coverage Confirmed","")=="Yes" else 1,help="Only activate sites with reliable mobile data coverage across the site.")
                     status=st.selectbox("Status",["Active","Inactive"],index=0 if ex is None or ex["Status"]=="Active" else 1)
                     notes=st.text_area("Notes",value=ex["Notes"] if ex is not None else "")
                     save=st.form_submit_button("Save site changes" if mode=="edit" else "Add site",type="primary")
@@ -2477,7 +2609,7 @@ elif page == "setup":
             for _, build_row in data["Builds"].sort_values(["Product", "First Active Date"], ascending=[True, False]).iterrows():
                 version = build_row["Build Version"]
                 active_traps = len(data["Traps"][(data["Traps"]["Build Version"] == version) & (data["Traps"]["Status"] == "Active")])
-                with st.container(border=True):
+                with app_card():
                     c1, c2, c3, action = st.columns([1.15, 1.15, 1.3, 0.7], vertical_alignment="center")
                     c1.markdown(f"**{version}**")
                     c1.caption(build_row["Product"])
@@ -2633,7 +2765,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.39 · Compact Staging Banner")
+st.sidebar.caption("v8.6.42 · Explicit Photo Capture")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

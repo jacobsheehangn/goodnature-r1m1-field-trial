@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.39 Compact Staging Banner
+# R1/M1 Field Trial App — v8.6.42 Explicit Photo Capture
 
 ## Deployment requirement
 
@@ -190,3 +190,54 @@ Unchanged:
 - Mobile now shows one line: **STAGING — Setup and testing only**
 - Desktop shows: **STAGING — Setup and testing only. Do not record real field results.**
 - No other layout, card, navigation or typography changes.
+
+
+## v8.6.40 canonical mobile UI
+
+Replaced accumulated CSS patches with one canonical stylesheet.
+
+Fixed:
+
+- iPhone login auto-zoom with 16 px mobile form controls
+- Streamlit menu clipping by removing fixed toolbar/header heights
+- card outlines using a shared app-owned marker across 19 bordered sections
+- sidebar active and inactive text contrast
+- Safari safe-area spacing
+
+Unchanged:
+
+- approved typography
+- sidebar width
+- site and trap card content
+- staging message copy
+
+
+## v8.6.41 global field UX
+
+System-wide changes:
+
+- user-facing route language replaced with trap order and trap progress
+- shared navigation now resets every destination page to the top
+- scroll reset retries after Streamlit rerenders
+- radio and select controls use one consistent light-theme component style
+- generic sticky form actions removed
+- sidebar open/close controls explicitly use dark icons
+- seeded trap locations now read `Trap 1`, `Trap 2`, and so on
+
+Internal workbook field names such as `Route Order` remain unchanged for data compatibility.
+
+
+## v8.6.42 explicit photo capture
+
+The camera no longer initialises when **Dead animal found** is selected.
+
+Photo flow:
+
+1. choose a photo type
+2. tap **Take photo** or **Upload image**
+3. capture/select the image
+4. see a thumbnail in the check
+5. remove it or add another image
+6. save all images with the trap check
+
+The camera exists only after an explicit **Take photo** action. Manual upload supports one or more JPG, PNG or WebP images. Duplicate images are skipped.

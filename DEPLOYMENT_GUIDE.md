@@ -76,3 +76,16 @@ Use one active editor at a time. The app still uses one shared Excel workbook, s
 After replacing the repository files with a newer release and committing the change, Render will redeploy automatically because `autoDeploy: true` is enabled in `render.yaml`.
 
 Check the Render Events page and wait for the new deploy to show **Live** before testing the URL.
+
+
+## v8.6.40 mobile verification
+
+After Render shows Live:
+
+1. Close the old Safari tab and reopen the URL.
+2. Sign in. The page should stay at normal zoom.
+3. Confirm the top-right Streamlit three-dot menu is visible.
+4. Use the top-left control to open the app sidebar.
+5. Confirm active navigation is orange/white and inactive navigation is white/dark.
+6. Confirm site cards, trap cards, forms and reviews have outlines.
+7. Confirm bottom controls sit above Safari's browser bar.
