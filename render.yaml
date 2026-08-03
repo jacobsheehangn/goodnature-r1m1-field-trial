@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: r1m1-field-trial
+    runtime: python
+    plan: starter
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: R1M1_DATA_DIR
+        value: /var/data
+      - key: R1M1_SEED_MODE
+        value: clean
+      - key: R1M1_ENVIRONMENT
+        value: staging
+      - key: R1M1_APP_PASSWORD
+        sync: false
+    disk:
+      name: r1m1-data
+      mountPath: /var/data
+      sizeGB: 1
