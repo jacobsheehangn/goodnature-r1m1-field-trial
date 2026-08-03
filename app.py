@@ -17,7 +17,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.37 Forced Light Theme"
+APP_TITLE = "R1/M1 Field Trial — v8.6.39 Compact Staging Banner"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -386,9 +386,14 @@ def require_authentication() -> None:
 
 def show_environment_banner() -> None:
     if DEPLOYMENT_ENVIRONMENT == "staging":
-        st.warning(
-            "STAGING — Use this deployment for setup and testing only. "
-            "Confirm the clean launch data and complete the phone test before recording real field results."
+        st.markdown(
+            """
+            <div class="staging-banner" role="status">
+              <span class="staging-banner-mobile"><strong>STAGING</strong> — Setup and testing only</span>
+              <span class="staging-banner-desktop"><strong>STAGING</strong> — Setup and testing only. Do not record real field results.</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
     elif DEPLOYMENT_ENVIRONMENT not in {"production", "local"}:
         st.info(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
@@ -911,6 +916,234 @@ button[data-testid="stBaseButton-secondary"] * {
   html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
     background: #FFFFFF !important;
     color: #202124 !important;
+  }
+}
+
+
+
+/* v8.6.39 — compact staging banner */
+.staging-banner {
+  background: #FFF9C9;
+  border: 1px solid #E4D976;
+  border-radius: 12px;
+  color: #202124;
+  margin: 0 0 1.25rem 0;
+  padding: 0.7rem 1rem;
+  line-height: 1.35;
+}
+
+.staging-banner,
+.staging-banner * {
+  color: #202124 !important;
+}
+
+.staging-banner-mobile {
+  display: none;
+}
+
+.staging-banner-desktop {
+  display: inline;
+}
+
+@media (max-width: 700px) {
+  .staging-banner {
+    margin-bottom: 1rem;
+    padding: 0.55rem 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .staging-banner-mobile {
+    display: inline;
+  }
+
+  .staging-banner-desktop {
+    display: none;
+  }
+}
+
+/* v8.6.38 — global surface hierarchy and mobile chrome */
+
+/* Shared surface tokens */
+:root {
+  --gn-page-bg: #FFFFFF;
+  --gn-surface-bg: #F8F8F6;
+  --gn-surface-bg-strong: #F4F4F2;
+  --gn-border: #C9CDD2;
+  --gn-border-strong: #AEB4BC;
+  --gn-text: #202124;
+  --gn-muted: #6A7078;
+  --gn-orange: #F27022;
+}
+
+/* Restore visual grouping for cards, forms and bordered sections */
+[data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stForm"],
+div[data-testid="stExpander"],
+div[data-testid="stMetric"],
+div[data-testid="stDataFrame"],
+div[data-testid="stTable"],
+div[data-testid="stAlert"],
+div[data-testid="stFileUploader"],
+div[data-testid="stCameraInput"],
+section[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"] {
+  border-color: var(--gn-border) !important;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stExpander"],
+div[data-testid="stMetric"],
+div[data-testid="stFileUploader"],
+div[data-testid="stCameraInput"] {
+  background: var(--gn-surface-bg) !important;
+  border: 1px solid var(--gn-border) !important;
+  border-radius: 16px !important;
+}
+
+/* Keep semantic alerts distinct */
+div[data-testid="stAlert"] {
+  border-width: 1px !important;
+  border-style: solid !important;
+  border-radius: 14px !important;
+}
+
+/* Restore common custom card/section shells used across the app */
+.site-card,
+.trap-card,
+.task-card,
+.review-card,
+.summary-card,
+.evidence-card,
+.performance-card,
+.confirm-card,
+.success-card,
+.field-card,
+.setup-card,
+.section-card,
+.card,
+.panel,
+.surface,
+.field-sticky-header {
+  background: var(--gn-surface-bg) !important;
+  border: 1px solid var(--gn-border) !important;
+  border-radius: 16px !important;
+}
+
+/* Preserve selected/active card emphasis */
+.site-card.selected,
+.trap-card.selected,
+.task-card.selected,
+.review-card.selected,
+.card.selected,
+.panel.selected,
+[aria-selected="true"] {
+  border-color: var(--gn-orange) !important;
+}
+
+/* Sidebar navigation buttons */
+section[data-testid="stSidebar"] button[kind="secondary"],
+section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] {
+  background: #FFFFFF !important;
+  color: var(--gn-text) !important;
+  border: 1px solid var(--gn-border) !important;
+}
+
+section[data-testid="stSidebar"] button[kind="secondary"] *,
+section[data-testid="stSidebar"] button[data-testid="stBaseButton-secondary"] * {
+  color: var(--gn-text) !important;
+}
+
+/* Active sidebar navigation is orange with white text */
+section[data-testid="stSidebar"] button[kind="primary"],
+section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
+  background: var(--gn-orange) !important;
+  border-color: var(--gn-orange) !important;
+  color: #FFFFFF !important;
+}
+
+section[data-testid="stSidebar"] button[kind="primary"] *,
+section[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] * {
+  color: #FFFFFF !important;
+}
+
+/* Streamlit mobile header: compact, light, and still tappable */
+header[data-testid="stHeader"] {
+  background: #FFFFFF !important;
+  height: 3.25rem !important;
+  min-height: 3.25rem !important;
+  border-bottom: 1px solid #ECEEF1 !important;
+}
+
+header[data-testid="stHeader"] [data-testid="stToolbar"] {
+  height: 3.25rem !important;
+  min-height: 3.25rem !important;
+  background: #FFFFFF !important;
+}
+
+header[data-testid="stHeader"] button,
+header[data-testid="stHeader"] svg {
+  color: var(--gn-text) !important;
+  fill: currentColor !important;
+}
+
+/* Keep app content clear of browser chrome and iPhone safe area */
+[data-testid="stAppViewContainer"] > .main {
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
+}
+
+section[data-testid="stSidebar"] > div {
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
+}
+
+@media (max-width: 700px) {
+  header[data-testid="stHeader"] {
+    height: 3rem !important;
+    min-height: 3rem !important;
+  }
+
+  header[data-testid="stHeader"] [data-testid="stToolbar"] {
+    height: 3rem !important;
+    min-height: 3rem !important;
+  }
+
+  [data-testid="stAppViewContainer"] > .main {
+    padding-top: 3rem !important;
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  section[data-testid="stSidebar"] > div {
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* Ensure the final control/card can scroll above Safari's bottom bar */
+  [data-testid="stAppViewContainer"] .block-container {
+    padding-bottom: calc(7rem + env(safe-area-inset-bottom)) !important;
+  }
+
+  /* Retain borders on mobile where Streamlit may otherwise flatten surfaces */
+  [data-testid="stVerticalBlockBorderWrapper"],
+  div[data-testid="stExpander"],
+  div[data-testid="stMetric"],
+  div[data-testid="stFileUploader"],
+  div[data-testid="stCameraInput"],
+  .site-card,
+  .trap-card,
+  .task-card,
+  .review-card,
+  .summary-card,
+  .evidence-card,
+  .performance-card,
+  .confirm-card,
+  .success-card,
+  .field-card,
+  .setup-card,
+  .section-card,
+  .card,
+  .panel,
+  .surface {
+    border: 1px solid var(--gn-border) !important;
+    background: var(--gn-surface-bg) !important;
   }
 }
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
@@ -2400,7 +2633,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.37 · Forced Light Theme")
+st.sidebar.caption("v8.6.39 · Compact Staging Banner")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

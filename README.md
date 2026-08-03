@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.37 Forced Light Theme
+# R1/M1 Field Trial App — v8.6.39 Compact Staging Banner
 
 ## Deployment requirement
 
@@ -165,3 +165,28 @@ The app now uses a fixed light theme across desktop, iPhone and Android.
 - Text, labels, inputs, borders and cards use explicit light-theme colours.
 - iOS and Android dark-mode preferences no longer switch the app into a dark palette.
 - Primary and secondary buttons have explicit contrast-safe colours.
+
+
+## v8.6.38 global surface pass
+
+Changed only the agreed global UI items:
+
+- restored borders and light surface backgrounds for cards, forms and grouped sections
+- fixed sidebar button text contrast
+- made the active sidebar item solid Goodnature orange with white text
+- reduced the mobile Streamlit header height and forced it light
+- added iPhone/Safari bottom safe-area spacing
+
+Unchanged:
+
+- typography
+- sidebar width
+- staging banner
+- site-card content and density
+
+
+## v8.6.39 compact staging banner
+
+- Mobile now shows one line: **STAGING — Setup and testing only**
+- Desktop shows: **STAGING — Setup and testing only. Do not record real field results.**
+- No other layout, card, navigation or typography changes.
