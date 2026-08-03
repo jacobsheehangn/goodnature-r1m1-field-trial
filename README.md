@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.45 Hardened Release Gate
+# R1/M1 Field Trial App — v8.6.46 GitHub-Compatible Release Gate
 
 ## Deployment requirement
 
@@ -274,3 +274,10 @@ See `TESTING_GUIDE.md`.
 - Removed reliance on the optional pytest-playwright plugin.
 - Browser preflight failures now explain how to install Chromium.
 - GitHub Actions remains the recommended live test runner.
+
+
+## v8.6.46 GitHub-compatible release gate
+
+- Removed the unavailable `artifact-tool` test dependency.
+- Workbook release checks now use `openpyxl`.
+- App behaviour and trial data are unchanged.

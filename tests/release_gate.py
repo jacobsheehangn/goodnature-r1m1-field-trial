@@ -7,7 +7,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from artifact_tool import Blob, SpreadsheetFile
+from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "app.py"
@@ -51,12 +51,22 @@ required = {
 for name, token in required.items():
     check(name, token in source, f"Required token: {token}")
 
-wb = SpreadsheetFile.import_xlsx(Blob.load(str(CLEAN)))
+wb = load_workbook(CLEAN, data_only=False, read_only=True)
 sheets = ["Sites","Builds","Traps","Visits","Checks","Windows","Followups","Audit Log","Photos"]
 data = {}
+
+missing_sheets = [name for name in sheets if name not in wb.sheetnames]
+check("Required workbook sheets", not missing_sheets, json.dumps(missing_sheets))
+
 for sheet_name in sheets:
-    ws = wb.worksheets.get_item(sheet_name)
-    values = ws.get_range("A1:AZ1000").values
+    if sheet_name not in wb.sheetnames:
+        data[sheet_name] = []
+        continue
+    ws = wb[sheet_name]
+    values = list(ws.iter_rows(min_row=1, max_row=1000, max_col=52, values_only=True))
+    if not values:
+        data[sheet_name] = []
+        continue
     headers = [str(v) if v is not None else "" for v in values[0]]
     rows = []
     for row in values[1:]:
@@ -103,18 +113,21 @@ open_counts = Counter(
 bad_open = {tid: open_counts.get(tid, 0) for tid in trap_ids if open_counts.get(tid, 0) != 1}
 check("One open window per trap", not bad_open, json.dumps(bad_open))
 
-error_scan = wb.inspect({
-    "kind": "match",
-    "search_term": "#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A",
-    "options": {"use_regex": True, "max_results": 300},
-    "summary": "release gate formula scan",
-}).ndjson
-no_formula_errors = (
-    "matched 0 entries" in error_scan
-    or '"count":0' in error_scan
-    or '"matches":[]' in error_scan
-)
-check("Workbook formula errors", no_formula_errors, error_scan[:500])
+formula_errors = []
+error_pattern = re.compile(r"#REF!|#DIV/0!|#VALUE!|#NAME\\?|#N/A")
+for ws in wb.worksheets:
+    for row in ws.iter_rows():
+        for cell in row:
+            value = cell.value
+            if isinstance(value, str) and error_pattern.search(value):
+                formula_errors.append(f"{ws.title}!{cell.coordinate}: {value}")
+                if len(formula_errors) >= 300:
+                    break
+        if len(formula_errors) >= 300:
+            break
+    if len(formula_errors) >= 300:
+        break
+check("Workbook formula errors", not formula_errors, json.dumps(formula_errors[:20]))
 
 failed = [item for item in results if not item["passed"]]
 print(json.dumps({

@@ -86,3 +86,9 @@ Use these as repository secrets, not committed files:
 In GitHub: **Settings → Secrets and variables → Actions → New repository secret**.
 
 After adding both secrets, open **Actions → R1M1 release gate → Run workflow**.
+
+
+## v8.6.46 GitHub compatibility
+
+The release gate uses `openpyxl` for workbook checks. The previous `artifact-tool`
+dependency was removed because it is not published on public pip.
