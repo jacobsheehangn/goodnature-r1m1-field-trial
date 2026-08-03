@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.36 Deployment Ready
+# R1/M1 Field Trial App — v8.6.37 Forced Light Theme
 
 ## Deployment requirement
 
@@ -155,3 +155,13 @@ Added:
 - deployment, security and operations guides
 
 Render uses `R1M1_SEED_MODE=clean`. Local use remains on the demo seed unless configured otherwise.
+
+
+## v8.6.37 forced light theme
+
+The app now uses a fixed light theme across desktop, iPhone and Android.
+
+- Goodnature orange remains the primary action colour.
+- Text, labels, inputs, borders and cards use explicit light-theme colours.
+- iOS and Android dark-mode preferences no longer switch the app into a dark palette.
+- Primary and secondary buttons have explicit contrast-safe colours.

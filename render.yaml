@@ -1,3 +1,4 @@
+# v8.6.37 forced light theme
 services:
   - type: web
     name: r1m1-field-trial

@@ -69,3 +69,10 @@ Only after the phone test and setup review:
 ## Important operating limit
 
 Use one active editor at a time. The app still uses one shared Excel workbook, so simultaneous saves can overwrite each other.
+
+
+## Updating an existing Render deployment
+
+After replacing the repository files with a newer release and committing the change, Render will redeploy automatically because `autoDeploy: true` is enabled in `render.yaml`.
+
+Check the Render Events page and wait for the new deploy to show **Live** before testing the URL.

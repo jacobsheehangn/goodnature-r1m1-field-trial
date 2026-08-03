@@ -17,7 +17,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.36 Deployment Ready"
+APP_TITLE = "R1/M1 Field Trial — v8.6.37 Forced Light Theme"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -827,6 +827,92 @@ def show_flash():
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.markdown("""
 <style>
+
+:root {
+  color-scheme: light !important;
+}
+
+html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+  background: #FFFFFF !important;
+  color: #202124 !important;
+}
+
+[data-testid="stAppViewContainer"] * {
+  color-scheme: light !important;
+}
+
+h1, h2, h3, h4, h5, h6,
+p, label, span, small,
+[data-testid="stMarkdownContainer"],
+[data-testid="stCaptionContainer"],
+[data-testid="stMetricLabel"],
+[data-testid="stMetricValue"] {
+  color: #202124;
+}
+
+[data-testid="stSidebar"] {
+  background: #F4F4F2 !important;
+}
+
+[data-testid="stSidebar"] * {
+  color: #202124;
+}
+
+div[data-baseweb="input"] > div,
+div[data-baseweb="textarea"] > div,
+div[data-baseweb="select"] > div,
+div[data-testid="stForm"] {
+  background: #FFFFFF !important;
+  color: #202124 !important;
+  border-color: #B8BDC4 !important;
+}
+
+input, textarea {
+  background: #FFFFFF !important;
+  color: #202124 !important;
+  -webkit-text-fill-color: #202124 !important;
+  caret-color: #202124 !important;
+}
+
+input::placeholder, textarea::placeholder {
+  color: #6A7078 !important;
+  opacity: 1 !important;
+}
+
+button[kind="primary"],
+button[data-testid="stBaseButton-primary"] {
+  background: #F27022 !important;
+  border-color: #F27022 !important;
+  color: #FFFFFF !important;
+}
+
+button[kind="primary"] *,
+button[data-testid="stBaseButton-primary"] * {
+  color: #FFFFFF !important;
+}
+
+button[kind="secondary"],
+button[data-testid="stBaseButton-secondary"] {
+  background: #FFFFFF !important;
+  color: #202124 !important;
+  border-color: #B8BDC4 !important;
+}
+
+button[kind="secondary"] *,
+button[data-testid="stBaseButton-secondary"] * {
+  color: #202124 !important;
+}
+
+[data-testid="stForm"] {
+  border: 1px solid #B8BDC4 !important;
+}
+
+@media (prefers-color-scheme: dark) {
+  html, body, [data-testid="stAppViewContainer"], [data-testid="stApp"] {
+    background: #FFFFFF !important;
+    color: #202124 !important;
+  }
+}
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 :root {
   --brand-orange: #f36c21;
@@ -2314,7 +2400,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.36 · Deployment Ready")
+st.sidebar.caption("v8.6.37 · Forced Light Theme")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
