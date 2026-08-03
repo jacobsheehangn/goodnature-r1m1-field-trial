@@ -144,6 +144,62 @@ def open_mobile_sidebar(page: Page) -> None:
 
 
 
+
+def click_sidebar_nav(page: Page, label: str) -> None:
+    """Click the actual sidebar navigation button, not its inner text node."""
+    open_mobile_sidebar(page)
+    sidebar = page.get_by_test_id("stSidebar")
+    label_node = sidebar.get_by_text(label, exact=True).first
+    expect(label_node).to_be_visible(timeout=10_000)
+
+    button = label_node.locator("xpath=ancestor::button[1]")
+    if button.count() == 0:
+        button = label_node.locator("xpath=ancestor::*[@role='button'][1]")
+    if button.count() == 0:
+        raise AssertionError(f"No clickable sidebar control found for {label!r}.")
+
+    button.scroll_into_view_if_needed()
+    button.click(force=True)
+
+
+def enter_first_available_site(page: Page) -> None:
+    """Enter a site regardless of existing persistent staging visit state."""
+    expect(app_home_marker(page)).to_be_visible(timeout=30_000)
+
+    action_patterns = [
+        r"^Start checking$",
+        r"^Continue checking$",
+        r"^Resume checking$",
+        r"^Open visit$",
+    ]
+
+    for pattern in action_patterns:
+        action = page.get_by_role("button", name=re.compile(pattern, re.I)).first
+        if action.count() and action.is_visible():
+            action.scroll_into_view_if_needed()
+            action.click(force=True)
+            page.wait_for_timeout(800)
+            return
+
+    buttons = page.get_by_role("button")
+    for index in range(buttons.count()):
+        button = buttons.nth(index)
+        if not button.is_visible():
+            continue
+        label = (button.inner_text() or "").strip().lower()
+        if "checking" in label or "visit" in label:
+            button.scroll_into_view_if_needed()
+            button.click(force=True)
+            page.wait_for_timeout(800)
+            return
+
+    raise AssertionError(
+        "No visible site action found. Expected Start checking, Continue checking, "
+        "Resume checking, or Open visit."
+    )
+
+
+
 @pytest.mark.parametrize(
     "viewport,name",
     [
@@ -177,23 +233,21 @@ def test_primary_site_journey_shell(page: Page) -> None:
     sign_in(page)
 
     expect(page.get_by_text("Hutt River", exact=True)).to_be_visible()
-    start = page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first
-    expect(start).to_be_visible(timeout=30_000)
-    start.click()
+    enter_first_available_site(page)
     page.wait_for_load_state("networkidle")
 
     # Terminology and initial trap page.
-    expect(page.get_by_text(re.compile("Trap 1", re.I)).first).to_be_visible()
+    expect(page.get_by_text(re.compile(r"Trap\s+1", re.I)).first).to_be_visible(timeout=30_000)
     assert "route point" not in page.locator("body").inner_text().lower()
     page.screenshot(path=SHOTS / "mobile_first_trap.png", full_page=True)
 
 def test_dead_animal_does_not_request_camera(page: Page) -> None:
     page.set_viewport_size({"width": 390, "height": 844})
     sign_in(page)
-    start = page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first
-    expect(start).to_be_visible(timeout=30_000)
-    start.click()
+    enter_first_available_site(page)
     page.wait_for_load_state("networkidle")
+
+    expect(page.get_by_text(re.compile(r"Trap\s+\d+", re.I)).first).to_be_visible(timeout=30_000)
 
     # Choose dead-animal outcome where available.
     dead = page.get_by_text("Dead animal found", exact=True)
@@ -210,11 +264,10 @@ def test_dead_animal_does_not_request_camera(page: Page) -> None:
 def test_selection_controls_not_black(page: Page) -> None:
     page.set_viewport_size({"width": 390, "height": 844})
     sign_in(page)
-    start = page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first
-    expect(start).to_be_visible(timeout=30_000)
-    start.click()
+    enter_first_available_site(page)
     page.wait_for_load_state("networkidle")
 
+    expect(page.locator('label[data-baseweb="radio"]').first).to_be_visible(timeout=30_000)
     radios = page.locator('label[data-baseweb="radio"] > div:first-child')
     if radios.count():
         color = radios.first.evaluate("(el) => getComputedStyle(el).backgroundColor")
@@ -226,11 +279,7 @@ def test_performance_metrics_do_not_have_nested_card_borders(page: Page) -> None
     sign_in(page)
 
     # Open sidebar when needed and navigate to Performance.
-    performance = page.get_by_test_id("stSidebar").get_by_text("Performance", exact=True)
-    if not (performance.count() and performance.first.is_visible()):
-        open_mobile_sidebar(page)
-    expect(performance.first).to_be_visible(timeout=10_000)
-    performance.first.click()
+    click_sidebar_nav(page, "Performance")
     expect(page.get_by_text("Performance at a glance", exact=True)).to_be_visible(timeout=30_000)
 
     metrics = page.locator('[data-testid="stMetric"]')

@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.51 Live Test Hardening
+# R1/M1 Field Trial App — v8.6.52 State-Aware Live Tests
 
 ## Deployment requirement
 
@@ -329,3 +329,12 @@ Controlled alignment with the Goodnature native app:
 - adds explicit waits before Start checking
 - scopes Performance navigation to the sidebar
 - no app behaviour or trial data changes
+
+
+## v8.6.52 state-aware live tests
+
+- site journeys support Start checking, Continue checking, Resume checking and Open visit
+- tests no longer assume the persistent staging workbook is fresh
+- sidebar navigation clicks the actual button ancestor
+- sidebar targets are scrolled into view before clicking
+- no app behaviour or trial data changed

@@ -113,3 +113,9 @@ Streamlit's separate **Show password** button.
 The live suite now uses visible main-content markers and sidebar-scoped locators.
 It does not use hidden staging text or duplicated sidebar text as proof that login
 has completed.
+
+
+## v8.6.52 persistent staging state
+
+Live tests now enter whichever site action is available rather than assuming every
+site shows Start checking. Sidebar navigation targets the clickable button ancestor.
