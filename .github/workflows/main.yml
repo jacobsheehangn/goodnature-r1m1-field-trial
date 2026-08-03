@@ -1,1 +1,42 @@
+name: R1M1 release gate
 
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-test.txt
+          playwright install --with-deps chromium
+
+      - name: Static and workbook checks
+        run: python tests/release_gate.py
+
+      - name: Live browser smoke tests
+        env:
+          R1M1_TEST_URL: ${{ secrets.R1M1_TEST_URL }}
+          R1M1_TEST_PASSWORD: ${{ secrets.R1M1_TEST_PASSWORD }}
+        run: pytest tests/test_live_app.py
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r1m1-test-screenshots
+          path: tests/screenshots
+          if-no-files-found: ignore
