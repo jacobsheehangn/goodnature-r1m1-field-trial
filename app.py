@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.54 Radio Test Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.61 Mobile Menu Close Fix"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -838,24 +838,143 @@ def nav_go(page: str):
 
 
 def collapse_sidebar_on_mobile_once():
+    """Close the mobile sidebar after navigation once the new page has rendered."""
     if not st.session_state.pop("collapse_sidebar_once", False):
         return
+
     components.html(
         """
         <script>
         (() => {
-          const doc = window.parent.document;
-          if (window.parent.innerWidth > 768) return;
-          const selectors = [
-            '[data-testid="stSidebarCollapseButton"] button',
-            '[data-testid="stSidebarCollapseButton"]',
-            'button[aria-label="Close sidebar"]',
-            'button[aria-label="Collapse sidebar"]'
-          ];
-          for (const selector of selectors) {
-            const button = doc.querySelector(selector);
-            if (button) { button.click(); break; }
-          }
+          const parent = window.parent;
+          if (parent.innerWidth > 768) return;
+
+          const doc = parent.document;
+          let attempts = 0;
+          let observer = null;
+
+          const sidebarIsOpen = () => {
+            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+            if (!sidebar) return false;
+
+            const rect = sidebar.getBoundingClientRect();
+            const style = parent.getComputedStyle(sidebar);
+            const ariaHidden = sidebar.getAttribute('aria-hidden');
+
+            return (
+              ariaHidden !== 'true' &&
+              style.display !== 'none' &&
+              style.visibility !== 'hidden' &&
+              rect.width > 20 &&
+              rect.right > 0
+            );
+          };
+
+          const candidateNodes = () => {
+            const selectors = [
+              '[data-testid="stSidebarCollapseButton"] button',
+              '[data-testid="stSidebarCollapseButton"]',
+              '[data-testid="stSidebar"] button[aria-label]',
+              'button[aria-label="Close sidebar"]',
+              'button[aria-label="Collapse sidebar"]',
+              'button[aria-label*="close" i][aria-label*="sidebar" i]',
+              'button[aria-label*="collapse" i][aria-label*="sidebar" i]',
+              '[data-testid*="SidebarCollapse"]',
+              '[data-testid*="sidebarCollapse"]'
+            ];
+
+            const found = [];
+            for (const selector of selectors) {
+              for (const node of doc.querySelectorAll(selector)) {
+                const clickable =
+                  node.matches('button, [role="button"]')
+                    ? node
+                    : node.querySelector('button, [role="button"]') || node;
+                if (!found.includes(clickable)) found.push(clickable);
+              }
+            }
+            return found;
+          };
+
+          const dispatchClick = (node) => {
+            try {
+              node.click();
+              return true;
+            } catch (_) {}
+
+            try {
+              for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+                node.dispatchEvent(
+                  new MouseEvent(type, {
+                    bubbles: true,
+                    cancelable: true,
+                    view: parent
+                  })
+                );
+              }
+              return true;
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const sendEscape = () => {
+            for (const type of ['keydown', 'keyup']) {
+              doc.dispatchEvent(
+                new KeyboardEvent(type, {
+                  key: 'Escape',
+                  code: 'Escape',
+                  keyCode: 27,
+                  which: 27,
+                  bubbles: true,
+                  cancelable: true
+                })
+              );
+            }
+          };
+
+          const tryClose = () => {
+            attempts += 1;
+
+            if (!sidebarIsOpen()) {
+              if (observer) observer.disconnect();
+              return true;
+            }
+
+            for (const node of candidateNodes()) {
+              dispatchClick(node);
+              if (!sidebarIsOpen()) {
+                if (observer) observer.disconnect();
+                return true;
+              }
+            }
+
+            sendEscape();
+
+            if (!sidebarIsOpen()) {
+              if (observer) observer.disconnect();
+              return true;
+            }
+
+            if (attempts >= 20 && observer) {
+              observer.disconnect();
+            }
+            return false;
+          };
+
+          observer = new MutationObserver(() => {
+            parent.setTimeout(tryClose, 20);
+          });
+
+          observer.observe(doc.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['style', 'class', 'aria-hidden']
+          });
+
+          [0, 50, 100, 200, 350, 550, 800, 1100, 1500, 2000, 2600, 3200]
+            .forEach((delay) => parent.setTimeout(tryClose, delay));
         })();
         </script>
         """,
@@ -1571,6 +1690,20 @@ label p {
     min-height: 3.1rem;
   }
 }
+
+/* v8.6.59 — trap detail history and setup-drawer close control */
+.trap-history-day { margin: 1.25rem 0 .45rem; color: var(--text); font-size: .94rem; font-weight: 700; }
+.trap-history-day:first-child { margin-top: .25rem; }
+.trap-history-event { display: grid; grid-template-columns: 5.25rem minmax(0, 1fr); column-gap: .8rem; align-items: start; padding: .55rem 0; }
+.trap-history-time { color: var(--muted); font-size: .82rem; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: .08rem; }
+.trap-history-content { min-width: 0; overflow-wrap: anywhere; }
+.trap-history-title { color: var(--text); font-weight: 650; line-height: 1.35; }
+.trap-history-details { color: var(--muted); font-size: .88rem; line-height: 1.45; margin-top: .12rem; }
+.drawer-close-marker { display: none; }
+div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) { align-items: start; }
+div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button { min-height: 2.25rem !important; height: 2.25rem !important; width: 2.25rem !important; padding: 0 !important; border-radius: 999px !important; font-size: 1.35rem !important; line-height: 1 !important; background: transparent !important; border-color: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
+div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button:hover { background: #ececea !important; color: var(--text) !important; }
+@media (max-width: 520px) { .trap-history-event { grid-template-columns: 4.6rem minmax(0, 1fr); column-gap: .65rem; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -1580,8 +1713,8 @@ data = load_data()
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
-PRIMARY_NAV = {"Trap sites": "sites", "Follow-up tasks": "followups", "Performance": "results"}
-SECONDARY_NAV = {"Setup": "setup", "Data Management": "data_management"}
+PRIMARY_NAV = {"Trap sites": "sites", "Traps": "network", "Follow-ups": "followups", "Trial performance": "results"}
+SECONDARY_NAV = {"Trial setup": "setup", "Data & records": "data_management"}
 WORKFLOW_PAGES = {"site", "visit", "check", "check_confirm"}
 
 # Goodnature wordmark appears once in persistent app chrome.
@@ -1604,9 +1737,17 @@ if st.session_state.page in WORKFLOW_PAGES:
 else:
     st.sidebar.caption("Main")
     for label, target in PRIMARY_NAV.items():
-        if st.sidebar.button(label, use_container_width=True, type="primary" if st.session_state.page == target else "secondary"):
+        is_active = (
+            st.session_state.page == target
+            or (target == "network" and st.session_state.page == "trap_detail")
+        )
+        if st.sidebar.button(
+            label,
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
             nav_go(target)
-    with st.sidebar.expander("More", expanded=st.session_state.page in SECONDARY_NAV.values()):
+    with st.sidebar.expander("Administration", expanded=st.session_state.page in SECONDARY_NAV.values()):
         for label, target in SECONDARY_NAV.items():
             if st.button(label, key=f"nav_{target}", use_container_width=True, type="primary" if st.session_state.page == target else "secondary"):
                 nav_go(target)
@@ -1982,58 +2123,209 @@ elif page == "check_confirm":
             go("visit",site_id=sid,visit_id=vid)
 
 elif page == "network":
-    header("Traps", "Inspect one trap outside a site visit. For normal field work, start from Trap sites.")
-    site_filter = st.selectbox("Show traps from", ["All sites"] + data["Sites"]["Site ID"].tolist(), format_func=lambda x: x if x == "All sites" else site_name(data, x))
+    header("Traps", "Find a trap and review its kills, checks and full history.")
+
+    filter_col, search_col = st.columns([1, 1.5])
+    site_filter = filter_col.selectbox(
+        "Site",
+        ["All sites"] + data["Sites"]["Site ID"].tolist(),
+        format_func=lambda x: x if x == "All sites" else site_name(data, x),
+        key="traps_site_filter",
+    )
+    search_text = search_col.text_input(
+        "Find trap",
+        placeholder="Trap ID or location",
+        key="traps_search",
+    ).strip().lower()
+
     traps = data["Traps"].copy()
-    if site_filter != "All sites": traps = traps[traps["Site ID"] == site_filter]
-    selected_trap=st.session_state.get("network_trap")
-    if selected_trap:
-        left,panel=st.columns([1.65,1],gap="large")
+    if site_filter != "All sites":
+        traps = traps[traps["Site ID"] == site_filter]
+    if search_text:
+        traps = traps[
+            traps.apply(
+                lambda row: search_text in str(row["Trap ID"]).lower()
+                or search_text in trap_location_label(row).lower(),
+                axis=1,
+            )
+        ]
+
+    if traps.empty:
+        helper("No traps match this filter.")
     else:
-        left,panel=st.container(),None
-    with left:
-        if traps.empty:
-            helper("No traps match this filter.")
-        else:
-            st.caption("Open a trap directly from its row.")
-            traps = traps.assign(_route_num=pd.to_numeric(traps["Route Order"], errors="coerce"))
-            for _, tr in traps.sort_values(["Site ID", "_route_num"]).iterrows():
-                trap_id = tr["Trap ID"]; w = open_window(data, trap_id)
-                checks = data["Checks"][data["Checks"]["Trap ID"] == trap_id]
-                last_checked = human_dt(checks.iloc[-1]["Check Time"]) if not checks.empty else "—"
-                with app_card():
-                    c1,c2,c3,c4,action=st.columns([1.15,1.25,1.0,1.25,0.75],vertical_alignment="center")
-                    c1.markdown(f"**{trap_id}**"); c1.caption(site_name(data,tr["Site ID"]))
-                    c2.write(trap_location_label(tr)); c2.caption(f"Trap {tr['Route Order']}")
-                    c3.write(tr["Build Version"] or "—"); c3.caption(tr["Product"])
-                    c4.write("Active window" if w is not None else "No active window"); c4.caption(f"Last checked {last_checked}")
-                    if action.button("View",key=f"network_view_{trap_id}",use_container_width=True):
-                        st.session_state.network_trap=trap_id; st.rerun()
-    if panel is not None:
-        with panel:
-            trap_id=selected_trap
-            matches=data["Traps"][data["Traps"]["Trap ID"]==trap_id]
-            if matches.empty:
-                st.session_state.pop("network_trap",None); st.rerun()
-            tr=matches.iloc[0]
-            st.subheader(trap_id); st.caption(f"{site_name(data,tr['Site ID'])} · {trap_location_label(tr)}")
-            st.write(f"**Trap type:** {tr['Product']}"); st.write(f"**Build:** {tr['Build Version']}"); st.write(f"**Camera:** {tr['Camera ID']}")
-            w=open_window(data,trap_id); st.write(f"**Current window:** {w['Window ID'] if w is not None else 'None'}")
-            st.divider(); st.markdown("#### Recent history")
-            events=[]
-            for _,c in data["Checks"][data["Checks"]["Trap ID"]==trap_id].iterrows():
-                text=f"{c['Finding']}. Lure: {c['Lure Condition']}. Relured: {c['Relured']}. Trap ready: {c.get('Trap Ready After Check','—')}. Camera: {c['Camera Condition']}."
-                if c["Bag ID"]: text+=f" Bag ID: {c['Bag ID']}."
-                events.append((parse_dt(c["Check Time"]),"Line check",text))
-            for _,fu in data["Followups"][(data["Followups"]["Trap ID"]==trap_id)&(data["Followups"]["Status"]=="Complete")].iterrows():
-                events.append((parse_dt(fu["Completed Time"]),fu["Follow-up Type"],fu["Notes"] or "Review completed."))
-            for when,title,text in sorted(events,key=lambda x:x[0] or datetime.min,reverse=True)[:6]:
-                st.markdown(f"**{when.strftime('%d %b %Y, %I:%M %p') if when else 'Unknown'} — {title}**"); st.write(text)
-            if st.button("Close panel",key="close_network_panel"):
-                st.session_state.pop("network_trap",None); st.rerun()
+        st.caption("Open a trap to see every recorded check and follow-up.")
+        traps = traps.assign(
+            _route_num=pd.to_numeric(traps["Route Order"], errors="coerce")
+        )
+        for _, tr in traps.sort_values(["Site ID", "_route_num"]).iterrows():
+            trap_id = tr["Trap ID"]
+            trap_checks = data["Checks"][
+                data["Checks"]["Trap ID"].astype(str) == str(trap_id)
+            ].copy()
+            kills = trap_checks[
+                trap_checks["Finding"].astype(str) == "Dead animal found"
+            ]
+            last_kill = (
+                human_dt(kills.iloc[-1]["Check Time"])
+                if not kills.empty
+                else "No kills recorded"
+            )
+
+            with app_card():
+                c1, c2, c3, action = st.columns(
+                    [1.25, 1.35, 1.25, 0.72],
+                    vertical_alignment="center",
+                )
+                c1.markdown(f"**{trap_id}**")
+                c1.caption(site_name(data, tr["Site ID"]))
+
+                c2.write(trap_location_label(tr))
+                c2.caption(f"Trap {tr['Route Order']} · {tr['Build Version']}")
+
+                c3.markdown(
+                    f"**{len(kills)} kill{'s' if len(kills) != 1 else ''}**"
+                )
+                c3.caption(
+                    f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''} · "
+                    f"Last kill: {last_kill}"
+                )
+
+                if action.button(
+                    "View",
+                    key=f"network_view_{trap_id}",
+                    use_container_width=True,
+                ):
+                    go("trap_detail", trap_id=trap_id)
+
+elif page == "trap_detail":
+    trap_id = st.session_state.get("trap_id", "")
+    matches = data["Traps"][
+        data["Traps"]["Trap ID"].astype(str) == str(trap_id)
+    ]
+
+    if matches.empty:
+        message_panel(
+            "error",
+            "This trap could not be found.",
+            ["Return to Traps and choose another record."],
+        )
+        if st.button("Back to traps"):
+            go("network")
+        st.stop()
+
+    tr = matches.iloc[0]
+    trap_checks = data["Checks"][
+        data["Checks"]["Trap ID"].astype(str) == str(trap_id)
+    ].copy()
+    kills = trap_checks[
+        trap_checks["Finding"].astype(str) == "Dead animal found"
+    ].copy()
+    completed_followups = data["Followups"][
+        (data["Followups"]["Trap ID"].astype(str) == str(trap_id))
+        & (data["Followups"]["Status"] == "Complete")
+    ].copy()
+
+    if st.button("← Back to traps", key="back_to_traps"):
+        go("network")
+
+    header(
+        trap_id,
+        f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)} · "
+        f"{tr['Build Version']}",
+    )
+
+    kill_col, check_col, last_col = st.columns(3)
+    kill_col.metric("Kills", len(kills))
+    check_col.metric("Checks", len(trap_checks))
+    last_col.metric(
+        "Last kill",
+        human_dt(kills.iloc[-1]["Check Time"]) if not kills.empty else "—",
+    )
+
+    w = open_window(data, trap_id)
+    st.caption(
+        f"Current test window: {w['Window ID'] if w is not None else 'None'}"
+    )
+
+    st.divider()
+    st.markdown("### Full history")
+
+    events = []
+    for _, check in trap_checks.iterrows():
+        finding = check["Finding"] or "Check recorded"
+        details = []
+        if check["Species"]:
+            details.append(str(check["Species"]))
+        if check["Bag ID"]:
+            details.append(f"Bag {check['Bag ID']}")
+        if check["Lure Condition"]:
+            details.append(f"Lure: {check['Lure Condition']}")
+        if check.get("Trap Ready After Check", ""):
+            details.append(f"Trap ready: {check['Trap Ready After Check']}")
+        if check["Notes"]:
+            details.append(str(check["Notes"]))
+
+        events.append(
+            (
+                parse_dt(check["Check Time"]),
+                finding,
+                " · ".join(details) if details else "No additional notes.",
+            )
+        )
+
+    for _, followup in completed_followups.iterrows():
+        events.append(
+            (
+                parse_dt(followup["Completed Time"]),
+                followup["Follow-up Type"],
+                followup["Notes"] or "Follow-up completed.",
+            )
+        )
+
+    events = sorted(
+        events,
+        key=lambda event: event[0] or datetime.min,
+        reverse=True,
+    )
+
+    if not events:
+        helper("No history has been recorded for this trap yet.")
+    else:
+        grouped_events = {}
+        for when, title, details in events:
+            day_key = when.date() if when else None
+            grouped_events.setdefault(day_key, []).append((when, title, details))
+
+        today = now().date()
+        yesterday = today - timedelta(days=1)
+        for day_key, day_events in grouped_events.items():
+            if day_key is None:
+                day_heading = "Unknown date"
+            elif day_key == today:
+                day_heading = f"Today — {day_key.strftime('%-d %B %Y')}"
+            elif day_key == yesterday:
+                day_heading = f"Yesterday — {day_key.strftime('%-d %B %Y')}"
+            else:
+                day_heading = day_key.strftime("%-d %B %Y")
+
+            st.markdown(
+                f'<div class="trap-history-day">{html.escape(day_heading)}</div>',
+                unsafe_allow_html=True,
+            )
+            for when, title, details in day_events:
+                time_text = when.strftime("%-I:%M %p").lower() if when else "—"
+                st.markdown(
+                    '<div class="trap-history-event">'
+                    f'<div class="trap-history-time">{html.escape(time_text)}</div>'
+                    '<div class="trap-history-content">'
+                    f'<div class="trap-history-title">{html.escape(str(title))}</div>'
+                    f'<div class="trap-history-details">{html.escape(str(details))}</div>'
+                    '</div></div>',
+                    unsafe_allow_html=True,
+                )
 
 elif page == "followups":
-    header("Follow-up tasks", "Complete evidence tasks created by field findings. Each task is linked to the correct trap and trial period.")
+    header("Follow-ups", "Complete tasks created during trap checks.")
     fu=data["Followups"][data["Followups"]["Status"]=="Open"].copy()
     selected_followup_id=st.session_state.get("followup_panel")
 
@@ -2250,7 +2542,7 @@ elif page == "followups":
 elif page == "windows":
     if st.button("← Back to Data Management"):
         go("data_management")
-    header("Trial history", "Review completed trial periods, or check which periods are currently active in the field.")
+    header("Trial periods", "Review active and completed trial periods.")
     controls_left, action_right = st.columns([4, 1], vertical_alignment="bottom")
     with controls_left:
         status_col, site_col = st.columns(2)
@@ -2311,7 +2603,7 @@ elif page == "windows":
                 if st.button("Close panel", key="close_window_panel"): st.session_state.pop("window_panel",None); st.rerun()
 
 elif page == "results":
-    header("Performance", "See whether kills are humane and happen within the agreed time-to-kill target.")
+    header("Trial performance", "See whether kills are humane and happen within the agreed time-to-kill target across the trial.")
     with app_card():
         product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
         product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
@@ -2536,7 +2828,7 @@ elif page == "results":
 
 
 elif page == "setup":
-    header("Setup", "Manage trap sites, traps and build versions that drive field visits and performance reporting.")
+    header("Trial setup", "Manage the sites, traps and build versions used in this trial.")
     section = st.radio("What do you need to manage?", ["Traps", "Trap sites", "Builds"], horizontal=True)
     helper("Select a record to edit or add a new one. Historical visit and result records are preserved.")
 
@@ -2574,7 +2866,15 @@ elif page == "setup":
         if panel is not None:
             with panel:
                 existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
-                st.subheader("Edit trap" if mode=="edit" else "Add trap")
+                setup_title, setup_close = st.columns([1, 0.13], vertical_alignment="top")
+                with setup_title:
+                    st.subheader("Edit trap" if mode=="edit" else "Add trap")
+                with setup_close:
+                    st.markdown('<span class="drawer-close-marker"></span>', unsafe_allow_html=True)
+                    if st.button("×", key="close_trap_setup_panel_top", help="Close trap editor"):
+                        st.session_state.pop("setup_mode", None)
+                        st.session_state.pop("setup_trap", None)
+                        st.rerun()
                 with st.form("trap_setup_panel"):
                     trap_id=st.text_input("Trap ID",value=existing["Trap ID"] if existing is not None else "",disabled=mode=="edit")
                     product=st.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()),index=(sorted(data["Builds"]["Product"].unique()).index(existing["Product"]) if existing is not None and existing["Product"] in sorted(data["Builds"]["Product"].unique()) else 0))
@@ -2764,7 +3064,7 @@ elif page == "setup":
                     save_data(data); set_flash("success", f"{version} saved.", ["Build settings were updated."]); st.session_state.pop("build_mode",None); st.rerun()
                 if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.rerun()
 elif page == "data_management":
-    header("Data Management", "Correct known mistakes, review trial history, inspect the change log, or export a complete workbook backup.")
+    header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
     corrections_tab, history_tab, audit_tab, export_tab = st.tabs(["Corrections", "Trial history", "Audit log", "Export and backup"])
 
     with corrections_tab:
@@ -2892,7 +3192,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.54 · Radio Test Fix")
+st.sidebar.caption("v8.6.61 · Mobile Menu Close Fix")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

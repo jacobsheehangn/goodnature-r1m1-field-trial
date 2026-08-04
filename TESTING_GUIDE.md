@@ -36,3 +36,40 @@ Before field use, still confirm on an actual iPhone:
 - touch targets
 - Safari chrome and safe area
 - save and confirmation behaviour
+
+
+## v8.6.56 labels-only release
+
+The navigation test confirms the approved visible labels. Internal routes remain:
+
+- sites
+- network
+- followups
+- results
+- setup
+- data_management
+
+Selection-control appearance is protected through static CSS-contract checks rather
+than a browser assertion tied to Streamlit's internal radio markup.
+
+
+## Trap detail page
+
+Test at 390 px and 1440 px:
+
+- View opens a dedicated page
+- no trap cards remain above the detail
+- Back to traps returns to the list
+- search and site filter persist
+- no horizontal overflow
+- grouped event history remains readable
+
+
+## Mobile menu auto-close
+
+At 390 px:
+
+- open the sidebar
+- choose a different main destination
+- confirm the destination page renders
+- confirm the sidebar closes automatically

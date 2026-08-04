@@ -176,3 +176,68 @@ Every release should confirm:
 - safe-area spacing remains
 - photo upload remains upload-only
 - old route wording does not return
+
+
+## Trap history
+
+- Operational trap history is separate from aggregate Performance.
+- The list must show lifetime kill and check counts without opening each trap.
+- A trap detail view shows full chronological history.
+- Use plain field language: kills, checks, last kill and full history.
+
+
+## List-to-detail navigation
+
+Use a dedicated detail page when a record includes substantial content such as summary
+metrics, long history, related records or management actions.
+
+Do not simulate a responsive drawer with Streamlit columns. On narrow screens, columns
+stack in document order and can place the detail below the full list.
+
+Required pattern:
+
+- List page → View → Detail page
+- Detail page starts with **Back to [list]**
+- Preserve search and filters when returning
+- Keep the matching main-navigation item active
+- Do not use breadcrumbs for a single list-to-detail level
+- Use × only for genuine overlays, dialogs or drawers
+- Use Back for full-page navigation
+- Desktop and mobile use the same information architecture
+
+For event history:
+
+- group events under day headings
+- newest day first
+- fixed-width time column
+- flexible content column
+- wrapping must remain in the content column
+
+
+## Mobile navigation completion
+
+Selecting a destination from the mobile main menu must:
+
+1. navigate to the chosen page
+2. close the sidebar
+3. reveal the new page at its top
+
+The menu must not remain open after navigation. This rule applies to primary and
+administrative destinations because both use the shared navigation helper.
+
+
+## Mobile sidebar implementation note
+
+The Streamlit sidebar close control may be replaced during rerender and may sit outside
+the visible viewport. Mobile auto-close must not depend on a control being visibly
+positioned on screen.
+
+The shared close routine must:
+
+- confirm the sidebar is open
+- observe Streamlit DOM replacement
+- support multiple close-control variants
+- retry after rerender
+- allow programmatic activation of an off-screen collapse control
+- use Escape as a fallback
+- stop only once the sidebar geometry or state confirms it is closed

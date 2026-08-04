@@ -1,4 +1,11 @@
-# R1/M1 Field Trial App — v8.6.54 Radio Test Fix
+## Run locally
+
+On Mac, double-click `START_LOCAL_TEST.command`.
+
+Local records are stored separately in `local_test_data/`.
+Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
+
+# R1/M1 Field Trial App — v8.6.61 Mobile Menu Close Fix
 
 ## Deployment requirement
 
@@ -363,3 +370,65 @@ positioning from the required release decision.
 - replaces the obsolete BaseWeb radio selector with a geometry-based rendered indicator check
 - verifies the visible radio indicator is not solid black
 - no app behaviour, styling or data changes
+
+
+## v8.6.55 trap history
+
+- restored Trap history to the main navigation
+- each trap shows total kills, total checks and last-kill date
+- trap detail shows lifetime totals and full chronological history
+- includes completed follow-up work in the timeline
+- supports site filtering and trap/location search
+
+
+## v8.6.56 navigation labels
+
+Visible language only:
+
+- Trap history → Traps
+- Follow-up tasks → Follow-ups
+- Performance → Trial performance
+- Setup → Trial setup
+- Data Management → Data & records
+- More → Administration
+- Trial history → Trial periods
+
+Internal route keys, data flows and page behaviour are unchanged.
+
+The browser-level radio DOM test was removed because the tested first-trap screen does
+not consistently render a Streamlit radio control. The release gate now verifies the
+actual white, dark-outline and orange-selected CSS rules directly.
+
+
+## v8.6.59 trap detail page
+
+- replaced the simulated Traps drawer with a dedicated detail page
+- same navigation model on desktop and mobile
+- Back to traps replaces ×
+- Traps remains highlighted in the sidebar
+- search and site filter persist on return
+- grouped history and fixed-width time column retained
+- no workbook or field-check workflow changes
+
+
+## v8.6.60 mobile menu auto-close
+
+- mobile sidebar closes after selecting a main or administrative destination
+- shared navigation behaviour only; no page-specific patches
+- retries after Streamlit rerenders its page chrome
+- desktop sidebar behaviour is unchanged
+
+
+## v8.6.61 mobile menu close fix
+
+The first auto-close implementation failed when Streamlit's collapse control was
+off-screen or replaced during rerender.
+
+The shared close routine now:
+
+- observes Streamlit DOM changes
+- retries for up to 3.2 seconds
+- activates off-screen collapse controls programmatically
+- supports multiple control variants
+- sends Escape as a fallback
+- confirms closure from the sidebar's actual state and geometry
