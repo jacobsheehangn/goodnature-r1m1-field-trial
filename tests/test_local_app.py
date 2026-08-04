@@ -80,7 +80,38 @@ def test_selection_controls_are_not_solid_black(page: Page, local_app: str) -> N
         timeout=30_000
     )
 
-    radios = page.locator('label[data-baseweb="radio"] > div:first-child')
-    expect(radios.first).to_be_visible(timeout=10_000)
-    color = radios.first.evaluate("(el) => getComputedStyle(el).backgroundColor")
-    assert color not in {"rgb(0, 0, 0)", "rgba(0, 0, 0, 1)"}
+    radio_label = page.locator('label:has(input[type="radio"])').first
+    expect(radio_label).to_be_visible(timeout=10_000)
+
+    indicator = radio_label.evaluate(
+        """(label) => {
+          const candidates = [...label.querySelectorAll('*')];
+          for (const el of candidates) {
+            const rect = el.getBoundingClientRect();
+            const style = getComputedStyle(el);
+            const width = rect.width;
+            const height = rect.height;
+            const radius = parseFloat(style.borderRadius) || 0;
+            const circular =
+              width >= 12 && width <= 32 &&
+              height >= 12 && height <= 32 &&
+              Math.abs(width - height) <= 3 &&
+              radius >= Math.min(width, height) * 0.4;
+            if (circular) {
+              return {
+                backgroundColor: style.backgroundColor,
+                borderColor: style.borderColor,
+                width,
+                height,
+              };
+            }
+          }
+          return null;
+        }"""
+    )
+
+    assert indicator is not None, "Could not identify the rendered radio indicator."
+    assert indicator["backgroundColor"] not in {
+        "rgb(0, 0, 0)",
+        "rgba(0, 0, 0, 1)",
+    }

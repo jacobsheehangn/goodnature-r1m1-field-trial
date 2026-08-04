@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.53 Deterministic Release Gate
+# R1/M1 Field Trial App — v8.6.54 Radio Test Fix
 
 ## Deployment requirement
 
@@ -356,3 +356,10 @@ from **Run workflow**. It checks only that the deployed app opens and accepts lo
 
 This removes persistent staging data, Render deployment timing and Streamlit sidebar
 positioning from the required release decision.
+
+
+## v8.6.54 radio test fix
+
+- replaces the obsolete BaseWeb radio selector with a geometry-based rendered indicator check
+- verifies the visible radio indicator is not solid black
+- no app behaviour, styling or data changes
