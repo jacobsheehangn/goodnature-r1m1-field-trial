@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.61 Mobile Menu Close Fix
+# R1/M1 Field Trial App — v8.6.63 Mobile Navigation Polish
 
 ## Deployment requirement
 
@@ -432,3 +432,21 @@ The shared close routine now:
 - supports multiple control variants
 - sends Escape as a fallback
 - confirms closure from the sidebar's actual state and geometry
+
+
+## v8.6.62 navigation state and gate fix
+
+- mobile browser tests now distinguish an open sidebar from an off-canvas sidebar
+- tests open the menu before attempting to click a mobile navigation item
+- trap search and site filter use durable session state separate from widget state
+- returning from trap detail restores the previous list context
+- no workbook or field workflow changes
+
+
+## v8.6.63 mobile navigation polish
+
+- forces the mobile menu chevron to dark grey on the white header
+- removes mutation observers and repeated sidebar clicks
+- closes the sidebar once, 120 ms after the destination page renders
+- uses one Escape fallback only when no collapse control is found
+- desktop behaviour is unchanged

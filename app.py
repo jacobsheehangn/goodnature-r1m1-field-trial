@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.61 Mobile Menu Close Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.63 Mobile Navigation Polish"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -838,7 +838,7 @@ def nav_go(page: str):
 
 
 def collapse_sidebar_on_mobile_once():
-    """Close the mobile sidebar after navigation once the new page has rendered."""
+    """Close the mobile sidebar once after the destination page has rendered."""
     if not st.session_state.pop("collapse_sidebar_once", False):
         return
 
@@ -850,131 +850,68 @@ def collapse_sidebar_on_mobile_once():
           if (parent.innerWidth > 768) return;
 
           const doc = parent.document;
-          let attempts = 0;
-          let observer = null;
 
           const sidebarIsOpen = () => {
             const sidebar = doc.querySelector('[data-testid="stSidebar"]');
             if (!sidebar) return false;
-
             const rect = sidebar.getBoundingClientRect();
             const style = parent.getComputedStyle(sidebar);
-            const ariaHidden = sidebar.getAttribute('aria-hidden');
-
             return (
-              ariaHidden !== 'true' &&
+              sidebar.getAttribute('aria-hidden') !== 'true' &&
               style.display !== 'none' &&
               style.visibility !== 'hidden' &&
               rect.width > 20 &&
+              rect.left < parent.innerWidth &&
               rect.right > 0
             );
           };
 
-          const candidateNodes = () => {
+          const findCollapseControl = () => {
             const selectors = [
               '[data-testid="stSidebarCollapseButton"] button',
               '[data-testid="stSidebarCollapseButton"]',
-              '[data-testid="stSidebar"] button[aria-label]',
               'button[aria-label="Close sidebar"]',
               'button[aria-label="Collapse sidebar"]',
               'button[aria-label*="close" i][aria-label*="sidebar" i]',
-              'button[aria-label*="collapse" i][aria-label*="sidebar" i]',
-              '[data-testid*="SidebarCollapse"]',
-              '[data-testid*="sidebarCollapse"]'
+              'button[aria-label*="collapse" i][aria-label*="sidebar" i]'
             ];
 
-            const found = [];
             for (const selector of selectors) {
-              for (const node of doc.querySelectorAll(selector)) {
-                const clickable =
-                  node.matches('button, [role="button"]')
-                    ? node
-                    : node.querySelector('button, [role="button"]') || node;
-                if (!found.includes(clickable)) found.push(clickable);
-              }
+              const node = doc.querySelector(selector);
+              if (!node) continue;
+              return node.matches('button, [role="button"]')
+                ? node
+                : node.querySelector('button, [role="button"]') || node;
             }
-            return found;
+            return null;
           };
 
-          const dispatchClick = (node) => {
-            try {
-              node.click();
-              return true;
-            } catch (_) {}
-
-            try {
-              for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
-                node.dispatchEvent(
-                  new MouseEvent(type, {
-                    bubbles: true,
-                    cancelable: true,
-                    view: parent
-                  })
-                );
-              }
-              return true;
-            } catch (_) {
-              return false;
+          const closeOnce = () => {
+            if (!sidebarIsOpen()) return;
+            const control = findCollapseControl();
+            if (control) {
+              control.click();
+              return;
             }
+
+            // One fallback only. Repeated events caused visible close/reopen flicker.
+            doc.dispatchEvent(
+              new KeyboardEvent('keydown', {
+                key: 'Escape',
+                code: 'Escape',
+                keyCode: 27,
+                which: 27,
+                bubbles: true,
+                cancelable: true
+              })
+            );
           };
 
-          const sendEscape = () => {
-            for (const type of ['keydown', 'keyup']) {
-              doc.dispatchEvent(
-                new KeyboardEvent(type, {
-                  key: 'Escape',
-                  code: 'Escape',
-                  keyCode: 27,
-                  which: 27,
-                  bubbles: true,
-                  cancelable: true
-                })
-              );
-            }
-          };
-
-          const tryClose = () => {
-            attempts += 1;
-
-            if (!sidebarIsOpen()) {
-              if (observer) observer.disconnect();
-              return true;
-            }
-
-            for (const node of candidateNodes()) {
-              dispatchClick(node);
-              if (!sidebarIsOpen()) {
-                if (observer) observer.disconnect();
-                return true;
-              }
-            }
-
-            sendEscape();
-
-            if (!sidebarIsOpen()) {
-              if (observer) observer.disconnect();
-              return true;
-            }
-
-            if (attempts >= 20 && observer) {
-              observer.disconnect();
-            }
-            return false;
-          };
-
-          observer = new MutationObserver(() => {
-            parent.setTimeout(tryClose, 20);
+          // This component is rendered on the destination page. One short delay lets
+          // Streamlit finish replacing its header before the single close action.
+          parent.requestAnimationFrame(() => {
+            parent.setTimeout(closeOnce, 120);
           });
-
-          observer.observe(doc.documentElement, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: ['style', 'class', 'aria-hidden']
-          });
-
-          [0, 50, 100, 200, 350, 550, 800, 1100, 1500, 2000, 2600, 3200]
-            .forEach((delay) => parent.setTimeout(tryClose, delay));
         })();
         </script>
         """,
@@ -1704,6 +1641,37 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) { align-items: st
 div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button { min-height: 2.25rem !important; height: 2.25rem !important; width: 2.25rem !important; padding: 0 !important; border-radius: 999px !important; font-size: 1.35rem !important; line-height: 1 !important; background: transparent !important; border-color: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
 div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button:hover { background: #ececea !important; color: var(--text) !important; }
 @media (max-width: 520px) { .trap-history-event { grid-template-columns: 4.6rem minmax(0, 1fr); column-gap: .65rem; } }
+
+/* v8.6.63 — mobile sidebar control must remain visible on the white header. */
+@media (max-width: 768px) {
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"],
+  header[data-testid="stHeader"] [data-testid="collapsedControl"],
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i],
+  header[data-testid="stHeader"] button[aria-label*="menu" i] {
+    color: #444a53 !important;
+    background: #ffffff !important;
+    opacity: 1 !important;
+  }
+
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg,
+  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg,
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg,
+  header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
+    color: #444a53 !important;
+    fill: none !important;
+    stroke: #444a53 !important;
+    opacity: 1 !important;
+  }
+
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg *,
+  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *,
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg *,
+  header[data-testid="stHeader"] button[aria-label*="menu" i] svg * {
+    color: #444a53 !important;
+    stroke: #444a53 !important;
+    opacity: 1 !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2126,17 +2094,31 @@ elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
 
     filter_col, search_col = st.columns([1, 1.5])
+
+    site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
+    saved_site_filter = st.session_state.get(
+        "traps_site_filter_value", "All sites"
+    )
+    if saved_site_filter not in site_options:
+        saved_site_filter = "All sites"
+
     site_filter = filter_col.selectbox(
         "Site",
-        ["All sites"] + data["Sites"]["Site ID"].tolist(),
+        site_options,
+        index=site_options.index(saved_site_filter),
         format_func=lambda x: x if x == "All sites" else site_name(data, x),
-        key="traps_site_filter",
+        key="traps_site_filter_widget",
     )
-    search_text = search_col.text_input(
+    st.session_state.traps_site_filter_value = site_filter
+
+    search_value = search_col.text_input(
         "Find trap",
+        value=st.session_state.get("traps_search_value", ""),
         placeholder="Trap ID or location",
-        key="traps_search",
-    ).strip().lower()
+        key="traps_search_widget",
+    )
+    st.session_state.traps_search_value = search_value
+    search_text = search_value.strip().lower()
 
     traps = data["Traps"].copy()
     if site_filter != "All sites":
@@ -3192,7 +3174,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.61 · Mobile Menu Close Fix")
+st.sidebar.caption("v8.6.63 · Mobile Navigation Polish")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

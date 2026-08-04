@@ -241,3 +241,15 @@ The shared close routine must:
 - allow programmatic activation of an off-screen collapse control
 - use Escape as a fallback
 - stop only once the sidebar geometry or state confirms it is closed
+
+
+## Mobile sidebar motion
+
+Closing the mobile menu after navigation must use one deliberate close action after the
+destination page renders.
+
+Do not use mutation observers or repeated click attempts for sidebar closure. Repeated
+activation can make the menu close and reopen while Streamlit replaces its DOM.
+
+The collapsed menu control must maintain dark-grey contrast against the white mobile
+header.

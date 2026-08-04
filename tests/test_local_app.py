@@ -18,6 +18,86 @@ def open_home(page: Page, local_app: str, viewport: dict) -> None:
     expect(home).to_be_visible(timeout=30_000)
 
 
+def mobile_sidebar_is_open(page: Page) -> bool:
+    return bool(
+        page.evaluate(
+            """() => {
+              const sidebar = document.querySelector('[data-testid="stSidebar"]');
+              if (!sidebar) return false;
+              const rect = sidebar.getBoundingClientRect();
+              const style = getComputedStyle(sidebar);
+              return (
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                sidebar.getAttribute('aria-hidden') !== 'true' &&
+                rect.width > 20 &&
+                rect.left < window.innerWidth &&
+                rect.right > 0
+              );
+            }"""
+        )
+    )
+
+
+def open_mobile_sidebar(page: Page) -> None:
+    if mobile_sidebar_is_open(page):
+        return
+
+    clicked = page.evaluate(
+        """() => {
+          const selectors = [
+            '[data-testid="stSidebarCollapsedControl"] button',
+            '[data-testid="stSidebarCollapsedControl"]',
+            'button[aria-label="Open sidebar"]',
+            'button[aria-label="Expand sidebar"]',
+            'button[aria-label*="sidebar" i]',
+            'button[aria-label*="menu" i]'
+          ];
+          for (const selector of selectors) {
+            for (const node of document.querySelectorAll(selector)) {
+              const target = node.matches('button, [role="button"]')
+                ? node
+                : node.querySelector('button, [role="button"]') || node;
+              const rect = target.getBoundingClientRect();
+              const style = getComputedStyle(target);
+              const onScreen = (
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                rect.width > 0 &&
+                rect.height > 0 &&
+                rect.left < window.innerWidth &&
+                rect.right > 0 &&
+                rect.top < window.innerHeight &&
+                rect.bottom > 0
+              );
+              if (onScreen) {
+                target.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        }"""
+    )
+    assert clicked is True
+    page.wait_for_function(
+        """() => {
+          const sidebar = document.querySelector('[data-testid="stSidebar"]');
+          if (!sidebar) return false;
+          const rect = sidebar.getBoundingClientRect();
+          const style = getComputedStyle(sidebar);
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            rect.width > 20 &&
+            rect.left < window.innerWidth &&
+            rect.right > 0
+          );
+        }""",
+        timeout=8_000,
+    )
+
+
 @pytest.mark.parametrize(
     "viewport,name",
     [
@@ -122,8 +202,12 @@ def test_trap_detail_opens_as_a_page_and_returns_to_list(
     open_home(page, local_app, viewport)
 
     sidebar = page.get_by_test_id("stSidebar")
+    if viewport["width"] <= 768:
+        open_mobile_sidebar(page)
     traps_label = sidebar.get_by_text("Traps", exact=True)
-    traps_label.locator("xpath=ancestor::button[1]").click()
+    traps_button = traps_label.locator("xpath=ancestor::button[1]")
+    expect(traps_button).to_be_visible(timeout=10_000)
+    traps_button.click()
 
     expect(page.get_by_text("Traps", exact=True).last).to_be_visible(timeout=20_000)
     view = page.get_by_role("button", name="View").first
@@ -160,31 +244,23 @@ def test_trap_list_filters_survive_detail_navigation(page: Page, local_app: str)
     page.get_by_role("button", name=re.compile("Back to traps", re.I)).click()
 
     expect(page.get_by_label("Find trap")).to_have_value("HUT")
-
-
 def test_mobile_main_navigation_closes_sidebar(page: Page, local_app: str) -> None:
     open_home(page, local_app, {"width": 390, "height": 844})
+    open_mobile_sidebar(page)
 
     sidebar = page.get_by_test_id("stSidebar")
+    traps_button = (
+        sidebar.get_by_text("Traps", exact=True)
+        .locator("xpath=ancestor::button[1]")
+    )
+    expect(traps_button).to_be_visible(timeout=10_000)
 
-    if not sidebar.is_visible():
-        controls = page.locator(
-            '[data-testid="stSidebarCollapsedControl"] button, '
-            '[data-testid="stSidebarCollapsedControl"], '
-            'button[aria-label*="sidebar" i], '
-            'button[aria-label*="menu" i]'
-        )
-        for index in range(controls.count()):
-            control = controls.nth(index)
-            if control.is_visible():
-                control.click(force=True)
-                break
+    box = traps_button.bounding_box()
+    assert box is not None
+    assert box["x"] < 390
+    assert box["x"] + box["width"] > 0
 
-    expect(sidebar).to_be_visible(timeout=10_000)
-
-    traps_label = sidebar.get_by_text("Traps", exact=True)
-    traps_label.locator("xpath=ancestor::button[1]").click(force=True)
-
+    traps_button.click()
     expect(page.get_by_text("Traps", exact=True).last).to_be_visible(timeout=20_000)
 
     page.wait_for_function(
@@ -198,8 +274,44 @@ def test_mobile_main_navigation_closes_sidebar(page: Page, local_app: str) -> No
             style.visibility === 'hidden' ||
             sidebar.getAttribute('aria-hidden') === 'true' ||
             rect.width <= 20 ||
-            rect.right <= 0
+            rect.right <= 0 ||
+            rect.left >= window.innerWidth
           );
         }""",
         timeout=8_000,
     )
+
+
+
+def test_mobile_sidebar_control_is_visible_on_white_header(
+    page: Page, local_app: str
+) -> None:
+    open_home(page, local_app, {"width": 390, "height": 844})
+
+    result = page.evaluate(
+        """() => {
+          const selectors = [
+            '[data-testid="stSidebarCollapsedControl"]',
+            '[data-testid="collapsedControl"]',
+            'header button[aria-label*="sidebar" i]',
+            'header button[aria-label*="menu" i]'
+          ];
+          const control = selectors
+            .map((selector) => document.querySelector(selector))
+            .find(Boolean);
+          if (!control) return null;
+
+          const svg = control.querySelector('svg');
+          const target = svg || control;
+          const style = getComputedStyle(target);
+          return {
+            color: style.color,
+            stroke: style.stroke,
+            opacity: style.opacity,
+          };
+        }"""
+    )
+
+    assert result is not None
+    assert result["opacity"] == "1"
+    assert "68, 74, 83" in result["color"] or "68, 74, 83" in result["stroke"]

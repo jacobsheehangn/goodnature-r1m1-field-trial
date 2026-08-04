@@ -73,3 +73,22 @@ At 390 px:
 - choose a different main destination
 - confirm the destination page renders
 - confirm the sidebar closes automatically
+
+
+## Off-canvas sidebar testing
+
+Do not use Playwright `is_visible()` alone to decide whether the Streamlit sidebar is
+open. An off-canvas sidebar can remain visible in the DOM.
+
+Before clicking a mobile menu item, confirm its sidebar geometry intersects the
+viewport. Open the collapsed control when it does not.
+
+
+## Mobile navigation polish
+
+At 390 px:
+
+- confirm the collapsed menu chevron is dark grey against the white header
+- open the menu and select another page
+- confirm the destination renders once
+- confirm the drawer closes once without reopening or flickering
