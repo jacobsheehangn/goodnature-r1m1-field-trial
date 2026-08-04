@@ -136,3 +136,6 @@ print(json.dumps({
     "failed_count": len(failed),
 }, indent=2))
 sys.exit(1 if failed else 0)
+
+
+# v8.6.53 architecture markers

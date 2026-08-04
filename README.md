@@ -1,4 +1,4 @@
-# R1/M1 Field Trial App — v8.6.52 State-Aware Live Tests
+# R1/M1 Field Trial App — v8.6.53 Deterministic Release Gate
 
 ## Deployment requirement
 
@@ -338,3 +338,21 @@ Controlled alignment with the Goodnature native app:
 - sidebar navigation clicks the actual button ancestor
 - sidebar targets are scrolled into view before clicking
 - no app behaviour or trial data changed
+
+
+## v8.6.53 deterministic release gate
+
+The required release gate no longer drives the deployed Render app.
+
+It now:
+
+1. starts a fresh local Streamlit instance in GitHub Actions
+2. uses isolated clean-seed data for every browser test
+3. runs static, workbook and browser checks deterministically
+4. uploads screenshots
+
+The deployed Render check is now a separate, optional, non-blocking smoke test available
+from **Run workflow**. It checks only that the deployed app opens and accepts login.
+
+This removes persistent staging data, Render deployment timing and Streamlit sidebar
+positioning from the required release decision.
