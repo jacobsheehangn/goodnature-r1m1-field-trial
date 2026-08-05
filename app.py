@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.74 Same-Position Menu Toggle"
+APP_TITLE = "R1/M1 Field Trial — v8.6.76 Conventional Mobile Drawer"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -1808,12 +1808,27 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
   }
 }
 
-/* v8.6.74 — keep mobile open and close controls in the same touch position. */
+/* v8.6.76 — hide only Streamlit's redundant app-menu control. */
+[data-testid="stMainMenu"],
+button[title="View app menu"],
+button[aria-label="View app menu"],
+#MainMenu {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* v8.6.76 — conventional mobile drawer: open left, close top right inside drawer. */
 @media (max-width: 768px) {
+  [data-testid="stSidebar"] {
+    position: relative !important;
+  }
+
   [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-    position: fixed !important;
-    left: 1rem !important;
-    top: calc(1rem + env(safe-area-inset-top)) !important;
+    position: absolute !important;
+    top: calc(.85rem + env(safe-area-inset-top)) !important;
+    right: .85rem !important;
+    left: auto !important;
     width: 2.75rem !important;
     height: 2.75rem !important;
     min-width: 2.75rem !important;
@@ -1821,6 +1836,13 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     margin: 0 !important;
     padding: 0 !important;
     z-index: 1004 !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  [data-testid="stSidebar"] > div:first-child {
+    padding-top: calc(4.5rem + env(safe-area-inset-top)) !important;
   }
 }
 </style>
@@ -3400,7 +3422,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.74 · Same-Position Menu Toggle")
+st.sidebar.caption("v8.6.76 · Conventional Mobile Drawer")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

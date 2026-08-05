@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.74 Same-Position Menu Toggle
+# R1/M1 Field Trial App — v8.6.76 Conventional Mobile Drawer
 
 ## Deployment requirement
 
@@ -549,3 +549,32 @@ The shared close routine now:
 - users can tap once to open and tap the same place to close
 - Administration expander alignment is unchanged
 - field-pilot mode and refresh-persistent login remain included
+
+
+## v8.6.75 remove Streamlit menu
+
+- hides Streamlit's settings/app menu on mobile and desktop
+- keeps the actual R1/M1 app sidebar control unchanged
+- explicitly fixes the Streamlit theme to light mode
+- keeps Field Pilot mode, refresh-persistent login and same-position mobile menu toggle
+
+
+## v8.6.76 conventional mobile drawer
+
+- closed drawer uses the app-menu control at top left
+- open drawer uses one close control at top right inside the drawer
+- removes the same-position override from v8.6.74
+- hides only Streamlit's redundant app-menu control, not the whole toolbar
+- keeps light mode, Field Pilot mode and refresh-persistent authentication
+
+## Standing release rule
+
+Do the product reasoning before implementation.
+
+For each change:
+
+- define the expected behaviour across all relevant states
+- apply normal interaction conventions unless there is a reason not to
+- state what must remain unchanged
+- distinguish static checks, automated proof and manual device checks
+- do not describe a partial or unverified fix as complete

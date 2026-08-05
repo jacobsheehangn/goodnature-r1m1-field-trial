@@ -285,3 +285,20 @@ Drawer expander chevrons sit at the far right without a separate white icon box.
 Staging access may persist across browser refresh using a signed token derived from
 the configured shared password. Never place the password itself in browser storage or
 the URL.
+
+
+## Mobile drawer convention
+
+For a left-aligned mobile drawer:
+
+- the closed-state menu control sits at the top left of the app header
+- the open-state close control sits at the top right inside the drawer
+- only one drawer close control is shown
+- section expanders remain separate controls
+
+## Release reasoning standard
+
+A requested UI change is not just a selector or CSS instruction. Before implementation,
+define the full interaction across closed, open, mobile and desktop states, preserve
+unrelated behaviour, and use established interface conventions unless the product
+requires otherwise.

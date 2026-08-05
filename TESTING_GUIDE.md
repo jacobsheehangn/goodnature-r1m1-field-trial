@@ -151,3 +151,22 @@ Before live field use:
 On mobile, place a finger on the closed app-menu chevron, open the drawer, then tap
 again without moving the finger materially. The drawer should close from the same
 top-left touch position.
+
+
+## Streamlit menu removal check
+
+On mobile and desktop:
+
+- the Streamlit settings/app menu is not visible
+- the R1/M1 app menu chevron remains visible and opens the sidebar
+- the app remains in light mode
+
+
+## v8.6.76 manual mobile check
+
+- drawer closed: one dark-grey app-menu control at top left
+- drawer open: one close control at top right inside the drawer
+- no duplicate close icon
+- Administration keeps its own right-aligned expander
+- Streamlit app menu is hidden
+- other toolbar behaviour is not removed
