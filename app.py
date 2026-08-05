@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.70 Mobile Navigation and Auth Persistence"
+APP_TITLE = "R1/M1 Field Trial — v8.6.71 Correct App Menu Chevron"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -1711,31 +1711,32 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
   }
 }
 
-/* v8.6.70 — replace unstable Streamlit mobile chevrons with app-owned icons. */
+
+/* v8.6.71 — app sidebar controls only. Do not style Streamlit toolbar/settings. */
 @media (max-width: 768px) {
-  /* Collapsed mobile menu control: keep its hit area, replace only the icon. */
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"],
-  header[data-testid="stHeader"] [data-testid="collapsedControl"],
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i],
-  header[data-testid="stHeader"] button[aria-label*="menu" i] {
+  /* Collapsed app menu control at the far left of the header. */
+  [data-testid="stSidebarCollapsedControl"] {
     position: relative !important;
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
-    color: transparent !important;
+    color: #444a53 !important;
   }
 
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg,
-  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg,
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg,
-  header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
-    visibility: hidden !important;
+  [data-testid="stSidebarCollapsedControl"] button {
+    position: relative !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    color: #444a53 !important;
   }
 
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"]::after,
-  header[data-testid="stHeader"] [data-testid="collapsedControl"]::after,
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i]::after,
-  header[data-testid="stHeader"] button[aria-label*="menu" i]::after {
+  [data-testid="stSidebarCollapsedControl"] svg {
+    display: none !important;
+  }
+
+  [data-testid="stSidebarCollapsedControl"] button::after,
+  [data-testid="stSidebarCollapsedControl"]::after {
     content: "";
     position: absolute;
     left: 50%;
@@ -1748,26 +1749,20 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     pointer-events: none;
   }
 
-  /* Open-drawer collapse control uses the opposite direction. */
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"],
-  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i],
-  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i] {
+  /* Open drawer collapse control. */
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
     position: relative !important;
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
-    color: transparent !important;
+    color: #444a53 !important;
   }
 
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg,
-  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i] svg,
-  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i] svg {
-    visibility: hidden !important;
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
+    display: none !important;
   }
 
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"]::after,
-  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i]::after,
-  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i]::after {
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"]::after {
     content: "";
     position: absolute;
     left: 50%;
@@ -1780,17 +1775,17 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     pointer-events: none;
   }
 
-  /* Administration expander: remove the white icon box and align one chevron right. */
+  /* Administration expander: no white icon box, chevron aligned right. */
   [data-testid="stSidebar"] details > summary {
     position: relative !important;
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
-    padding-right: 2.35rem !important;
+    padding-right: 2.25rem !important;
   }
 
   [data-testid="stSidebar"] details > summary svg {
-    visibility: hidden !important;
+    display: none !important;
   }
 
   [data-testid="stSidebar"] details > summary::after {
@@ -1798,17 +1793,21 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     position: absolute;
     right: .85rem;
     top: 50%;
-    width: .55rem;
-    height: .55rem;
+    width: .52rem;
+    height: .52rem;
     border-right: 2px solid #444a53;
     border-bottom: 2px solid #444a53;
     transform: translateY(-65%) rotate(45deg);
-    transition: transform .15s ease;
     pointer-events: none;
   }
 
   [data-testid="stSidebar"] details[open] > summary::after {
     transform: translateY(-35%) rotate(225deg);
+  }
+
+  /* Explicitly leave Streamlit's settings/toolbar control untouched. */
+  header[data-testid="stHeader"] [data-testid="stToolbar"] button {
+    background: initial !important;
   }
 }
 </style>
@@ -3388,7 +3387,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.70 · Mobile Navigation and Auth Persistence")
+st.sidebar.caption("v8.6.71 · Correct App Menu Chevron")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

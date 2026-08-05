@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "R1/M1 Field Trial — v8.6.70 Mobile Navigation and Auth Persistence"
+echo "R1/M1 Field Trial — v8.6.71 Correct App Menu Chevron"
 echo "Preparing local test environment..."
 
 if ! command -v python3 >/dev/null 2>&1; then

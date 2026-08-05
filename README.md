@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.70 Mobile Navigation and Auth Persistence
+# R1/M1 Field Trial App — v8.6.71 Correct App Menu Chevron
 
 ## Deployment requirement
 
@@ -513,3 +513,12 @@ The shared close routine now:
 - stores a signed access token in the browser URL after successful login
 - browser refresh and pull-to-refresh restore access without re-entering the password
 - the token does not contain the shared password
+
+
+## v8.6.71 correct app-menu chevron
+
+- reverts the incorrect v8.6.70 toolbar/settings chevron styling
+- targets only `stSidebarCollapsedControl`, the actual app menu control
+- keeps the open-drawer collapse control transparent and aligned
+- keeps the Administration chevron aligned right without a white icon box
+- refresh-persistent authentication from v8.6.70 remains included
