@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.71 Correct App Menu Chevron
+# R1/M1 Field Trial App — v8.6.73 Field Pilot Mode
 
 ## Deployment requirement
 
@@ -522,3 +522,21 @@ The shared close routine now:
 - keeps the open-drawer collapse control transparent and aligned
 - keeps the Administration chevron aligned right without a white icon box
 - refresh-persistent authentication from v8.6.70 remains included
+
+
+## v8.6.72 single drawer close control
+
+- keeps the working dark-grey collapsed app-menu chevron
+- removes the custom pseudo-chevron from the open drawer
+- restores one native drawer close icon with no white box
+- keeps the Administration expander chevron aligned right
+- keeps refresh-persistent authentication
+
+
+## v8.6.73 field pilot mode
+
+- changes the environment banner to `FIELD PILOT — Live trial data`
+- treats the persistent workbook as the authoritative pilot record
+- keeps the single mobile drawer close control
+- keeps refresh-persistent authentication
+- no data is deleted or reset by this release

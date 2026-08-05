@@ -133,3 +133,14 @@ On mobile:
 - Administration chevron aligns at the far right
 - pull-to-refresh keeps the user signed in
 - copying a clean URL without `access=` still requires login
+
+
+## Field pilot release check
+
+Before live field use:
+
+- confirm the banner reads `FIELD PILOT — Live trial data`
+- confirm mobile menu and drawer controls
+- confirm pull-to-refresh keeps access
+- export a baseline workbook from Administration → Data & records
+- confirm the export opens and contains the expected Sites, Traps, Builds and Windows

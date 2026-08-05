@@ -30,3 +30,22 @@ that token using `R1M1_APP_PASSWORD`.
 The token does not contain the password, but anyone who receives a copied URL including
 the token can access the staging app. Treat the full authenticated URL as sensitive.
 Rotating `R1M1_APP_PASSWORD` invalidates existing tokens.
+
+
+## Controlled field pilot
+
+This deployment now carries live trial data.
+
+Before the first field session:
+
+- remove or clearly separate demonstration records
+- load the approved sites, traps, builds and test windows
+- export a baseline workbook
+- record the deployed app version
+
+During the pilot:
+
+- export the workbook after each field day
+- avoid changing the workbook schema during active field work
+- reconcile the app records against the physical field activity
+- retain the same persistent `/var/data` workbook when promoting the pilot

@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.71 Correct App Menu Chevron"
+APP_TITLE = "R1/M1 Field Trial — v8.6.73 Field Pilot Mode"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -435,8 +435,8 @@ def show_environment_banner() -> None:
         st.markdown(
             """
             <div class="staging-banner" role="status">
-              <span class="staging-banner-mobile"><strong>STAGING</strong> — Setup and testing only</span>
-              <span class="staging-banner-desktop"><strong>STAGING</strong> — Setup and testing only. Do not record real field results.</span>
+              <span class="staging-banner-mobile"><strong>FIELD PILOT</strong> — Live trial data</span>
+              <span class="staging-banner-desktop"><strong>FIELD PILOT</strong> — Live trial data</span>
             </div>
             """,
             unsafe_allow_html=True,
@@ -1749,30 +1749,27 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     pointer-events: none;
   }
 
-  /* Open drawer collapse control. */
+  /* Open drawer: keep one native close control only. */
   [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-    position: relative !important;
     background: transparent !important;
     border: 0 !important;
     box-shadow: none !important;
     color: #444a53 !important;
   }
 
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg {
-    display: none !important;
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg,
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg * {
+    display: initial !important;
+    visibility: visible !important;
+    color: #444a53 !important;
+    fill: none !important;
+    stroke: #444a53 !important;
+    opacity: 1 !important;
   }
 
   [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"]::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: .72rem;
-    height: .72rem;
-    border-right: 2.5px solid #444a53;
-    border-top: 2.5px solid #444a53;
-    transform: translate(-42%, -50%) rotate(45deg);
-    pointer-events: none;
+    content: none !important;
+    display: none !important;
   }
 
   /* Administration expander: no white icon box, chevron aligned right. */
@@ -3387,7 +3384,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.71 · Correct App Menu Chevron")
+st.sidebar.caption("v8.6.73 · Field Pilot Mode")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

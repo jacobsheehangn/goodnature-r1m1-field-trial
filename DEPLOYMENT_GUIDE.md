@@ -89,3 +89,16 @@ After Render shows Live:
 5. Confirm active navigation is orange/white and inactive navigation is white/dark.
 6. Confirm site cards, trap cards, forms and reviews have outlines.
 7. Confirm bottom controls sit above Safari's browser bar.
+
+
+## Pilot data retention
+
+Use the existing Render persistent disk mounted at `/var/data`. A normal code deploy
+must not replace or reset the workbook stored there.
+
+The preferred backup path is inside the app:
+
+`Administration → Data & records → Export workbook`
+
+A direct Render Shell download is optional and should not be the normal field-team
+workflow.
