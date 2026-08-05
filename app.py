@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.73 Field Pilot Mode"
+APP_TITLE = "R1/M1 Field Trial — v8.6.74 Same-Position Menu Toggle"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -1807,6 +1807,22 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     background: initial !important;
   }
 }
+
+/* v8.6.74 — keep mobile open and close controls in the same touch position. */
+@media (max-width: 768px) {
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+    position: fixed !important;
+    left: 1rem !important;
+    top: calc(1rem + env(safe-area-inset-top)) !important;
+    width: 2.75rem !important;
+    height: 2.75rem !important;
+    min-width: 2.75rem !important;
+    min-height: 2.75rem !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    z-index: 1004 !important;
+  }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3384,7 +3400,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.73 · Field Pilot Mode")
+st.sidebar.caption("v8.6.74 · Same-Position Menu Toggle")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

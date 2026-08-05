@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.73 Field Pilot Mode
+# R1/M1 Field Trial App — v8.6.74 Same-Position Menu Toggle
 
 ## Deployment requirement
 
@@ -540,3 +540,12 @@ The shared close routine now:
 - keeps the single mobile drawer close control
 - keeps refresh-persistent authentication
 - no data is deleted or reset by this release
+
+
+## v8.6.74 same-position menu toggle
+
+- keeps the working collapsed app-menu chevron
+- moves the open-drawer close control to the same top-left touch position
+- users can tap once to open and tap the same place to close
+- Administration expander alignment is unchanged
+- field-pilot mode and refresh-persistent login remain included

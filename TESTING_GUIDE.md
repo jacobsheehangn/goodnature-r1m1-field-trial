@@ -144,3 +144,10 @@ Before live field use:
 - confirm pull-to-refresh keeps access
 - export a baseline workbook from Administration → Data & records
 - confirm the export opens and contains the expected Sites, Traps, Builds and Windows
+
+
+## Same-position mobile toggle check
+
+On mobile, place a finger on the closed app-menu chevron, open the drawer, then tap
+again without moving the finger materially. The drawer should close from the same
+top-left touch position.
