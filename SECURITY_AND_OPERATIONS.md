@@ -19,3 +19,14 @@ The app creates timestamped workbook backups before replacing the live workbook 
 ## Known constraint
 
 One active editor at a time. Moving to a transactional database is required before broad or concurrent use.
+
+
+## Refresh-persistent access token
+
+After a successful shared-password login, the app adds a deterministic HMAC access
+token to the `access` query parameter. On a new Streamlit session, the server validates
+that token using `R1M1_APP_PASSWORD`.
+
+The token does not contain the password, but anyone who receives a copied URL including
+the token can access the staging app. Treat the full authenticated URL as sensitive.
+Rotating `R1M1_APP_PASSWORD` invalidates existing tokens.

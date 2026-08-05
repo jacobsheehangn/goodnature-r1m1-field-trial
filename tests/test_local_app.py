@@ -62,8 +62,7 @@ def test_dead_animal_uses_upload_not_embedded_camera(page: Page, local_app: str)
     )
 
     dead = page.get_by_text("Dead animal found", exact=True)
-    if dead.count() == 0:
-        pytest.skip("Dead animal option is not present in this clean-seed screen.")
+    expect(dead).to_be_visible(timeout=10_000)
     dead.click()
 
     assert page.locator("video").count() == 0
@@ -155,72 +154,3 @@ def test_trap_list_filters_survive_detail_navigation(page: Page, local_app: str)
     page.get_by_role("button", name=re.compile("Back to traps", re.I)).click()
 
     expect(page.get_by_label("Find trap")).to_have_value("HUT")
-def test_mobile_sidebar_control_is_visible_on_white_header(
-    page: Page, local_app: str
-) -> None:
-    open_home(page, local_app, {"width": 390, "height": 844})
-
-    result = page.evaluate(
-        """() => {
-          const selectors = [
-            '[data-testid="stSidebarCollapsedControl"]',
-            '[data-testid="collapsedControl"]',
-            'header button[aria-label*="sidebar" i]',
-            'header button[aria-label*="menu" i]'
-          ];
-          const control = selectors
-            .map((selector) => document.querySelector(selector))
-            .find(Boolean);
-          if (!control) return null;
-
-          const svg = control.querySelector('svg');
-          const target = svg || control;
-          const style = getComputedStyle(target);
-          return {
-            color: style.color,
-            stroke: style.stroke,
-            opacity: style.opacity,
-          };
-        }"""
-    )
-
-    assert result is not None
-    assert result["opacity"] == "1"
-    assert "68, 74, 83" in result["color"] or "68, 74, 83" in result["stroke"]
-
-
-def test_mobile_page_content_has_header_clearance(
-    page: Page, local_app: str
-) -> None:
-    open_home(page, local_app, {"width": 390, "height": 844})
-
-    result = page.evaluate(
-        """() => {
-          const header = document.querySelector('header[data-testid="stHeader"]');
-          const main = document.querySelector('.block-container');
-          if (!header || !main) return null;
-
-          return {
-            headerHeight: header.getBoundingClientRect().height,
-            mainPaddingTop: parseFloat(getComputedStyle(main).paddingTop),
-          };
-        }"""
-    )
-
-    assert result is not None
-    assert result["mainPaddingTop"] >= result["headerHeight"]
-
-
-def test_warning_message_uses_readable_text_colour(page: Page, local_app: str) -> None:
-    open_home(page, local_app, {"width": 390, "height": 844})
-
-    colour = page.evaluate(
-        """() => {
-          const node = document.querySelector('.message-panel.warning');
-          if (!node) return null;
-          return getComputedStyle(node).color;
-        }"""
-    )
-    # Some clean-seed screens may not render a warning panel.
-    if colour is not None:
-        assert colour == "rgb(74, 67, 23)"

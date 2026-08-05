@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.68 Header Clearance Test Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.70 Mobile Navigation and Auth Persistence"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -341,6 +341,38 @@ def create_sample_data() -> Dict[str, pd.DataFrame]:
 
 
 
+
+AUTH_QUERY_KEY = "access"
+AUTH_TOKEN_PURPOSE = "r1m1-staging-access-v1"
+
+
+def expected_access_token() -> str:
+    """Return a stable signed token derived from the configured shared password."""
+    return hmac.new(
+        APP_PASSWORD.encode("utf-8"),
+        AUTH_TOKEN_PURPOSE.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def query_access_token() -> str:
+    """Read the access token from the current browser URL."""
+    value = st.query_params.get(AUTH_QUERY_KEY, "")
+    if isinstance(value, list):
+        value = value[-1] if value else ""
+    return str(value)
+
+
+def access_token_is_valid() -> bool:
+    if not APP_PASSWORD:
+        return False
+    supplied = query_access_token()
+    return bool(supplied) and hmac.compare_digest(
+        supplied,
+        expected_access_token(),
+    )
+
+
 def require_authentication() -> None:
     """Require the shared pilot password before loading or displaying trial data."""
     if st.session_state.get("authenticated"):
@@ -353,6 +385,12 @@ def require_authentication() -> None:
         st.error("App access is not configured.")
         st.caption("Set the R1M1_APP_PASSWORD environment variable, then restart the app.")
         st.stop()
+
+    # A valid signed URL token restores access after browser refresh without storing
+    # or exposing the shared password.
+    if access_token_is_valid():
+        st.session_state.authenticated = True
+        return
 
     logo_path = APP_DIR / "goodnature_logo.png"
     left, centre, right = st.columns([1, 1.3, 1])
@@ -367,19 +405,26 @@ def require_authentication() -> None:
                 type="password",
                 autocomplete="current-password",
             )
-            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+            submitted = st.form_submit_button(
+                "Sign in",
+                type="primary",
+                use_container_width=True,
+            )
 
         if submitted:
             if hmac.compare_digest(supplied_password, APP_PASSWORD):
                 st.session_state.authenticated = True
                 st.session_state.failed_login_attempts = 0
+                st.query_params[AUTH_QUERY_KEY] = expected_access_token()
                 st.rerun()
             else:
                 attempts = int(st.session_state.get("failed_login_attempts", 0)) + 1
                 st.session_state.failed_login_attempts = attempts
                 st.error("Incorrect password.")
                 if attempts >= 5:
-                    st.caption("Several attempts have failed. Check the password with the trial lead.")
+                    st.caption(
+                        "Several attempts have failed. Check the password with the trial lead."
+                    )
 
         st.caption("Trial data is restricted to authorised Goodnature users.")
     st.stop()
@@ -1663,6 +1708,107 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 
   header[data-testid="stHeader"] {
     min-height: calc(4.25rem + env(safe-area-inset-top)) !important;
+  }
+}
+
+/* v8.6.70 — replace unstable Streamlit mobile chevrons with app-owned icons. */
+@media (max-width: 768px) {
+  /* Collapsed mobile menu control: keep its hit area, replace only the icon. */
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"],
+  header[data-testid="stHeader"] [data-testid="collapsedControl"],
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i],
+  header[data-testid="stHeader"] button[aria-label*="menu" i] {
+    position: relative !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    color: transparent !important;
+  }
+
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg,
+  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg,
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg,
+  header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
+    visibility: hidden !important;
+  }
+
+  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"]::after,
+  header[data-testid="stHeader"] [data-testid="collapsedControl"]::after,
+  header[data-testid="stHeader"] button[aria-label*="sidebar" i]::after,
+  header[data-testid="stHeader"] button[aria-label*="menu" i]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: .72rem;
+    height: .72rem;
+    border-left: 2.5px solid #444a53;
+    border-bottom: 2.5px solid #444a53;
+    transform: translate(-58%, -50%) rotate(45deg);
+    pointer-events: none;
+  }
+
+  /* Open-drawer collapse control uses the opposite direction. */
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"],
+  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i],
+  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i] {
+    position: relative !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    color: transparent !important;
+  }
+
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg,
+  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i] svg,
+  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i] svg {
+    visibility: hidden !important;
+  }
+
+  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"]::after,
+  [data-testid="stSidebar"] button[aria-label*="close" i][aria-label*="sidebar" i]::after,
+  [data-testid="stSidebar"] button[aria-label*="collapse" i][aria-label*="sidebar" i]::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: .72rem;
+    height: .72rem;
+    border-right: 2.5px solid #444a53;
+    border-top: 2.5px solid #444a53;
+    transform: translate(-42%, -50%) rotate(45deg);
+    pointer-events: none;
+  }
+
+  /* Administration expander: remove the white icon box and align one chevron right. */
+  [data-testid="stSidebar"] details > summary {
+    position: relative !important;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    padding-right: 2.35rem !important;
+  }
+
+  [data-testid="stSidebar"] details > summary svg {
+    visibility: hidden !important;
+  }
+
+  [data-testid="stSidebar"] details > summary::after {
+    content: "";
+    position: absolute;
+    right: .85rem;
+    top: 50%;
+    width: .55rem;
+    height: .55rem;
+    border-right: 2px solid #444a53;
+    border-bottom: 2px solid #444a53;
+    transform: translateY(-65%) rotate(45deg);
+    transition: transform .15s ease;
+    pointer-events: none;
+  }
+
+  [data-testid="stSidebar"] details[open] > summary::after {
+    transform: translateY(-35%) rotate(225deg);
   }
 }
 </style>
@@ -3242,7 +3388,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.68 · Header Clearance Test Fix")
+st.sidebar.caption("v8.6.70 · Mobile Navigation and Auth Persistence")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

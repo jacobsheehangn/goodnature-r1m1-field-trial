@@ -271,3 +271,17 @@ Warning and waiting panels use dark text on pale yellow.
 
 Page-level Back actions, titles and context must begin below the persistent Streamlit
 mobile header and safe area. Do not position page content underneath system chrome.
+
+
+## Mobile navigation icons
+
+Do not depend on Streamlit's native sidebar SVG colour or alignment. On mobile, hide
+the native SVG and render one app-owned dark-grey chevron within the existing control.
+
+Drawer expander chevrons sit at the far right without a separate white icon box.
+
+## Refresh-persistent staging access
+
+Staging access may persist across browser refresh using a signed token derived from
+the configured shared password. Never place the password itself in browser storage or
+the URL.

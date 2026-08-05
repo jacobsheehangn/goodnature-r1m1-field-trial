@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.68 Header Clearance Test Fix
+# R1/M1 Field Trial App — v8.6.70 Mobile Navigation and Auth Persistence
 
 ## Deployment requirement
 
@@ -494,3 +494,22 @@ The shared close routine now:
 - replaces an invalid bounding-box assertion
 - verifies computed mobile top padding is at least the rendered header height
 - retains the mobile chevron and message-contrast fixes
+
+
+## v8.6.69 clean browser gate
+
+- app behaviour and CSS are unchanged from v8.6.68
+- removed brittle browser tests for mobile chevron colour, header padding and warning-panel colour
+- those visual rules remain protected by the static gate and manual release checks
+- dead-animal flow now fails when the required option is missing instead of skipping
+- required browser tests now focus on stable user outcomes
+
+
+## v8.6.70 mobile navigation and auth persistence
+
+- replaces Streamlit's mobile sidebar chevrons with app-owned dark-grey CSS chevrons
+- removes the small white icon boxes inside the open drawer
+- aligns the Administration expander chevron at the far right
+- stores a signed access token in the browser URL after successful login
+- browser refresh and pull-to-refresh restore access without re-entering the password
+- the token does not contain the shared password

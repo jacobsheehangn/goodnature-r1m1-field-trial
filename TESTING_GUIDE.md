@@ -109,3 +109,27 @@ The required CI gate does not automate Streamlit's mobile off-canvas sidebar. Be
 - menu closes once
 - no close/reopen flicker
 - destination appears at the top
+
+
+## Browser-gate boundary
+
+The required browser suite tests stable user outcomes. It does not inspect Streamlit
+SVG structure, computed CSS colour or layout implementation details.
+
+Manual mobile release checks cover:
+
+- chevron visibility
+- warning-panel readability
+- page clearance below the mobile header
+- menu close and flicker
+
+
+## Manual v8.6.70 checks
+
+On mobile:
+
+- collapsed menu chevron is dark grey and visible
+- open-drawer collapse chevron has no white icon box
+- Administration chevron aligns at the far right
+- pull-to-refresh keeps the user signed in
+- copying a clean URL without `access=` still requires login
