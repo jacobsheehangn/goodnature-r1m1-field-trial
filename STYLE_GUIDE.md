@@ -253,3 +253,8 @@ activation can make the menu close and reopen while Streamlit replaces its DOM.
 
 The collapsed menu control must maintain dark-grey contrast against the white mobile
 header.
+
+## Mobile navigation timing
+
+Close the mobile sidebar in the same user interaction that selects a destination,
+before Streamlit starts rerendering. Do not schedule sidebar closure after render.

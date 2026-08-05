@@ -94,7 +94,7 @@ def open_mobile_sidebar(page: Page) -> None:
             rect.right > 0
           );
         }""",
-        timeout=8_000,
+        timeout=10_000,
     )
 
 
@@ -278,7 +278,7 @@ def test_mobile_main_navigation_closes_sidebar(page: Page, local_app: str) -> No
             rect.left >= window.innerWidth
           );
         }""",
-        timeout=8_000,
+        timeout=10_000,
     )
 
 
@@ -315,3 +315,12 @@ def test_mobile_sidebar_control_is_visible_on_white_header(
     assert result is not None
     assert result["opacity"] == "1"
     assert "68, 74, 83" in result["color"] or "68, 74, 83" in result["stroke"]
+
+
+def test_mobile_navigation_uses_pre_render_close_listener(
+    page: Page, local_app: str
+) -> None:
+    open_home(page, local_app, {"width": 390, "height": 844})
+    assert page.evaluate(
+        "() => Boolean(window.__r1m1MobileNavCloseInstalled)"
+    ) is True

@@ -92,3 +92,8 @@ At 390 px:
 - open the menu and select another page
 - confirm the destination renders once
 - confirm the drawer closes once without reopening or flickering
+
+## Pre-render mobile menu close
+
+At 390 px, confirm each main and administrative destination closes the sidebar from
+the same tap, renders once, and does not flicker.

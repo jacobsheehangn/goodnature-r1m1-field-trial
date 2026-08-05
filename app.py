@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.63 Mobile Navigation Polish"
+APP_TITLE = "R1/M1 Field Trial — v8.6.64 Pre-Render Menu Close"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -832,92 +832,8 @@ def rollback_photo_files(paths) -> None:
 
 
 def nav_go(page: str):
-    """Navigate from app chrome and request sidebar collapse on narrow screens."""
-    st.session_state.collapse_sidebar_once = True
+    """Navigate from persistent app chrome."""
     go(page)
-
-
-def collapse_sidebar_on_mobile_once():
-    """Close the mobile sidebar once after the destination page has rendered."""
-    if not st.session_state.pop("collapse_sidebar_once", False):
-        return
-
-    components.html(
-        """
-        <script>
-        (() => {
-          const parent = window.parent;
-          if (parent.innerWidth > 768) return;
-
-          const doc = parent.document;
-
-          const sidebarIsOpen = () => {
-            const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-            if (!sidebar) return false;
-            const rect = sidebar.getBoundingClientRect();
-            const style = parent.getComputedStyle(sidebar);
-            return (
-              sidebar.getAttribute('aria-hidden') !== 'true' &&
-              style.display !== 'none' &&
-              style.visibility !== 'hidden' &&
-              rect.width > 20 &&
-              rect.left < parent.innerWidth &&
-              rect.right > 0
-            );
-          };
-
-          const findCollapseControl = () => {
-            const selectors = [
-              '[data-testid="stSidebarCollapseButton"] button',
-              '[data-testid="stSidebarCollapseButton"]',
-              'button[aria-label="Close sidebar"]',
-              'button[aria-label="Collapse sidebar"]',
-              'button[aria-label*="close" i][aria-label*="sidebar" i]',
-              'button[aria-label*="collapse" i][aria-label*="sidebar" i]'
-            ];
-
-            for (const selector of selectors) {
-              const node = doc.querySelector(selector);
-              if (!node) continue;
-              return node.matches('button, [role="button"]')
-                ? node
-                : node.querySelector('button, [role="button"]') || node;
-            }
-            return null;
-          };
-
-          const closeOnce = () => {
-            if (!sidebarIsOpen()) return;
-            const control = findCollapseControl();
-            if (control) {
-              control.click();
-              return;
-            }
-
-            // One fallback only. Repeated events caused visible close/reopen flicker.
-            doc.dispatchEvent(
-              new KeyboardEvent('keydown', {
-                key: 'Escape',
-                code: 'Escape',
-                keyCode: 27,
-                which: 27,
-                bubbles: true,
-                cancelable: true
-              })
-            );
-          };
-
-          // This component is rendered on the destination page. One short delay lets
-          // Streamlit finish replacing its header before the single close action.
-          parent.requestAnimationFrame(() => {
-            parent.setTimeout(closeOnce, 120);
-          });
-        })();
-        </script>
-        """,
-        height=0,
-        width=0,
-    )
 
 
 def human_dt(value, include_year: bool = False, include_seconds: bool = False) -> str:
@@ -1720,8 +1636,83 @@ else:
             if st.button(label, key=f"nav_{target}", use_container_width=True, type="primary" if st.session_state.page == target else "secondary"):
                 nav_go(target)
 
+
+# Close the mobile menu from the same tap that selects a destination.
+components.html(
+    """
+    <script>
+    (() => {
+      const parent = window.parent;
+      const doc = parent.document;
+      const listenerKey = '__r1m1MobileNavCloseInstalled';
+
+      if (parent[listenerKey]) return;
+      parent[listenerKey] = true;
+
+      const destinationLabels = new Set([
+        'Trap sites',
+        'Traps',
+        'Follow-ups',
+        'Trial performance',
+        'Trial setup',
+        'Data & records'
+      ]);
+
+      const sidebarIsOpen = () => {
+        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+        if (!sidebar) return false;
+        const rect = sidebar.getBoundingClientRect();
+        const style = parent.getComputedStyle(sidebar);
+        return (
+          sidebar.getAttribute('aria-hidden') !== 'true' &&
+          style.display !== 'none' &&
+          style.visibility !== 'hidden' &&
+          rect.width > 20 &&
+          rect.left < parent.innerWidth &&
+          rect.right > 0
+        );
+      };
+
+      const collapseControl = () => {
+        const selectors = [
+          '[data-testid="stSidebarCollapseButton"] button',
+          '[data-testid="stSidebarCollapseButton"]',
+          'button[aria-label="Close sidebar"]',
+          'button[aria-label="Collapse sidebar"]',
+          'button[aria-label*="close" i][aria-label*="sidebar" i]',
+          'button[aria-label*="collapse" i][aria-label*="sidebar" i]'
+        ];
+        for (const selector of selectors) {
+          const node = doc.querySelector(selector);
+          if (!node) continue;
+          return node.matches('button, [role="button"]')
+            ? node
+            : node.querySelector('button, [role="button"]') || node;
+        }
+        return null;
+      };
+
+      doc.addEventListener(
+        'click',
+        (event) => {
+          if (parent.innerWidth > 768 || !sidebarIsOpen()) return;
+          const button = event.target.closest('[data-testid="stSidebar"] button');
+          if (!button) return;
+          const label = (button.innerText || button.textContent || '').trim();
+          if (!destinationLabels.has(label)) return;
+          const control = collapseControl();
+          if (control && control !== button) control.click();
+        },
+        true
+      );
+    })();
+    </script>
+    """,
+    height=0,
+    width=0,
+)
+
 page = st.session_state.page
-collapse_sidebar_on_mobile_once()
 scroll_to_top_once()
 show_flash()
 
@@ -3174,7 +3165,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.63 · Mobile Navigation Polish")
+st.sidebar.caption("v8.6.64 · Pre-Render Menu Close")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

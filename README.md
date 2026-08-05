@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.63 Mobile Navigation Polish
+# R1/M1 Field Trial App — v8.6.64 Pre-Render Menu Close
 
 ## Deployment requirement
 
@@ -450,3 +450,12 @@ The shared close routine now:
 - closes the sidebar once, 120 ms after the destination page renders
 - uses one Escape fallback only when no collapse control is found
 - desktop behaviour is unchanged
+
+
+## v8.6.64 pre-render menu close
+
+- removes the post-render mobile sidebar close routine
+- closes the sidebar from the same tap that selects a destination
+- uses one capture-phase listener for named navigation destinations
+- ignores the Administration expander
+- retains the dark-grey mobile menu chevron
