@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.64 Pre-Render Menu Close
+# R1/M1 Field Trial App — v8.6.65 Stable Release Gate
 
 ## Deployment requirement
 
@@ -459,3 +459,12 @@ The shared close routine now:
 - uses one capture-phase listener for named navigation destinations
 - ignores the Administration expander
 - retains the dark-grey mobile menu chevron
+
+
+## v8.6.65 stable release gate
+
+- app behaviour is unchanged from v8.6.64
+- removed required browser automation for Streamlit's mobile off-canvas sidebar
+- retained deterministic mobile rendering and overflow tests
+- retained trap-detail, Back and filter-state tests
+- mobile menu contrast, close and flicker are manual release checks

@@ -97,3 +97,15 @@ At 390 px:
 
 At 390 px, confirm each main and administrative destination closes the sidebar from
 the same tap, renders once, and does not flicker.
+
+
+## Manual mobile navigation release check
+
+The required CI gate does not automate Streamlit's mobile off-canvas sidebar. Before promotion, manually verify:
+
+- menu chevron is visible
+- menu opens
+- each destination changes page
+- menu closes once
+- no close/reopen flicker
+- destination appears at the top
