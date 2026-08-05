@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.65 Stable Release Gate
+# R1/M1 Field Trial App — v8.6.67 Message Contrast and Header Clearance Fix
 
 ## Deployment requirement
 
@@ -468,3 +468,21 @@ The shared close routine now:
 - retained deterministic mobile rendering and overflow tests
 - retained trap-detail, Back and filter-state tests
 - mobile menu contrast, close and flicker are manual release checks
+
+
+## v8.6.66 mobile chevron contrast fix
+
+- CSS-only change
+- forces the mobile header menu chevron geometry to dark grey
+- also covers the sidebar collapse chevron and Administration expander chevron
+- targets SVG paths, lines and polylines rather than relying on inherited icon colour
+- navigation behaviour and release-gate strategy are unchanged
+
+
+## v8.6.67 message contrast and header clearance
+
+- fixes unreadable white text in pale-yellow warning/guidance panels
+- warning text now uses dark olive `#4a4317`
+- all semantic panels explicitly inherit readable dark text
+- increases mobile top clearance so Back actions and page context are not hidden under the header
+- desktop spacing remains unchanged

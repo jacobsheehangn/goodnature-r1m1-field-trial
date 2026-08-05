@@ -258,3 +258,16 @@ header.
 
 Close the mobile sidebar in the same user interaction that selects a destination,
 before Streamlit starts rerendering. Do not schedule sidebar closure after render.
+
+
+## Semantic panel contrast
+
+Semantic background colours must never rely on inherited white text. Panel title,
+body and action text must meet readable contrast against the panel background.
+
+Warning and waiting panels use dark text on pale yellow.
+
+## Mobile header clearance
+
+Page-level Back actions, titles and context must begin below the persistent Streamlit
+mobile header and safe area. Do not position page content underneath system chrome.

@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.65 Stable Release Gate"
+APP_TITLE = "R1/M1 Field Trial — v8.6.67 Message Contrast and Header Clearance Fix"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -1586,6 +1586,83 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
     color: #444a53 !important;
     stroke: #444a53 !important;
     opacity: 1 !important;
+  }
+}
+
+/* v8.6.66 — force all mobile navigation chevron geometry to dark grey. */
+@media (max-width: 768px) {
+  header[data-testid="stHeader"] button,
+  [data-testid="stSidebarCollapsedControl"],
+  [data-testid="stSidebarCollapseButton"],
+  [data-testid="collapsedControl"],
+  [data-testid="stSidebar"] details > summary {
+    color: #444a53 !important;
+  }
+
+  header[data-testid="stHeader"] button svg,
+  [data-testid="stSidebarCollapsedControl"] svg,
+  [data-testid="stSidebarCollapseButton"] svg,
+  [data-testid="collapsedControl"] svg,
+  [data-testid="stSidebar"] details > summary svg {
+    color: #444a53 !important;
+    opacity: 1 !important;
+  }
+
+  header[data-testid="stHeader"] button svg path,
+  header[data-testid="stHeader"] button svg polyline,
+  header[data-testid="stHeader"] button svg line,
+  [data-testid="stSidebarCollapsedControl"] svg path,
+  [data-testid="stSidebarCollapsedControl"] svg polyline,
+  [data-testid="stSidebarCollapsedControl"] svg line,
+  [data-testid="stSidebarCollapseButton"] svg path,
+  [data-testid="stSidebarCollapseButton"] svg polyline,
+  [data-testid="stSidebarCollapseButton"] svg line,
+  [data-testid="collapsedControl"] svg path,
+  [data-testid="collapsedControl"] svg polyline,
+  [data-testid="collapsedControl"] svg line,
+  [data-testid="stSidebar"] details > summary svg path,
+  [data-testid="stSidebar"] details > summary svg polyline,
+  [data-testid="stSidebar"] details > summary svg line {
+    stroke: #444a53 !important;
+    color: #444a53 !important;
+    opacity: 1 !important;
+  }
+
+  header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]),
+  [data-testid="stSidebarCollapsedControl"] svg path[fill]:not([fill="none"]),
+  [data-testid="stSidebarCollapseButton"] svg path[fill]:not([fill="none"]),
+  [data-testid="collapsedControl"] svg path[fill]:not([fill="none"]),
+  [data-testid="stSidebar"] details > summary svg path[fill]:not([fill="none"]) {
+    fill: #444a53 !important;
+  }
+}
+
+/* v8.6.67 — semantic message text contrast and mobile header clearance. */
+.message-panel,
+.message-panel *,
+[data-testid="stAlert"],
+[data-testid="stAlert"] * {
+  color: var(--text) !important;
+}
+
+.message-panel.warning,
+[data-testid="stAlert"][data-baseweb="notification"] {
+  color: #4a4317 !important;
+}
+
+.message-panel.warning *,
+[data-testid="stAlert"][data-baseweb="notification"] * {
+  color: #4a4317 !important;
+}
+
+/* Keep page-level navigation and context below Streamlit's mobile header. */
+@media (max-width: 768px) {
+  .block-container {
+    padding-top: calc(6.75rem + env(safe-area-inset-top)) !important;
+  }
+
+  header[data-testid="stHeader"] {
+    min-height: calc(4.25rem + env(safe-area-inset-top)) !important;
   }
 }
 </style>
@@ -3165,7 +3242,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.65 · Stable Release Gate")
+st.sidebar.caption("v8.6.67 · Message Contrast and Header Clearance Fix")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

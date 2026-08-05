@@ -187,3 +187,31 @@ def test_mobile_sidebar_control_is_visible_on_white_header(
     assert result is not None
     assert result["opacity"] == "1"
     assert "68, 74, 83" in result["color"] or "68, 74, 83" in result["stroke"]
+
+
+def test_mobile_page_content_clears_header(page: Page, local_app: str) -> None:
+    open_home(page, local_app, {"width": 390, "height": 844})
+
+    header = page.locator('header[data-testid="stHeader"]')
+    main = page.locator(".block-container")
+    header_box = header.bounding_box()
+    main_box = main.bounding_box()
+
+    assert header_box is not None
+    assert main_box is not None
+    assert main_box["y"] >= header_box["y"] + header_box["height"] - 2
+
+
+def test_warning_message_uses_readable_text_colour(page: Page, local_app: str) -> None:
+    open_home(page, local_app, {"width": 390, "height": 844})
+
+    colour = page.evaluate(
+        """() => {
+          const node = document.querySelector('.message-panel.warning');
+          if (!node) return null;
+          return getComputedStyle(node).color;
+        }"""
+    )
+    # Some clean-seed screens may not render a warning panel.
+    if colour is not None:
+        assert colour == "rgb(74, 67, 23)"
