@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "R1/M1 Field Trial — v8.6.67 Message Contrast and Header Clearance Fix"
+echo "R1/M1 Field Trial — v8.6.68 Header Clearance Test Fix"
 echo "Preparing local test environment..."
 
 if ! command -v python3 >/dev/null 2>&1; then

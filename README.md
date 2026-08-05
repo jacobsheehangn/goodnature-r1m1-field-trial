@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.67 Message Contrast and Header Clearance Fix
+# R1/M1 Field Trial App — v8.6.68 Header Clearance Test Fix
 
 ## Deployment requirement
 
@@ -486,3 +486,11 @@ The shared close routine now:
 - all semantic panels explicitly inherit readable dark text
 - increases mobile top clearance so Back actions and page context are not hidden under the header
 - desktop spacing remains unchanged
+
+
+## v8.6.68 header-clearance test fix
+
+- app CSS and behaviour are unchanged from v8.6.67
+- replaces an invalid bounding-box assertion
+- verifies computed mobile top padding is at least the rendered header height
+- retains the mobile chevron and message-contrast fixes
