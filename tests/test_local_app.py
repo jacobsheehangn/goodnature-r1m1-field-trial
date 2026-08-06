@@ -23,6 +23,41 @@ def start_first_site(page: Page) -> None:
     page.screenshot(path=SHOTS / "mobile_partial_visit.png", full_page=True)
 
 
+
+
+def choose_radio(page: Page, label: str, *, exact: bool = True) -> None:
+    """Click the visible Streamlit radio label, matching real user interaction."""
+    target = page.locator('label[data-baseweb="radio"]').filter(has_text=label)
+    if exact:
+        target = target.filter(has=page.get_by_text(label, exact=True))
+    expect(target.first).to_be_visible(timeout=20_000)
+    target.first.click()
+
+
+def choose_checkbox(page: Page, label_pattern: str) -> None:
+    """Click the visible Streamlit checkbox label rather than its covered input."""
+    target = page.locator('label[data-baseweb="checkbox"]').filter(has_text=re.compile(label_pattern, re.I)).first
+    expect(target).to_be_visible(timeout=20_000)
+    target.click()
+
+
+def open_mobile_sidebar(page: Page) -> None:
+    """Open the drawer at mobile widths before selecting sidebar navigation."""
+    sidebar = page.get_by_test_id("stSidebar")
+    admin = sidebar.get_by_text("Administration", exact=True)
+    if admin.count() and admin.first.is_visible():
+        return
+    controls = [
+        page.get_by_test_id("stSidebarCollapsedControl"),
+        page.get_by_role("button", name=re.compile(r"menu|sidebar|open", re.I)),
+    ]
+    for control in controls:
+        if control.count() and control.first.is_visible():
+            control.first.click()
+            expect(admin.first).to_be_visible(timeout=20_000)
+            return
+    raise AssertionError("Could not open the mobile navigation drawer")
+
 def main_scroll_top(page: Page) -> int:
     return int(page.evaluate("""() => {
       const el = document.querySelector('[data-testid="stMainScrollContainer"]')
@@ -57,8 +92,8 @@ def test_non_kill_check_returns_to_top_with_one_clear_checked_state(page: Page, 
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
     assert main_scroll_top(page) <= 8
 
-    page.get_by_role("radio", name="Trap still set, no animal").check()
-    page.get_by_role("radio", name="Yes").first.check()
+    choose_radio(page, "Trap still set, no animal")
+    page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").first.click()
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text(re.compile(r"saved$", re.I)).first).to_be_visible(timeout=30_000)
@@ -72,7 +107,7 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: dict, tmp_
     open_home(page, local_app, {"width": 390, "height": 844})
     start_first_site(page)
     page.get_by_role("button", name="Check").first.click()
-    page.get_by_role("radio", name="Dead animal found").check()
+    choose_radio(page, "Dead animal found")
 
     files=[]
     for i in range(3):
@@ -83,12 +118,12 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: dict, tmp_
     expect(page.get_by_text("3 photos ready to save", exact=True)).to_be_visible(timeout=30_000)
     page.screenshot(path=SHOTS / "mobile_photo_queue_ready.png", full_page=True)
 
-    page.get_by_role("radio", name="Rat", exact=True).check()
-    page.get_by_role("radio", name="Norway rat").check()
-    page.get_by_role("radio", name="Dead and apparently normal").check()
-    page.get_by_role("checkbox", name=re.compile(r"Bag labelled")).check()
-    page.get_by_role("radio", name="Yes").first.check()  # trap service
-    page.get_by_role("radio", name="Yes").last.check()   # camera check
+    choose_radio(page, "Rat")
+    choose_radio(page, "Norway rat")
+    choose_radio(page, "Dead and apparently normal")
+    choose_checkbox(page, r"Bag labelled")
+    page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").first.click()  # trap service
+    page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").last.click()   # camera check
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text("3 photos stored", exact=True)).to_be_visible(timeout=60_000)
@@ -102,7 +137,7 @@ def test_data_section_survives_table_change(page: Page, local_app: dict) -> None
     sidebar.get_by_text("Administration", exact=True).click()
     sidebar.get_by_role("button", name="Data & records").click()
     expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=20_000)
-    page.get_by_role("radio", name="Export and backup").check()
+    choose_radio(page, "Export and backup")
     select=page.get_by_label("Inspect data table")
     select.select_option(label="Checks") if select.evaluate("el => el.tagName") == "SELECT" else None
     # BaseWeb select fallback.
@@ -137,12 +172,13 @@ def test_all_traps_checked_completion_state(page: Page, local_app: dict) -> None
             break
         check_buttons.first.click()
         expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
-        page.get_by_role("radio", name="Trap still set, no animal").check()
-        yes_options = page.get_by_role("radio", name="Yes")
-        for index in range(yes_options.count()):
-            option = yes_options.nth(index)
-            if option.is_visible() and option.is_enabled():
-                option.check()
+        choose_radio(page, "Trap still set, no animal")
+        yes_labels = page.locator('label[data-baseweb="radio"]').filter(has_text="Yes")
+        for index in range(yes_labels.count()):
+            option = yes_labels.nth(index)
+            if option.is_visible():
+                option.click()
+                page.wait_for_timeout(150)
         page.get_by_role("button", name="Save check").click()
         expect(page.get_by_text(re.compile(r"saved$", re.I)).first).to_be_visible(timeout=30_000)
     else:
@@ -156,6 +192,7 @@ def test_all_traps_checked_completion_state(page: Page, local_app: dict) -> None
 
 def test_move_trap_section_stays_open_after_confirmation(page: Page, local_app: dict) -> None:
     open_home(page, local_app, {"width": 390, "height": 844})
+    open_mobile_sidebar(page)
     sidebar = page.get_by_test_id("stSidebar")
     sidebar.get_by_text("Administration", exact=True).click()
     sidebar.get_by_role("button", name="Trial setup").click()
@@ -168,7 +205,7 @@ def test_move_trap_section_stays_open_after_confirmation(page: Page, local_app: 
     move_toggle.click()
     expect(page.get_by_text("Destination site", exact=True)).to_be_visible(timeout=20_000)
     confirmation = page.get_by_role("checkbox", name=re.compile(r"Close the current window|Move .* and start a new window", re.I))
-    confirmation.check()
+    choose_checkbox(page, r"Close the current window|Move .* and start a new window")
     # Checking the final confirmation causes a Streamlit rerun. The move section
     # must remain open and retain the destination controls after that rerun.
     expect(page.get_by_text("Destination site", exact=True)).to_be_visible(timeout=20_000)

@@ -28,10 +28,11 @@ def parse_browser() -> dict:
         return {"status": "FAIL", "detail": "Missing browser JUnit output"}
     try:
         root = ET.parse(path).getroot()
-        tests = int(root.attrib.get("tests", 0))
-        failures = int(root.attrib.get("failures", 0))
-        errors = int(root.attrib.get("errors", 0))
-        skipped = int(root.attrib.get("skipped", 0))
+        suites = [root] if root.tag == "testsuite" else list(root.findall("testsuite"))
+        tests = sum(int(suite.attrib.get("tests", 0)) for suite in suites)
+        failures = sum(int(suite.attrib.get("failures", 0)) for suite in suites)
+        errors = sum(int(suite.attrib.get("errors", 0)) for suite in suites)
+        skipped = sum(int(suite.attrib.get("skipped", 0)) for suite in suites)
         status = "PASS" if tests > 0 and failures == 0 and errors == 0 and skipped == 0 else "FAIL"
         return {"status": status, "detail": f"{tests} tests; {failures} failures; {errors} errors; {skipped} skipped"}
     except Exception as exc:
