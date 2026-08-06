@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.76 Conventional Mobile Drawer"
+APP_TITLE = "R1/M1 Field Trial — v8.6.78 Field Setup Safe"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -593,6 +593,41 @@ def start_window(data, trap_id, when):
     data["Windows"] = pd.concat([data["Windows"], pd.DataFrame([record])], ignore_index=True)
     data["Windows"] = data["Windows"][SHEETS["Windows"]]
     return wid
+
+
+
+def trap_link_counts(data, trap_id):
+    """Return linked-record counts used to protect trap history."""
+    counts = {}
+    for sheet in ["Checks", "Windows", "Followups", "Photos"]:
+        frame = data[sheet]
+        counts[sheet] = int((frame["Trap ID"].astype(str) == str(trap_id)).sum()) if "Trap ID" in frame.columns else 0
+    return counts
+
+
+def trap_can_be_deleted(data, trap_id):
+    """Allow deletion only before any field activity or follow-up exists."""
+    counts = trap_link_counts(data, trap_id)
+    if counts["Checks"] or counts["Followups"] or counts["Photos"]:
+        return False
+    windows = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
+    if windows.empty:
+        return True
+    # A newly-created untouched open window may be removed with the trap.
+    return (
+        len(windows) == 1
+        and str(windows.iloc[0]["Status"]) == "Open"
+        and not str(windows.iloc[0]["End Time"]).strip()
+        and not str(windows.iloc[0]["Finding At Close"]).strip()
+    )
+
+
+def delete_unused_trap(data, trap_id):
+    if not trap_can_be_deleted(data, trap_id):
+        raise ValueError("This trap has trial history and cannot be deleted. Set it to Inactive instead.")
+    data["Windows"] = data["Windows"][data["Windows"]["Trap ID"].astype(str) != str(trap_id)].copy()
+    data["Traps"] = data["Traps"][data["Traps"]["Trap ID"].astype(str) != str(trap_id)].copy()
+    save_data(data)
 
 
 def close_window(data, trap_id, when, finding, bag_id):
@@ -3105,11 +3140,16 @@ elif page == "setup":
                         st.session_state.pop("setup_mode", None)
                         st.session_state.pop("setup_trap", None)
                         st.rerun()
+                assignable_builds=data["Builds"][data["Builds"]["Build Status"]!="Withdrawn"].copy()
+                assignable_builds["Build label"]=assignable_builds["Product"].astype(str)+" · "+assignable_builds["Build Version"].astype(str)
+                build_options=assignable_builds["Build label"].tolist()
+                existing_build_label=(f"{existing['Product']} · {existing['Build Version']}" if existing is not None else "")
                 with st.form("trap_setup_panel"):
-                    trap_id=st.text_input("Trap ID",value=existing["Trap ID"] if existing is not None else "",disabled=mode=="edit")
-                    product=st.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()),index=(sorted(data["Builds"]["Product"].unique()).index(existing["Product"]) if existing is not None and existing["Product"] in sorted(data["Builds"]["Product"].unique()) else 0))
-                    build_options=data["Builds"][data["Builds"]["Product"]==product]["Build Version"].tolist() or [""]
-                    build=st.selectbox("Build",build_options,index=(build_options.index(existing["Build Version"]) if existing is not None and existing["Build Version"] in build_options else 0))
+                    trap_id=st.text_input("Trap ID",value=existing["Trap ID"] if existing is not None else "",disabled=mode=="edit",help="Permanent physical trap ID. Do not include the site code.")
+                    build_label=st.selectbox("Build",build_options,index=(build_options.index(existing_build_label) if existing_build_label in build_options else 0))
+                    build_row=assignable_builds[assignable_builds["Build label"]==build_label].iloc[0]
+                    product=str(build_row["Product"]); build=str(build_row["Build Version"])
+                    st.caption(f"Trap type: {product}")
                     site_options=data["Sites"]["Site ID"].tolist(); site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x))
                     location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
@@ -3129,11 +3169,35 @@ elif page == "setup":
                         if mode=="edit":
                             idx=data["Traps"].index[data["Traps"]["Trap ID"]==trap_id][0]
                             old_build=data["Traps"].at[idx,"Build Version"]
-                            if old_build!=build and open_window(data,trap_id) is not None:
+                            old_site=data["Traps"].at[idx,"Site ID"]
+                            if old_site!=site:
+                                st.error("Use Move trap to change sites. Direct site changes are blocked so trial history is not rewritten.")
+                            elif old_build!=build and open_window(data,trap_id) is not None:
                                 st.error("Close the active test window before changing this trap's build.")
-                            else: data["Traps"].loc[idx,SHEETS["Traps"]]=row; save_data(data); set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."]); st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
+                            else:
+                                data["Traps"].loc[idx,SHEETS["Traps"]]=row
+                                save_data(data)
+                                set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."])
+                                st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
                         else:
-                            data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True); save_data(data); set_flash("success", f"{trap_id} added.", ["The trap is now available at its site."]); st.session_state.pop("setup_mode",None); st.rerun()
+                            deployment_time=datetime.combine(dep_date,dep_time)
+                            data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True)
+                            if status=="Active":
+                                start_window(data,trap_id,deployment_time)
+                            save_data(data)
+                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "An active test window was started." if status=="Active" else "The trap was added as inactive."])
+                            st.session_state.pop("setup_mode",None); st.rerun()
+                if mode=="edit":
+                    st.divider()
+                    if trap_can_be_deleted(data, trap_id):
+                        st.caption("This trap has no field history and can be deleted.")
+                        confirm_delete=st.checkbox(f"Delete {trap_id}", key=f"confirm_delete_{trap_id}")
+                        if st.button("Delete unused trap", key=f"delete_unused_{trap_id}", disabled=not confirm_delete):
+                            delete_unused_trap(data,trap_id)
+                            set_flash("success", f"{trap_id} deleted.", ["The unused trap and its untouched test window were removed."])
+                            st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
+                    else:
+                        st.caption("This trap has trial history, so it cannot be deleted. Set its status to Inactive instead.")
                 if st.button("Cancel",key="cancel_trap_panel"): st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
     elif section == "Trap sites":
         mode = st.session_state.get("site_mode")
@@ -3288,10 +3352,22 @@ elif page == "setup":
                     notes=st.text_area("Notes",value=ex["Notes"] if ex is not None else "")
                     save=st.form_submit_button("Save build changes" if mode=="edit" else "Add build",type="primary")
                 if save:
-                    row=[product,version,status,first_date.strftime("%Y-%m-%d"),notes]
-                    if mode=="edit": idx=data["Builds"].index[data["Builds"]["Build Version"]==version][0]; data["Builds"].loc[idx,SHEETS["Builds"]]=row
-                    else: data["Builds"]=pd.concat([data["Builds"],pd.DataFrame([row],columns=SHEETS["Builds"])],ignore_index=True)
-                    save_data(data); set_flash("success", f"{version} saved.", ["Build settings were updated."]); st.session_state.pop("build_mode",None); st.rerun()
+                    version=version.strip()
+                    duplicate=((data["Builds"]["Product"].astype(str)==str(product)) & (data["Builds"]["Build Version"].astype(str).str.casefold()==version.casefold()))
+                    if not version:
+                        st.error("Build version is required.")
+                    elif mode=="add" and duplicate.any():
+                        st.error("That build version already exists for this trap type.")
+                    else:
+                        row=[product,version,status,first_date.strftime("%Y-%m-%d"),notes]
+                        if mode=="edit":
+                            idx=data["Builds"].index[(data["Builds"]["Product"]==ex["Product"]) & (data["Builds"]["Build Version"]==ex["Build Version"])][0]
+                            data["Builds"].loc[idx,SHEETS["Builds"]]=row
+                        else:
+                            data["Builds"]=pd.concat([data["Builds"],pd.DataFrame([row],columns=SHEETS["Builds"])],ignore_index=True)
+                        save_data(data)
+                        set_flash("success", f"{version} saved.", ["It is now available when adding a trap unless marked Withdrawn."])
+                        st.session_state.pop("build_mode",None); st.rerun()
                 if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.rerun()
 elif page == "data_management":
     header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
@@ -3422,7 +3498,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.76 · Conventional Mobile Drawer")
+st.sidebar.caption("v8.6.78 · Field Setup Safe")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

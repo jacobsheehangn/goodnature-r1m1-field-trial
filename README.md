@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.76 Conventional Mobile Drawer
+# R1/M1 Field Trial App — v8.6.78 Field Setup Safe
 
 ## Deployment requirement
 
@@ -578,3 +578,25 @@ For each change:
 - state what must remain unchanged
 - distinguish static checks, automated proof and manual device checks
 - do not describe a partial or unverified fix as complete
+
+
+## v8.6.77 dead-animal radio test fix
+
+- app behaviour and UI are unchanged from v8.6.76
+- confirms `Dead animal found` remains a required field option
+- replaces a text-node locator with the actual accessible radio control
+- selects the option using `check()` and confirms it is checked
+
+
+## v8.6.78 field setup safe
+
+- new builds appear in the Add trap form immediately
+- build selection determines trap type and excludes Withdrawn builds
+- build versions are unique by trap type and version
+- adding an active trap starts its first test window
+- unused traps can be deleted with their untouched open window
+- traps with field history cannot be deleted and must be made Inactive
+- direct site changes are blocked to protect historical records
+- trap IDs are permanent and should not contain site codes
+
+A full controlled Move trap workflow is intentionally deferred until after the field visit.

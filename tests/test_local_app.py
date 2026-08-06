@@ -61,9 +61,10 @@ def test_dead_animal_uses_upload_not_embedded_camera(page: Page, local_app: str)
         timeout=30_000
     )
 
-    dead = page.get_by_text("Dead animal found", exact=True)
+    dead = page.get_by_role("radio", name="Dead animal found")
     expect(dead).to_be_visible(timeout=10_000)
-    dead.click()
+    dead.check()
+    expect(dead).to_be_checked()
 
     assert page.locator("video").count() == 0
     assert page.locator('[data-testid="stCameraInput"]').count() == 0
