@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.7.2 Recovery and Integrity
+# R1/M1 Field Trial App — v8.7.4 Stabilisation
 
 ## Deployment requirement
 
@@ -699,3 +699,25 @@ System-level changes from the first field trial:
 - save bulk build changes once after validating all selected traps
 - prevent deployment-time repair when historical windows exist
 - show Bag ID prominently in follow-up lists and task headers
+
+
+## v8.7.3
+
+- forces Streamlit and app-owned controls into one light visual system
+- replaces resetting Data & records tabs with a persistent section control
+- removes recovery and broad demo-cleanup fields from the normal UI
+- keeps backup restoration behind the R1M1_ENABLE_RECOVERY_TOOLS environment flag
+- adds controlled removal of one invalid follow-up task with audit history
+- preserves the linked check and test window when removing a follow-up
+- adds safe removal of one unused build
+
+
+## v8.7.4 stabilisation
+
+- central navigation owns one-time scroll-to-top on deliberate page changes
+- one stable trap-card renderer for checked and unchecked states
+- one written checked state and one tick only
+- saved-check feedback returned to normal page flow
+- light theme controlled at source and native-control gaps tightened
+- Data & records remains explicit stateful navigation
+- focused browser tests cover non-kill save, three-photo kill, scroll reset and data-section persistence

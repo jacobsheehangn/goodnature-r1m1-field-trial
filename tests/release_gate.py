@@ -32,6 +32,8 @@ banned = {
     "Zoom remains enabled": "user-scalable=no",
     "No maximum scale lock": "maximum-scale",
     "No sticky CTA selector": ".element-container:has(.mobile-save-anchor)",
+    "No brittle checked-card selector": ":has(.checked-trap-marker)",
+    "No floating saved banner": "saved-check-banner",
 }
 for name, token in banned.items():
     check(name, token not in source, f"Forbidden token: {token}")
@@ -39,9 +41,14 @@ for name, token in banned.items():
 required = {
     "Upload-only photo picker": "st.file_uploader(",
     "Multiple image upload": "accept_multiple_files=True",
+    "Central navigation controller": "def navigate(page: str, rerun: bool = True, **kwargs):",
     "Top-reset navigation": "st.session_state.scroll_to_top_once = True",
+    "App-owned top anchor": "r1m1-page-top",
     "Delayed scroll retries": "[80, 200, 450, 900]",
     "Card wrapper": "def app_card():",
+    "Stable visit card component": "def render_visit_trap_card(",
+    "Checked card app class": "visit-trap-card is-checked",
+    "Stateful data navigation": 'key="data_management_section"',
     "Safe-area handling": "env(safe-area-inset-bottom)",
     "Mobile 16px inputs": "font-size: 16px !important",
     "Radio styling selector": 'label[data-baseweb="radio"]',

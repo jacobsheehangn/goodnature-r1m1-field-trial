@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.7.2 Recovery and Integrity"
+APP_TITLE = "R1/M1 Field Trial — v8.7.4 Stabilisation"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -747,21 +747,28 @@ def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag
     data["Followups"] = pd.concat([data["Followups"], pd.DataFrame([row], columns=SHEETS["Followups"])], ignore_index=True)
 
 
-def go(page: str, **kwargs):
-    """Navigate and reset the next page to its top."""
+def navigate(page: str, rerun: bool = True, **kwargs):
+    """One navigation controller for deliberate page/workflow changes."""
+    current_page = st.session_state.get("page")
+    context_changed = any(st.session_state.get(key) != value for key, value in kwargs.items())
+    destination_changed = current_page != page or context_changed
     st.session_state.page = page
-    for k, v in kwargs.items():
-        st.session_state[k] = v
-    st.session_state.scroll_to_top_once = True
-    st.rerun()
+    for key, value in kwargs.items():
+        st.session_state[key] = value
+    if destination_changed:
+        st.session_state.scroll_to_top_once = True
+        st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
+    if rerun:
+        st.rerun()
+
+
+def go(page: str, **kwargs):
+    navigate(page, rerun=True, **kwargs)
 
 
 def set_page(page: str, **kwargs):
-    """Update navigation state for a button callback; Streamlit reruns once automatically."""
-    st.session_state.page = page
-    for k, v in kwargs.items():
-        st.session_state[k] = v
-    st.session_state.scroll_to_top_once = True
+    """Callback-safe route change; Streamlit reruns automatically."""
+    navigate(page, rerun=False, **kwargs)
 
 
 def request_scroll_to_top():
@@ -780,6 +787,10 @@ def scroll_to_top_once():
           const doc = parent.document;
 
           const reset = () => {
+            const topAnchor = doc.getElementById('r1m1-page-top');
+            if (topAnchor) {
+              try { topAnchor.scrollIntoView({block: 'start', inline: 'nearest', behavior: 'auto'}); } catch (_) {}
+            }
             const targets = [
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
@@ -1187,6 +1198,63 @@ def commit_demo_data_removal(data, planned, reason):
 
 
 
+
+def remove_followup_task(data, followup_id: str, reason: str):
+    """Remove one invalid follow-up without deleting its linked check or test window."""
+    if not reason.strip():
+        raise ValueError("Enter a reason for removing the follow-up.")
+    matches = data["Followups"][data["Followups"]["Follow-up ID"].astype(str) == str(followup_id)]
+    if matches.empty:
+        raise ValueError("The follow-up task could not be found.")
+    task = matches.iloc[0]
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    staged["Followups"] = staged["Followups"][
+        staged["Followups"]["Follow-up ID"].astype(str) != str(followup_id)
+    ].reset_index(drop=True)
+    audit_change(
+        staged,
+        "Follow-up",
+        followup_id,
+        "Record",
+        f"{task['Follow-up Type']} · {task['Trap ID']} · Bag {task['Bag ID']}",
+        "Removed",
+        reason.strip(),
+    )
+    refresh_review_status(staged, str(task.get("Window ID", "")))
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
+    return task
+
+
+def remove_unused_build(data, product: str, version: str, reason: str):
+    """Remove one unreferenced build only."""
+    if not reason.strip():
+        raise ValueError("Enter a reason for removing the build.")
+    used_by_traps = (
+        (data["Traps"]["Product"].astype(str) == str(product))
+        & (data["Traps"]["Build Version"].astype(str) == str(version))
+    ).any()
+    used_by_windows = (
+        (data["Windows"]["Product"].astype(str) == str(product))
+        & (data["Windows"]["Build Version"].astype(str) == str(version))
+    ).any()
+    if used_by_traps or used_by_windows:
+        raise ValueError("This build is still referenced by a trap or test window.")
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    mask = (
+        (staged["Builds"]["Product"].astype(str) == str(product))
+        & (staged["Builds"]["Build Version"].astype(str) == str(version))
+    )
+    if not mask.any():
+        raise ValueError("The build could not be found.")
+    staged["Builds"] = staged["Builds"].loc[~mask].reset_index(drop=True)
+    audit_change(staged, "Build", f"{product}::{version}", "Record", "Present", "Removed", reason.strip())
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
+
+
 def nav_go(page: str):
     """Navigate from persistent app chrome."""
     go(page)
@@ -1311,6 +1379,40 @@ def app_card():
             unsafe_allow_html=True,
         )
         yield
+
+
+def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> None:
+    """One stable trap-card component for both field states."""
+    trap_id = str(tr["Trap ID"])
+    product_build = f"{tr['Product']} · {tr['Build Version']}"
+    location = trap_location_label(tr)
+    route = str(tr["Route Order"] or "—")
+
+    if checked:
+        st.markdown(
+            '<div class="visit-trap-card is-checked">'
+            '<div class="visit-trap-primary">'
+            f'<div class="visit-trap-id">{html.escape(trap_id)}</div>'
+            f'<div class="visit-trap-meta">{html.escape(product_build)}</div>'
+            '</div>'
+            '<div class="visit-trap-secondary">'
+            f'<div class="visit-trap-location">{html.escape(location)}</div>'
+            '<div class="visit-trap-status">✓ Checked</div>'
+            '</div>'
+            '<div class="visit-trap-checkmark" aria-label="Checked">✓</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    with st.container(border=True):
+        c1, c2, action = st.columns([1.05, 1.7, .72], vertical_alignment="center")
+        c1.markdown(f"**{trap_id}**")
+        c1.caption(product_build)
+        c2.write(location)
+        c2.caption(f"Route reference {route} · Not checked")
+        if action.button("Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True):
+            go("check", site_id=site_id, visit_id=visit_id, trap_id=trap_id)
 
 
 def workflow_context(rows):
@@ -2155,38 +2257,123 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 }
 
 
-/* v8.7.1 — visible field completion states */
-.saved-check-banner {
-  position: fixed;
-  left: 50%;
-  top: calc(.75rem + env(safe-area-inset-top));
-  transform: translateX(-50%);
-  z-index: 2000;
-  width: min(92vw, 560px);
-  background: #eaf7ef;
-  border: 1px solid #b9ddc5;
-  color: #22683d;
-  border-radius: 12px;
-  padding: .8rem 1rem;
-  box-shadow: 0 8px 24px rgba(37,38,45,.14);
-  font-weight: 700;
-  text-align: center;
+/* v8.7.4 — stable field completion components */
+.visit-trap-card {
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 1.7fr) 3.25rem;
+  align-items: center;
+  gap: 1rem;
+  min-height: 7.1rem;
+  margin: 0 0 1rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #ffffff;
+  box-sizing: border-box;
 }
-.checked-trap-marker { display: none; }
-[data-testid="stVerticalBlockBorderWrapper"]:has(.checked-trap-marker),
-div[data-testid="stVerticalBlock"]:has(.checked-trap-marker) {
-  background: #eaf7ef !important;
-  border-color: #b9ddc5 !important;
+.visit-trap-card.is-checked {
+  background: #eef8f1;
+  border-color: #b9ddc5;
 }
-.checked-status {
-  color: #22683d;
-  font-weight: 700;
+.visit-trap-id,
+.visit-trap-location { color: var(--text); font-weight: 700; }
+.visit-trap-meta { color: var(--muted); margin-top: .35rem; }
+.visit-trap-status { color: #22683d; font-weight: 700; margin-top: .35rem; }
+.visit-trap-checkmark { color: #22683d; font-size: 1.35rem; font-weight: 800; text-align: center; }
+@media (max-width: 700px) {
+  .visit-trap-card {
+    grid-template-columns: minmax(7.5rem, 1fr) minmax(8rem, 1.35fr) 2.5rem;
+    min-height: 6.4rem;
+    gap: .7rem;
+    padding: .9rem;
+  }
 }
 .photo-tile img {
   width: 64px !important;
   height: 64px !important;
   object-fit: cover !important;
   border-radius: 8px !important;
+}
+
+/* v8.7.3 — force one complete light visual system */
+html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stHeader"], [data-testid="stSidebar"],
+[data-testid="stSidebar"] > div {
+  background: #ffffff !important;
+  color: #25262d !important;
+  color-scheme: light !important;
+}
+
+input, textarea, select,
+[data-baseweb="select"] > div,
+[data-baseweb="input"] > div,
+[data-baseweb="textarea"] > div,
+[data-testid="stFileUploader"],
+[data-testid="stExpander"],
+[data-testid="stDataFrame"],
+[data-testid="stTable"] {
+  background: #ffffff !important;
+  color: #25262d !important;
+  border-color: #d7d9dd !important;
+}
+
+[data-baseweb="popover"],
+[data-baseweb="menu"],
+ul[role="listbox"],
+li[role="option"] {
+  background: #ffffff !important;
+  color: #25262d !important;
+}
+
+li[role="option"]:hover,
+li[role="option"][aria-selected="true"] {
+  background: #fff1e8 !important;
+  color: #25262d !important;
+}
+
+[data-testid="stTabs"] button,
+[data-testid="stTabs"] button p,
+[data-baseweb="tab-list"] button,
+[data-baseweb="tab-list"] button p {
+  color: #444a53 !important;
+  background: transparent !important;
+  opacity: 1 !important;
+}
+
+[data-testid="stTabs"] button[aria-selected="true"],
+[data-baseweb="tab-list"] button[aria-selected="true"] {
+  color: #f36c21 !important;
+}
+
+[data-testid="stRadio"] label,
+[data-testid="stCheckbox"] label,
+[data-testid="stRadio"] p,
+[data-testid="stCheckbox"] p {
+  color: #25262d !important;
+}
+
+[data-testid="stDataFrame"] *,
+[data-testid="stTable"] * {
+  color-scheme: light !important;
+}
+
+button[kind="secondary"],
+[data-testid="stBaseButton-secondary"] {
+  background: #ffffff !important;
+  color: #25262d !important;
+  border-color: #d7d9dd !important;
+}
+button[kind="secondary"]:hover,
+[data-testid="stBaseButton-secondary"]:hover {
+  background: #f7f7f5 !important;
+  color: #25262d !important;
+}
+[data-baseweb="tab-list"],
+[data-baseweb="tab-panel"],
+[data-testid="stRadio"],
+[data-testid="stCheckbox"] {
+  background: transparent !important;
+  color: #25262d !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2312,6 +2499,7 @@ components.html(
     width=0,
 )
 
+st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
 page = st.session_state.page
 scroll_to_top_once()
 show_flash()
@@ -2410,11 +2598,9 @@ elif page == "visit":
     header(site_name(data, sid), "Select the trap you are standing at.")
     saved = st.session_state.pop("saved_check", None)
     if saved:
-        photo_text = f" · {saved.get('photo_count', 0)} photos stored" if saved.get("photo_count", 0) else ""
-        st.markdown(
-            f'<div class="saved-check-banner">{html.escape(str(saved["trap_id"]))} saved{html.escape(photo_text)}</div>',
-            unsafe_allow_html=True,
-        )
+        photo_count = int(saved.get("photo_count", 0))
+        details = [f"{photo_count} photo{'s' if photo_count != 1 else ''} stored"] if photo_count else []
+        message_panel("success", f"{saved['trap_id']} saved", details)
 
     filter_col, search_col = st.columns([1, 1.6])
     product_filter = filter_col.radio(
@@ -2451,21 +2637,7 @@ elif page == "visit":
         for _, tr in traps.iterrows():
             trap_id = str(tr["Trap ID"])
             checked = trap_id in done
-            with app_card():
-                if checked:
-                    st.markdown('<span class="checked-trap-marker"></span>', unsafe_allow_html=True)
-                c1, c2, action = st.columns([1.05, 1.7, .72], vertical_alignment="center")
-                c1.markdown(f"**{trap_id}**")
-                c1.caption(f"{tr['Product']} · {tr['Build Version']}")
-                c2.write(trap_location_label(tr))
-                if checked:
-                    c2.markdown('<span class="checked-status">✓ Checked</span>', unsafe_allow_html=True)
-                else:
-                    c2.caption(f"Route reference {tr['Route Order']} · Not checked")
-                if checked:
-                    action.markdown("**✓**")
-                elif action.button("Check", key=f"visit_check_{vid}_{trap_id}", use_container_width=True):
-                    go("check", site_id=sid, visit_id=vid, trap_id=trap_id)
+            render_visit_trap_card(tr, checked, vid, sid)
 
     finish_col, pause_col = st.columns(2)
     if finish_col.button("Finish site check", type="primary", use_container_width=True):
@@ -3985,21 +4157,114 @@ elif page == "setup":
                         save_data(data)
                         set_flash("success", f"{version} saved.", ["It is now available when adding a trap unless marked Withdrawn."])
                         st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
+                if mode=="edit":
+                    used_by_traps = (
+                        (data["Traps"]["Product"].astype(str) == str(ex["Product"]))
+                        & (data["Traps"]["Build Version"].astype(str) == str(ex["Build Version"]))
+                    ).any()
+                    used_by_windows = (
+                        (data["Windows"]["Product"].astype(str) == str(ex["Product"]))
+                        & (data["Windows"]["Build Version"].astype(str) == str(ex["Build Version"]))
+                    ).any()
+                    if not used_by_traps and not used_by_windows:
+                        st.divider()
+                        st.caption("This build is unused and can be removed.")
+                        build_remove_reason = st.text_area(
+                            "Removal reason",
+                            key=f"remove_build_reason_{selected_product}_{selected_version}",
+                        )
+                        confirm_build_remove = st.checkbox(
+                            f"Remove {selected_product} · {selected_version}",
+                            key=f"confirm_remove_build_{selected_product}_{selected_version}",
+                        )
+                        if st.button(
+                            "Remove unused build",
+                            disabled=not confirm_build_remove,
+                            key=f"remove_unused_build_{selected_product}_{selected_version}",
+                        ):
+                            try:
+                                remove_unused_build(data, selected_product, selected_version, build_remove_reason)
+                                set_flash("success", f"{selected_product} · {selected_version} removed.")
+                                st.session_state.pop("build_mode", None)
+                                st.session_state.pop("setup_build", None)
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(str(exc))
                 if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
 elif page == "data_management":
     header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
-    corrections_tab, history_tab, audit_tab, export_tab = st.tabs(["Corrections", "Trial history", "Audit log", "Export and backup"])
+    active_data_section = st.radio(
+        "Data section",
+        ["Corrections", "Trial history", "Audit log", "Export and backup"],
+        horizontal=True,
+        key="data_management_section",
+        label_visibility="collapsed",
+    )
 
-    with corrections_tab:
+    if active_data_section == "Corrections":
         helper("Use corrections only for known data-entry mistakes. Every change requires a reason and is retained in the audit log.")
         st.markdown("#### What you are recording")
         st.write("The corrected value and why the original entry was wrong.")
         st.markdown("#### What the app will update")
         st.write("The linked record, any affected Performance figures, and a permanent audit-log entry.")
-        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check"])
+        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task"])
         search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
 
-        if record_type in ["Camera evidence", "Necropsy evidence"]:
+        if record_type == "Follow-up task":
+            candidates = data["Followups"].copy()
+            if search_text:
+                mask = candidates[["Follow-up ID", "Trap ID", "Bag ID", "Window ID", "Reason"]].astype(str).apply(
+                    lambda col: col.str.lower().str.contains(search_text, na=False)
+                ).any(axis=1)
+                candidates = candidates[mask]
+            options = candidates["Follow-up ID"].astype(str).tolist()
+            selected_id = st.selectbox(
+                "Select follow-up task",
+                options,
+                format_func=lambda fid: (
+                    lambda r: f"{r['Follow-up Type']} · {r['Trap ID']} · "
+                    + (f"Bag {r['Bag ID']} · " if str(r.get('Bag ID', '')).strip() else "")
+                    + f"{r['Status']} · {fid}"
+                )(candidates[candidates["Follow-up ID"].astype(str) == str(fid)].iloc[0]),
+            ) if options else None
+            if selected_id:
+                row = candidates[candidates["Follow-up ID"].astype(str) == str(selected_id)].iloc[0]
+                workflow_context([
+                    ("Task", row["Follow-up Type"]),
+                    ("Trap", row["Trap ID"]),
+                    ("Site", site_name(data, row["Site ID"])),
+                    ("Bag ID", row["Bag ID"]),
+                    ("Window", row["Window ID"]),
+                    ("Reason", row["Reason"]),
+                    ("Status", row["Status"]),
+                ])
+                st.warning("Use this only for an invalid or bundled dummy task. The linked check and test window will remain.")
+                remove_reason = st.text_area("Reason for removal", key=f"remove_followup_reason_{selected_id}")
+                confirm_remove = st.checkbox(
+                    f"Remove follow-up {selected_id}",
+                    key=f"confirm_remove_followup_{selected_id}",
+                )
+                if st.button(
+                    "Remove invalid follow-up",
+                    type="primary",
+                    disabled=not confirm_remove,
+                    key=f"remove_followup_{selected_id}",
+                ):
+                    try:
+                        removed = remove_followup_task(data, selected_id, remove_reason)
+                        set_flash(
+                            "success",
+                            "Follow-up removed.",
+                            [
+                                f"{removed['Follow-up Type']} for {removed['Trap ID']} was removed.",
+                                "The linked check and test window were preserved.",
+                                "The removal is recorded in the audit log.",
+                            ],
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+        elif record_type in ["Camera evidence", "Necropsy evidence"]:
             candidates = data["Windows"][data["Windows"]["Status"] == "Closed"].copy()
             if search_text:
                 mask = candidates[["Window ID", "Trap ID", "Bag ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
@@ -4094,28 +4359,51 @@ elif page == "data_management":
                             save_data(data); set_flash("success","Correction saved.",[f"{len(audit_rows)} field change(s) were applied.","The audit log retained the previous and corrected values.","Next: make another correction or return to the relevant record."]); st.rerun()
                         else: st.info("No values changed.")
 
-    with history_tab:
+    if active_data_section == "Trial history":
         helper("Trial history shows each period between a trap being set or relured and its next field check.")
         st.write("Use it to trace how a field finding, camera review and final performance result link together.")
         if st.button("Open trial history", type="primary", key="open_trial_history"):
             go("windows")
 
-    with audit_tab:
+    if active_data_section == "Audit log":
         if data["Audit Log"].empty:
             st.info("No corrections have been recorded yet.")
         else:
             audit_view = data["Audit Log"].copy().iloc[::-1]
             st.dataframe(audit_view, use_container_width=True, hide_index=True)
 
-    with export_tab:
+    if active_data_section == "Export and backup":
         sheet = st.selectbox("Inspect data table", list(SHEETS), key="data_management_sheet")
         st.dataframe(data[sheet], use_container_width=True, hide_index=True)
         st.caption("Export is read-only. Opening this page does not change trial data.")
         with open(DATA_FILE, "rb") as f:
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
+        if os.getenv("R1M1_ENABLE_RECOVERY_TOOLS", "").strip() == "1":
+            with st.expander("Emergency recovery tools"):
+                backups = available_backups()
+                if backups:
+                    backup_options = [str(path) for path in backups]
+                    selected_backup = st.selectbox(
+                        "Backup",
+                        backup_options,
+                        format_func=lambda value: f"{Path(value).name} · {workbook_summary(Path(value))}",
+                        key="emergency_recovery_backup",
+                    )
+                    confirm_restore = st.checkbox(
+                        "Replace the current workbook with this backup",
+                        key="confirm_emergency_restore",
+                    )
+                    if st.button("Restore selected backup", disabled=not confirm_restore):
+                        try:
+                            restore_backup(Path(selected_backup))
+                            set_flash("success", "Backup restored.")
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+
 st.sidebar.divider()
-st.sidebar.caption("v8.7.2 · Recovery and Integrity")
+st.sidebar.caption("v8.7.4 · Stabilisation")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
@@ -4126,71 +4414,3 @@ if storage_is_potentially_ephemeral():
 else:
     st.sidebar.caption("Storage check: writable · atomic workbook saves · automatic backups")
 
-
-    st.divider()
-    st.markdown("### Recovery and bundled data")
-
-    st.markdown("#### Restore a workbook backup")
-    backups = available_backups()
-    if backups:
-        backup_options = [str(path) for path in backups]
-        selected_backup = st.selectbox(
-            "Backup",
-            backup_options,
-            format_func=lambda value: f"{Path(value).name} · {workbook_summary(Path(value))}",
-            key="recovery_backup_select",
-        )
-        st.caption("Restoring creates a safety copy of the current workbook first.")
-        confirm_restore = st.checkbox(
-            "I understand this replaces the current workbook with the selected backup",
-            key="confirm_restore_backup",
-        )
-        if st.button("Restore selected backup", type="primary", disabled=not confirm_restore):
-            try:
-                safety_copy = restore_backup(Path(selected_backup))
-                set_flash(
-                    "success",
-                    "Backup restored.",
-                    [f"Restored {Path(selected_backup).name}.", f"Previous current state preserved as {safety_copy.name}."],
-                )
-                st.rerun()
-            except Exception as exc:
-                st.error(f"Backup was not restored: {exc}")
-    else:
-        st.warning("No workbook backups were found on the persistent disk.")
-
-    st.markdown("#### Remove bundled demo records")
-    st.caption("This now uses the full bundled demo workbook, including its follow-up tasks. It previews the exact removal plan and blocks any broken references.")
-    try:
-        demo_plan, demo_counts = plan_demo_data_removal(data)
-        preview_rows = [{"Record type": name, "Planned removal": count} for name, count in demo_counts.items() if count]
-        if preview_rows:
-            st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
-            cleanup_reason = st.text_area(
-                "Reason",
-                value="Remove bundled demo records after first field trial",
-                key="safe_demo_cleanup_reason",
-            )
-            confirm_cleanup = st.checkbox(
-                "I have reviewed the plan above",
-                key="confirm_safe_demo_cleanup",
-            )
-            if st.button(
-                "Remove reviewed demo records",
-                disabled=not confirm_cleanup,
-                key="commit_safe_demo_cleanup",
-            ):
-                try:
-                    data = commit_demo_data_removal(data, demo_plan, cleanup_reason.strip())
-                    set_flash(
-                        "success",
-                        "Bundled demo records removed.",
-                        [f"{sum(demo_counts.values())} reviewed records removed, including matching demo follow-up tasks."],
-                    )
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"Demo records were not removed: {exc}")
-        else:
-            st.success("No removable bundled demo records remain.")
-    except Exception as exc:
-        st.error(f"Could not prepare the demo-removal plan: {exc}")
