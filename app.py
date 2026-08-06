@@ -2818,6 +2818,92 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
   pointer-events:none !important;
   opacity:1 !important;
 }
+
+/* v8.7.5.10 — closed-menu control across both Streamlit DOM forms.
+   On some deployments the test-id element is the clickable control itself;
+   on others it wraps a nested button. Draw exactly one chevron in either case.
+   The working open-drawer control is intentionally untouched. */
+
+/* Direct-control form: suppress native content only when there is no nested button. */
+[data-testid="stSidebarCollapsedControl"]:not(:has(button)) {
+  position: relative !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  text-shadow: none !important;
+  overflow: visible !important;
+}
+
+[data-testid="stSidebarCollapsedControl"]:not(:has(button)) > * {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+/* Remove earlier container pseudo-elements, then restore exactly one for
+   the direct-control DOM form. */
+[data-testid="stSidebarCollapsedControl"]::before {
+  content: none !important;
+  display: none !important;
+}
+
+[data-testid="stSidebarCollapsedControl"]:not(:has(button))::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .62rem !important;
+  height: .62rem !important;
+  border-top: 2.5px solid #25262d !important;
+  border-right: 2.5px solid #25262d !important;
+  transform: translate(-62%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+}
+
+/* Nested-button form: keep the proven button implementation and make sure the
+   wrapper itself cannot draw a second icon. */
+[data-testid="stSidebarCollapsedControl"]:has(button)::after {
+  content: none !important;
+  display: none !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button {
+  position: relative !important;
+  font-size: 0 !important;
+  line-height: 0 !important;
+  color: transparent !important;
+  text-shadow: none !important;
+  overflow: visible !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button > * {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button::before {
+  content: none !important;
+  display: none !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .62rem !important;
+  height: .62rem !important;
+  border-top: 2.5px solid #25262d !important;
+  border-right: 2.5px solid #25262d !important;
+  transform: translate(-62%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2835,7 +2921,6 @@ components.html("""
 """, height=0, width=0)
 
 require_authentication()
-show_environment_banner()
 data = load_data()
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
@@ -2851,18 +2936,13 @@ if logo_path.exists():
 
 # Primary work stays prominent. Secondary tools sit under More.
 if st.session_state.page in WORKFLOW_PAGES:
-    st.sidebar.caption("Visit workflow")
     if st.session_state.page in {"visit", "check", "check_confirm"}:
         sid = st.session_state.get("site_id", "")
-        vid = st.session_state.get("visit_id", "")
         if sid:
             st.sidebar.write(f"**{site_name(data, sid)}**")
-        if vid:
-            st.sidebar.caption(f"Visit {vid}")
     if st.sidebar.button("Exit to Trap sites"):
         nav_go("sites")
 else:
-    st.sidebar.caption("Main")
     for label, target in PRIMARY_NAV.items():
         is_active = (
             st.session_state.page == target
@@ -3447,25 +3527,19 @@ elif page == "network":
             )
 
             with app_card():
-                c1, c2, c3, action = st.columns(
-                    [1.25, 1.35, 1.25, 0.72],
-                    vertical_alignment="center",
-                )
-                c1.markdown(f"**{trap_id}**")
-                c1.caption(site_name(data, tr["Site ID"]))
-
-                c2.write(trap_location_label(tr))
-                c2.caption(f"Trap {tr['Route Order']} · {tr['Build Version']}")
-
-                c3.markdown(
-                    f"**{len(kills)} kill{'s' if len(kills) != 1 else ''}**"
-                )
-                c3.caption(
-                    f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''} · "
-                    f"Last kill: {last_kill}"
+                render_compact_card_content(
+                    title=trap_id,
+                    right_label=site_name(data, tr["Site ID"]),
+                    main_line=f"{trap_location_label(tr)} · Trap {tr['Route Order']}",
+                    meta_line=(
+                        f"{tr['Build Version']} · "
+                        f"{len(kills)} kill{'s' if len(kills) != 1 else ''} · "
+                        f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''} · "
+                        f"Last kill: {last_kill}"
+                    ),
                 )
 
-                if action.button(
+                if st.button(
                     "View",
                     key=f"network_view_{trap_id}",
                     use_container_width=True,
@@ -4849,16 +4923,10 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.8 · Explicit card components")
-st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
-st.sidebar.caption(f"Data folder: {DATA_ROOT}")
+st.sidebar.caption("v8.7.5.11 · Menu and copy cleanup")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
-if storage_is_potentially_ephemeral():
-    st.sidebar.error("Storage may be temporary. Set R1M1_DATA_DIR to a persistent mounted folder before field use.")
-else:
-    st.sidebar.caption("Storage check: writable · atomic workbook saves · automatic backups")
 
 
 
