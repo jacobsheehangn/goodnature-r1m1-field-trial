@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.78 Field Setup Safe
+# R1/M1 Field Trial App — v8.6.79 Build Identity Fix
 
 ## Deployment requirement
 
@@ -600,3 +600,12 @@ For each change:
 - trap IDs are permanent and should not contain site codes
 
 A full controlled Move trap workflow is intentionally deferred until after the field visit.
+
+
+## v8.6.79 build identity fix
+
+- fixes the app-breaking duplicate Streamlit key when R1 and M1 share a build number
+- treats a build as `Product + Build Version`
+- uses product and version in build edit keys and edit lookup
+- counts active traps against the correct product and version
+- keeps all v8.6.78 field-setup protections

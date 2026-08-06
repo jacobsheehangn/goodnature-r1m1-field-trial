@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.78 Field Setup Safe"
+APP_TITLE = "R1/M1 Field Trial — v8.6.79 Build Identity Fix"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -3328,23 +3328,40 @@ elif page == "setup":
             if action_col.button("Add build", type="primary"):
                 st.session_state.setup_build=""; st.session_state.build_mode="add"; st.rerun()
             for _, build_row in data["Builds"].sort_values(["Product", "First Active Date"], ascending=[True, False]).iterrows():
-                version = build_row["Build Version"]
-                active_traps = len(data["Traps"][(data["Traps"]["Build Version"] == version) & (data["Traps"]["Status"] == "Active")])
+                product_code = str(build_row["Product"])
+                version = str(build_row["Build Version"])
+                build_identity = f"{product_code}::{version}"
+                active_traps = len(data["Traps"][
+                    (data["Traps"]["Product"].astype(str) == product_code)
+                    & (data["Traps"]["Build Version"].astype(str) == version)
+                    & (data["Traps"]["Status"] == "Active")
+                ])
                 with app_card():
                     c1, c2, c3, action = st.columns([1.15, 1.15, 1.3, 0.7], vertical_alignment="center")
                     c1.markdown(f"**{version}**")
-                    c1.caption(build_row["Product"])
+                    c1.caption(product_code)
                     c2.write(build_row["Build Status"])
                     c2.caption(f"{active_traps} active traps")
                     c3.write((parse_dt(build_row["First Active Date"]).strftime("%d %b %Y") if parse_dt(build_row["First Active Date"]) else "—"))
                     c3.caption(build_row["Notes"] or "No notes")
-                    if action.button("Edit", key=f"setup_edit_build_{version}"):
-                        st.session_state.setup_build=version; st.session_state.build_mode="edit"; st.rerun()
+                    if action.button("Edit", key=f"setup_edit_build_{product_code}_{version}"):
+                        st.session_state.setup_build=build_identity
+                        st.session_state.build_mode="edit"
+                        st.rerun()
         if panel is not None:
             with panel:
-                ex=data["Builds"][data["Builds"]["Build Version"]==st.session_state.get("setup_build","")].iloc[0] if mode=="edit" else None
+                if mode=="edit":
+                    selected_build_identity=st.session_state.get("setup_build","")
+                    selected_product, selected_version = selected_build_identity.split("::", 1)
+                    matching_builds=data["Builds"][
+                        (data["Builds"]["Product"].astype(str)==selected_product)
+                        & (data["Builds"]["Build Version"].astype(str)==selected_version)
+                    ]
+                    ex=matching_builds.iloc[0]
+                else:
+                    ex=None
                 st.subheader("Edit build" if mode=="edit" else "Add build")
-                with st.form("build_setup_panel"):
+                with st.form(f"build_setup_panel_{mode}_{st.session_state.get('setup_build', 'new')}"):
                     product=st.selectbox("Trap type",["R1","M1"],index=0 if ex is None or ex["Product"]=="R1" else 1)
                     version=st.text_input("Build version",value=ex["Build Version"] if ex is not None else "",disabled=mode=="edit")
                     status=st.selectbox("Build status",["Current","Trial comparison","Superseded","Withdrawn"],index=(["Current","Trial comparison","Superseded","Withdrawn"].index(ex["Build Status"]) if ex is not None and ex["Build Status"] in ["Current","Trial comparison","Superseded","Withdrawn"] else 0))
@@ -3367,8 +3384,8 @@ elif page == "setup":
                             data["Builds"]=pd.concat([data["Builds"],pd.DataFrame([row],columns=SHEETS["Builds"])],ignore_index=True)
                         save_data(data)
                         set_flash("success", f"{version} saved.", ["It is now available when adding a trap unless marked Withdrawn."])
-                        st.session_state.pop("build_mode",None); st.rerun()
-                if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.rerun()
+                        st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
+                if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
 elif page == "data_management":
     header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
     corrections_tab, history_tab, audit_tab, export_tab = st.tabs(["Corrections", "Trial history", "Audit log", "Export and backup"])
@@ -3498,7 +3515,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.78 · Field Setup Safe")
+st.sidebar.caption("v8.6.79 · Build Identity Fix")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
