@@ -2721,133 +2721,188 @@ components.html("""
 
 require_authentication()
 
-components.html(
-    """
-    <script>
-    (() => {
-      const parentWindow = window.parent;
-      const doc = parentWindow.document;
-      const STYLE_ID = "r1m1-closed-menu-style";
-      const BUTTON_ID = "r1m1-closed-menu-button";
-      const OBSERVER_KEY = "__r1m1ClosedMenuObserver";
-
-      if (!doc.getElementById(STYLE_ID)) {
-        const style = doc.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = `
-          [data-testid="stSidebarCollapsedControl"] {
-            opacity: 0 !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-          }
-
-          #${BUTTON_ID} {
-            position: fixed;
-            top: calc(.55rem + env(safe-area-inset-top));
-            left: .65rem;
-            z-index: 1000000;
-            width: 2.75rem;
-            height: 2.75rem;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
-            margin: 0;
-            border: 0;
-            border-radius: .65rem;
-            background: rgba(255,255,255,.96);
-            color: #25262d;
-            box-shadow: none;
-            font: 700 2rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            -webkit-appearance: none;
-            appearance: none;
-            cursor: pointer;
-            touch-action: manipulation;
-          }
-
-          #${BUTTON_ID}:focus-visible {
-            outline: 3px solid rgba(243,108,33,.35);
-            outline-offset: 2px;
-          }
-        `;
-        doc.head.appendChild(style);
-      }
-
-      let button = doc.getElementById(BUTTON_ID);
-      if (!button) {
-        button = doc.createElement("button");
-        button.id = BUTTON_ID;
-        button.type = "button";
-        button.setAttribute("aria-label", "Open menu");
-        button.setAttribute("title", "Open menu");
-        button.textContent = "›";
-        doc.body.appendChild(button);
-      }
-
-      const sidebarIsOpen = () => {
-        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-        if (!sidebar) return false;
-        const rect = sidebar.getBoundingClientRect();
-        const style = parentWindow.getComputedStyle(sidebar);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          rect.width > 40 &&
-          rect.right > 8
-        );
-      };
-
-      const nativeOpenControl = () => {
-        const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
-        if (!wrapper) return null;
-        if (wrapper.matches("button")) return wrapper;
-        return wrapper.querySelector("button") || wrapper;
-      };
-
-      const update = () => {
-        const nativeControl = nativeOpenControl();
-        const shouldShow = Boolean(nativeControl) && !sidebarIsOpen();
-        button.style.display = shouldShow ? "flex" : "none";
-      };
-
-      button.onclick = () => {
-        const nativeControl = nativeOpenControl();
-        if (!nativeControl) return;
-        nativeControl.click();
-        requestAnimationFrame(update);
-        [80, 200, 450].forEach((delay) => parentWindow.setTimeout(update, delay));
-      };
-
-      parentWindow.__r1m1UpdateClosedMenu = update;
-
-      if (!parentWindow[OBSERVER_KEY]) {
-        const observer = new MutationObserver(() => {
-          if (parentWindow.__r1m1UpdateClosedMenu) {
-            parentWindow.__r1m1UpdateClosedMenu();
-          }
-        });
-        observer.observe(doc.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["style", "class", "aria-expanded"]
-        });
-        parentWindow.addEventListener("resize", update, { passive: true });
-        parentWindow.addEventListener("orientationchange", update, { passive: true });
-        parentWindow[OBSERVER_KEY] = observer;
-      }
-
-      update();
-      requestAnimationFrame(update);
-      [100, 300, 800].forEach((delay) => parentWindow.setTimeout(update, delay));
-    })();
-    </script>
-    """,
-    height=0,
-    width=0,
-)
-
 data = load_data()
+
+with st.expander("Menu diagnostics — temporary", expanded=True):
+    st.caption(
+        "Use this on the device where the closed-menu icon is missing. "
+        "Tap Test native menu, then screenshot the result."
+    )
+    components.html(
+        """
+        <div id="diag" style="
+          font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+          color:#25262d;
+          background:#f3f3f0;
+          border:1px solid #d7d9dd;
+          border-radius:12px;
+          padding:12px;
+          font-size:14px;
+          line-height:1.4;
+        ">
+          <div style="font-weight:700;margin-bottom:8px;">Closed-menu diagnostic</div>
+          <button id="test" type="button" style="
+            width:100%;
+            min-height:44px;
+            border:1px solid #f36c21;
+            border-radius:8px;
+            background:#f36c21;
+            color:white;
+            font-weight:700;
+            margin-bottom:10px;
+          ">Test native menu</button>
+          <pre id="output" style="
+            white-space:pre-wrap;
+            word-break:break-word;
+            margin:0;
+            padding:10px;
+            background:white;
+            border:1px solid #d7d9dd;
+            border-radius:8px;
+            color:#25262d;
+          ">Loading…</pre>
+        </div>
+        <script>
+        (() => {
+          const output = document.getElementById("output");
+          const button = document.getElementById("test");
+
+          const safe = (fn, fallback = null) => {
+            try { return fn(); } catch (error) { return fallback ?? String(error); }
+          };
+
+          const collect = () => {
+            const result = {
+              timestamp: new Date().toISOString(),
+              userAgent: navigator.userAgent,
+              viewport: `${window.innerWidth}x${window.innerHeight}`,
+              parentAccessible: false,
+              sameDocument: false,
+              nativeControlFound: false,
+              nativeControlForm: "none",
+              nativeControlTag: "",
+              nativeControlRect: null,
+              nativeDisplay: "",
+              nativeVisibility: "",
+              nativeOpacity: "",
+              nativePointerEvents: "",
+              sidebarFound: false,
+              sidebarRect: null,
+              sidebarDisplay: "",
+              sidebarVisibility: "",
+              sidebarOpenByGeometry: false,
+              error: ""
+            };
+
+            try {
+              const parentWindow = window.parent;
+              const doc = parentWindow.document;
+              result.parentAccessible = true;
+              result.sameDocument = doc === document;
+
+              const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
+              const directButton = wrapper && wrapper.matches("button") ? wrapper : null;
+              const nestedButton = wrapper ? wrapper.querySelector("button") : null;
+              const nativeControl = directButton || nestedButton || wrapper;
+
+              result.nativeControlFound = Boolean(nativeControl);
+              result.nativeControlForm = directButton
+                ? "direct button"
+                : nestedButton
+                  ? "nested button"
+                  : wrapper
+                    ? "wrapper only"
+                    : "none";
+
+              if (nativeControl) {
+                const rect = nativeControl.getBoundingClientRect();
+                const style = parentWindow.getComputedStyle(nativeControl);
+                result.nativeControlTag = nativeControl.tagName;
+                result.nativeControlRect = {
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height)
+                };
+                result.nativeDisplay = style.display;
+                result.nativeVisibility = style.visibility;
+                result.nativeOpacity = style.opacity;
+                result.nativePointerEvents = style.pointerEvents;
+              }
+
+              const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+              result.sidebarFound = Boolean(sidebar);
+              if (sidebar) {
+                const rect = sidebar.getBoundingClientRect();
+                const style = parentWindow.getComputedStyle(sidebar);
+                result.sidebarRect = {
+                  x: Math.round(rect.x),
+                  y: Math.round(rect.y),
+                  width: Math.round(rect.width),
+                  height: Math.round(rect.height),
+                  right: Math.round(rect.right)
+                };
+                result.sidebarDisplay = style.display;
+                result.sidebarVisibility = style.visibility;
+                result.sidebarOpenByGeometry = (
+                  style.display !== "none" &&
+                  style.visibility !== "hidden" &&
+                  rect.width > 40 &&
+                  rect.right > 8
+                );
+              }
+            } catch (error) {
+              result.error = String(error);
+            }
+
+            return result;
+          };
+
+          const render = (extra = {}) => {
+            const result = {...collect(), ...extra};
+            output.textContent = JSON.stringify(result, null, 2);
+            return result;
+          };
+
+          button.addEventListener("click", () => {
+            const before = collect();
+            let clickAttempted = false;
+            let clickError = "";
+
+            try {
+              const doc = window.parent.document;
+              const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
+              const target = wrapper
+                ? (wrapper.matches("button") ? wrapper : wrapper.querySelector("button") || wrapper)
+                : null;
+
+              if (target) {
+                clickAttempted = true;
+                target.click();
+              }
+            } catch (error) {
+              clickError = String(error);
+            }
+
+            window.setTimeout(() => {
+              render({
+                clickAttempted,
+                clickError,
+                beforeSidebarOpen: before.sidebarOpenByGeometry
+              });
+            }, 700);
+          });
+
+          render();
+          window.setTimeout(render, 500);
+          window.setTimeout(render, 1500);
+        })();
+        </script>
+        """,
+        height=500,
+        scrolling=True,
+    )
+
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
@@ -4849,7 +4904,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.14 · Safari menu and site status")
+st.sidebar.caption("v8.7.5.15 · Menu diagnostics")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
