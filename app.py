@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.7.1 Field Usability and Admin"
+APP_TITLE = "R1/M1 Field Trial — v8.7.2 Recovery and Integrity"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -644,16 +644,34 @@ def audit_change(data, record_type, record_id, field, previous, new, reason):
     ], ignore_index=True)
 
 
-def repair_missing_window(data, trap_id, reason="Missing deployment window repaired"):
+def repair_missing_window(data, trap_id, effective_time=None, reason="Missing test window repaired"):
     if open_window(data, trap_id) is not None:
         return str(open_window(data, trap_id)["Window ID"])
     tr = trap_row(data, trap_id)
-    deployment = parse_dt(tr["Deployment Start"])
-    if deployment is None:
-        raise ValueError("Set a valid deployment date and time before starting the missing window.")
-    wid = start_window(data, trap_id, deployment)
-    audit_change(data, "Trap", trap_id, "Active test window", "", wid, reason)
-    save_data(data)
+    history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)].copy()
+
+    if history.empty:
+        start_time = parse_dt(tr["Deployment Start"])
+        if start_time is None:
+            raise ValueError("Set a valid deployment date and time before starting the first window.")
+    else:
+        history["_end"] = history["End Time"].apply(parse_dt)
+        closed = history[history["Status"] == "Closed"].copy()
+        if effective_time is None:
+            raise ValueError(
+                "This trap has historical windows. Enter the correct effective time in Administration rather than restarting from deployment."
+            )
+        start_time = effective_time
+        latest_end = closed["_end"].dropna().max() if not closed.empty else None
+        if latest_end and start_time < latest_end:
+            raise ValueError("The new window cannot start before the latest historical window ended.")
+
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    wid = start_window(staged, trap_id, start_time)
+    audit_change(staged, "Trap", trap_id, "Active test window", "", wid, reason)
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
     return wid
 
 
@@ -691,7 +709,7 @@ def move_trap(data, trap_id, destination_site, effective_time, reason, route_ord
     return new_window
 
 
-def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason):
+def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason, commit=True):
     tr = trap_row(data, trap_id)
     old_product, old_build = str(tr["Product"]), str(tr["Build Version"])
     if old_product == new_product and old_build == new_build:
@@ -708,7 +726,8 @@ def change_trap_build(data, trap_id, new_product, new_build, effective_time, rea
     data["Traps"].at[idx, "Build Version"] = new_build
     new_window = start_window(data, trap_id, effective_time)
     audit_change(data, "Trap", trap_id, "Build Version", f"{old_product} · {old_build}", f"{new_product} · {new_build}", reason)
-    save_data(data)
+    if commit:
+        save_data(data)
     return new_window
 
 
@@ -968,17 +987,60 @@ def rollback_photo_files(paths) -> None:
 
 
 
-def remove_bundled_sample_data(data):
-    """Remove only records that exactly match the bundled clean seed, preserving user-created and referenced records."""
-    seed_path = APP_DIR / "field_trial_data_clean_seed.xlsx"
-    if not seed_path.exists():
-        raise FileNotFoundError("Bundled clean seed workbook was not found.")
-    seed = pd.read_excel(seed_path, sheet_name=None, dtype=str).copy()
-    cleaned = {name: frame.copy() for name, frame in data.items()}
-    removed = {}
+def workbook_summary(path: Path) -> Dict[str, int]:
+    summary = {}
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, dtype=str)
+        for name in SHEETS:
+            summary[name] = len(sheets.get(name, pd.DataFrame()))
+    except Exception:
+        return {}
+    return summary
 
-    # Remove leaf records first, but only exact seed rows.
-    order = ["Photos", "Followups", "Checks", "Visits", "Windows", "Traps", "Sites", "Builds"]
+
+def available_backups():
+    ensure_storage_ready()
+    return sorted(
+        BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def restore_backup(backup_path: Path):
+    backup_path = Path(backup_path)
+    if backup_path.parent.resolve() != BACKUP_DIR.resolve() or not backup_path.exists():
+        raise ValueError("The selected backup is not available.")
+    # Preserve the current state before restoring anything.
+    safety_copy = BACKUP_DIR / (
+        f"{DATA_FILE.stem}_pre_restore_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:6]}.xlsx"
+    )
+    if DATA_FILE.exists():
+        shutil.copy2(DATA_FILE, safety_copy)
+    temp_restore = DATA_ROOT / f".restore_{uuid.uuid4().hex}.xlsx"
+    shutil.copy2(backup_path, temp_restore)
+    try:
+        # Validate all expected sheets before replacing the live workbook.
+        restored = pd.read_excel(temp_restore, sheet_name=None, dtype=str)
+        missing = [name for name in SHEETS if name not in restored]
+        if missing:
+            raise ValueError("Backup is missing sheets: " + ", ".join(missing))
+        os.replace(temp_restore, DATA_FILE)
+    finally:
+        temp_restore.unlink(missing_ok=True)
+    return safety_copy
+
+
+def plan_demo_data_removal(data):
+    """Plan removal of bundled demo records without deleting referenced or modified real data."""
+    demo_path = APP_DIR / "field_trial_data_v8_6_5.xlsx"
+    if not demo_path.exists():
+        raise FileNotFoundError("Bundled demo workbook was not found.")
+    demo = pd.read_excel(demo_path, sheet_name=None, dtype=str)
+    current = {name: frame.fillna("").astype(str).copy() for name, frame in data.items()}
+    demo = {name: frame.fillna("").astype(str).copy() for name, frame in demo.items()}
+    planned = {name: set() for name in SHEETS}
+
     id_columns = {
         "Photos": "Photo ID",
         "Followups": "Follow-up ID",
@@ -989,57 +1051,140 @@ def remove_bundled_sample_data(data):
         "Sites": "Site ID",
     }
 
-    for sheet in order:
-        if sheet not in cleaned or sheet not in seed:
+    # Demo leaf records have stable IDs that real records do not use.
+    for sheet in ["Photos", "Followups", "Checks", "Visits", "Windows"]:
+        key = id_columns[sheet]
+        if key in current[sheet].columns and key in demo.get(sheet, pd.DataFrame()).columns:
+            planned[sheet] = set(current[sheet][key]) & set(demo[sheet][key])
+
+    # Protect any demo window referenced by non-demo records or photos.
+    protected_windows = set()
+    for child, col in [("Checks", "Window Closed"), ("Followups", "Window ID"), ("Photos", "Window ID")]:
+        if col not in current[child].columns:
             continue
-        current = cleaned[sheet].fillna("").astype(str)
-        baseline = seed[sheet].fillna("").astype(str)
+        child_key = id_columns.get(child)
+        for _, row in current[child].iterrows():
+            child_id = str(row.get(child_key, ""))
+            if child_id not in planned.get(child, set()):
+                protected_windows.add(str(row[col]))
+    planned["Windows"] -= protected_windows
+
+    # Protect demo visits referenced by non-demo checks/follow-ups.
+    protected_visits = set()
+    for child in ["Checks", "Followups"]:
+        for _, row in current[child].iterrows():
+            child_id = str(row.get(id_columns.get(child, ""), ""))
+            if child_id not in planned.get(child, set()):
+                protected_visits.add(str(row.get("Visit ID", "")))
+    planned["Visits"] -= protected_visits
+
+    # Traps and sites may only be removed when nothing remaining references them.
+    demo_traps = set(demo.get("Traps", pd.DataFrame()).get("Trap ID", pd.Series(dtype=str)))
+    demo_sites = set(demo.get("Sites", pd.DataFrame()).get("Site ID", pd.Series(dtype=str)))
+    for trap_id in demo_traps:
+        referenced = False
+        for child in ["Checks", "Windows", "Followups", "Photos"]:
+            if "Trap ID" not in current[child].columns:
+                continue
+            rows = current[child][current[child]["Trap ID"] == trap_id]
+            child_key = id_columns.get(child)
+            remaining = rows if not child_key else rows[~rows[child_key].isin(planned.get(child, set()))]
+            if not remaining.empty:
+                referenced = True
+                break
+        if not referenced:
+            planned["Traps"].add(trap_id)
+
+    for site_id in demo_sites:
+        referenced = False
+        for child in ["Traps", "Visits", "Windows", "Followups", "Photos"]:
+            if "Site ID" not in current[child].columns:
+                continue
+            rows = current[child][current[child]["Site ID"] == site_id]
+            child_key = id_columns.get(child)
+            remaining = rows if not child_key else rows[~rows[child_key].isin(planned.get(child, set()))]
+            if not remaining.empty:
+                referenced = True
+                break
+        if not referenced:
+            planned["Sites"].add(site_id)
+
+    # Builds are retained whenever any current trap/window uses them.
+    demo_build_keys = set(
+        tuple(row) for row in demo.get("Builds", pd.DataFrame())[["Product", "Build Version"]].itertuples(index=False, name=None)
+    ) if not demo.get("Builds", pd.DataFrame()).empty else set()
+    used_builds = set()
+    for sheet in ["Traps", "Windows"]:
+        if {"Product", "Build Version"}.issubset(current[sheet].columns):
+            used_builds |= set(tuple(row) for row in current[sheet][["Product", "Build Version"]].itertuples(index=False, name=None))
+    planned["Builds"] = demo_build_keys - used_builds
+
+    counts = {name: len(values) for name, values in planned.items()}
+    return planned, counts
+
+
+def commit_demo_data_removal(data, planned, reason):
+    """Apply a reviewed demo-removal plan to a copied dataset, then save once."""
+    updated = {name: frame.copy(deep=True) for name, frame in data.items()}
+    id_columns = {
+        "Photos": "Photo ID",
+        "Followups": "Follow-up ID",
+        "Checks": "Check ID",
+        "Visits": "Visit ID",
+        "Windows": "Window ID",
+        "Traps": "Trap ID",
+        "Sites": "Site ID",
+    }
+    for sheet, ids in planned.items():
+        if not ids or sheet not in updated:
+            continue
         if sheet == "Builds":
-            key_cols = ["Product", "Build Version"]
-            seed_keys = set(tuple(row) for row in baseline[key_cols].itertuples(index=False, name=None))
-            mask = current[key_cols].apply(tuple, axis=1).isin(seed_keys)
+            key_series = updated[sheet][["Product", "Build Version"]].astype(str).apply(tuple, axis=1)
+            updated[sheet] = updated[sheet].loc[~key_series.isin(ids)].reset_index(drop=True)
         else:
             key = id_columns.get(sheet)
-            if not key or key not in current.columns or key not in baseline.columns:
-                continue
-            seed_ids = set(baseline[key].tolist())
-            mask = current[key].isin(seed_ids)
+            if key and key in updated[sheet].columns:
+                updated[sheet] = updated[sheet].loc[
+                    ~updated[sheet][key].astype(str).isin(ids)
+                ].reset_index(drop=True)
 
-        # Preserve parent rows still referenced by non-seed/current records.
-        if sheet == "Traps":
-            referenced = set()
-            for child, col in [("Checks", "Trap ID"), ("Windows", "Trap ID"), ("Followups", "Trap ID"), ("Photos", "Trap ID")]:
-                if child in cleaned and col in cleaned[child].columns:
-                    referenced |= set(cleaned[child][col].astype(str))
-            mask &= ~current["Trap ID"].isin(referenced)
-        elif sheet == "Sites":
-            referenced = set()
-            for child, col in [("Traps", "Site ID"), ("Visits", "Site ID"), ("Windows", "Site ID"), ("Followups", "Site ID"), ("Photos", "Site ID")]:
-                if child in cleaned and col in cleaned[child].columns:
-                    referenced |= set(cleaned[child][col].astype(str))
-            mask &= ~current["Site ID"].isin(referenced)
-        elif sheet == "Builds":
-            referenced = set()
-            if "Traps" in cleaned:
-                referenced |= set(zip(cleaned["Traps"]["Product"].astype(str), cleaned["Traps"]["Build Version"].astype(str)))
-            if "Windows" in cleaned:
-                referenced |= set(zip(cleaned["Windows"]["Product"].astype(str), cleaned["Windows"]["Build Version"].astype(str)))
-            mask &= ~current[key_cols].apply(tuple, axis=1).isin(referenced)
-
-        removed[sheet] = int(mask.sum())
-        cleaned[sheet] = cleaned[sheet].loc[~mask].reset_index(drop=True)
+    # Referential-integrity proof before commit.
+    references = [
+        ("Checks", "Visit ID", "Visits", "Visit ID"),
+        ("Checks", "Trap ID", "Traps", "Trap ID"),
+        ("Checks", "Window Closed", "Windows", "Window ID"),
+        ("Windows", "Trap ID", "Traps", "Trap ID"),
+        ("Followups", "Visit ID", "Visits", "Visit ID"),
+        ("Followups", "Trap ID", "Traps", "Trap ID"),
+        ("Followups", "Window ID", "Windows", "Window ID"),
+        ("Photos", "Check ID", "Checks", "Check ID"),
+        ("Photos", "Window ID", "Windows", "Window ID"),
+        ("Photos", "Trap ID", "Traps", "Trap ID"),
+    ]
+    broken = []
+    for child, child_col, parent, parent_col in references:
+        if child_col not in updated[child].columns or parent_col not in updated[parent].columns:
+            continue
+        parent_ids = set(updated[parent][parent_col].astype(str))
+        child_ids = set(updated[child][child_col].astype(str)) - {""}
+        missing = sorted(child_ids - parent_ids)
+        if missing:
+            broken.append(f"{child}.{child_col} → {parent}.{parent_col}: {len(missing)} missing")
+    if broken:
+        raise RuntimeError("Removal blocked because it would break linked records: " + "; ".join(broken))
 
     audit_change(
-        cleaned,
+        updated,
         "Workbook",
         "FIELD_DATA",
-        "Bundled sample data",
+        "Bundled demo data",
         "Present",
         "Removed",
-        "Removed bundled seed records while preserving user-created and referenced records",
+        reason,
     )
-    save_data(cleaned)
-    return cleaned, removed
+    save_data(updated)
+    return updated
+
 
 
 def nav_go(page: str):
@@ -2493,13 +2638,15 @@ elif page == "check":
                 st.rerun()
             st.stop()
 
-        old_id = close_window(data, trap_id, check_time, finding, bag_id)
+        original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+        staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+        old_id = close_window(staged, trap_id, check_time, finding, bag_id)
         will_start = bool(assessable and service_ready and camera_ready)
-        new_id = start_window(data, trap_id, check_time) if will_start else ""
-        idxs = data["Windows"].index[data["Windows"]["Window ID"] == old_id].tolist()
+        new_id = start_window(staged, trap_id, check_time) if will_start else ""
+        idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
         if idxs:
-            data["Windows"].at[idxs[0], "Species"] = species
-            data["Windows"].at[idxs[0], "Rat Type"] = rat_type
+            staged["Windows"].at[idxs[0], "Species"] = species
+            staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
 
         check_id = make_id("CHK")
         trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
@@ -2512,25 +2659,25 @@ elif page == "check":
             trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
             (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
         ]
-        data["Checks"] = pd.concat([data["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
+        staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
 
         if assessable and camera_assigned:
             priority = "High" if finding == "Trap fired, no animal" else "Normal"
-            add_followup(data, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
+            add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
                          "Confirm target interaction, activation, kill and video evidence", priority)
         if has_animal:
-            add_followup(data, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
+            add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
                          "Dead animal collected",
                          "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
         if assessable and not service_ready:
-            add_followup(data, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
+            add_followup(staged, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
                          service_reason, "Restore the trap to service and record the outcome", "High")
         if camera_issue_required(camera_assigned, camera, covers):
-            add_followup(data, "Camera issue", sid, trap_id, vid, old_id, bag_id,
+            add_followup(staged, "Camera issue", sid, trap_id, vid, old_id, bag_id,
                          "Camera issue", "Resolve camera condition and record the evidence gap", "High")
 
-        refresh_review_status(data, old_id)
-        photos_before = data["Photos"].copy()
+        refresh_review_status(staged, old_id)
+        photos_before = staged["Photos"].copy()
         saved_photo_files = []
         try:
             prepared_rows, saved_photo_files = prepare_check_photos(
@@ -2545,22 +2692,25 @@ elif page == "check":
             if missing_files:
                 raise RuntimeError("One or more photo files were not present after saving.")
             if prepared_rows:
-                data["Photos"] = pd.concat(
+                staged["Photos"] = pd.concat(
                     [data["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
                     ignore_index=True,
                 )
             committed_photo_rows = len(
-                data["Photos"][data["Photos"]["Check ID"].astype(str) == str(check_id)]
+                staged["Photos"][staged["Photos"]["Check ID"].astype(str) == str(check_id)]
             )
             if committed_photo_rows != expected_photo_count:
                 raise RuntimeError(
                     f"Photo record mismatch: expected {expected_photo_count}, recorded {committed_photo_rows}."
                 )
-            save_data(data)
+            save_data(staged)
+            for name in data:
+                data[name] = staged[name]
         except Exception as exc:
             rollback_photo_files(saved_photo_files)
-            data["Photos"] = photos_before
-            st.error(f"Save failed. No check or photo record was committed: {exc}")
+            for name in data:
+                data[name] = original_data[name]
+            st.error(f"Save failed. No check, window, follow-up or photo record was committed: {exc}")
             st.stop()
 
         for key in [
@@ -2820,7 +2970,11 @@ elif page == "followups":
                     c1,c2,c3,action=st.columns([1.1,1.25,1.65,0.62],vertical_alignment="center")
                     c1.markdown(f"**{item_row['Trap ID']}**"); c1.caption(site_name(data,item_row["Site ID"]))
                     c2.write(item_row["Follow-up Type"]); c2.caption(item_row["Priority"])
-                    c3.write(item_row["Reason"] or "—"); c3.caption(f"Created {human_dt(item_row['Created Time'])}")
+                    if str(item_row.get("Bag ID", "")).strip():
+                        c3.markdown(f"**Bag {item_row['Bag ID']}**")
+                        c3.caption(f"{item_row['Reason'] or 'Dead animal follow-up'} · Created {human_dt(item_row['Created Time'])}")
+                    else:
+                        c3.write(item_row["Reason"] or "—"); c3.caption(f"Created {human_dt(item_row['Created Time'])}")
                     if action.button("Review",key=f"followup_review_{row_fid}",use_container_width=True):
                         st.session_state.followup_panel=row_fid; st.rerun()
     else:
@@ -2833,7 +2987,7 @@ elif page == "followups":
             item=matches.iloc[0]; fid=item["Follow-up ID"]; tr=trap_row(data,item["Trap ID"])
             if st.button("← Back to task list", key="back_followup_list"):
                 st.session_state.pop("followup_panel",None); st.rerun()
-            header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}")
+            header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}" + (f" · Bag {item['Bag ID']}" if str(item.get("Bag ID", "")).strip() else ""))
 
             linked_windows=data["Windows"][data["Windows"]["Window ID"]==item["Window ID"]]
             linked_window=linked_windows.iloc[0] if not linked_windows.empty else None
@@ -3429,22 +3583,32 @@ elif page == "setup":
                     else:
                         selected_build = available_builds[available_builds["Label"] == bulk_label].iloc[0]
                         effective = datetime.combine(bulk_date, bulk_time).replace(microsecond=0)
-                        snapshot = {name: frame.copy() for name, frame in data.items()}
+                        staged = {name: frame.copy(deep=True) for name, frame in data.items()}
                         try:
+                            # Validate every selected trap before changing any record.
+                            for selected_trap in selected_traps:
+                                tr_current = trap_row(staged, selected_trap)
+                                if (
+                                    str(tr_current["Product"]) == str(selected_build["Product"])
+                                    and str(tr_current["Build Version"]) == str(selected_build["Build Version"])
+                                ):
+                                    raise ValueError(f"{selected_trap} is already on {bulk_label}.")
                             for selected_trap in selected_traps:
                                 change_trap_build(
-                                    data,
+                                    staged,
                                     selected_trap,
                                     str(selected_build["Product"]),
                                     str(selected_build["Build Version"]),
                                     effective,
                                     bulk_reason.strip(),
+                                    commit=False,
                                 )
+                            save_data(staged)
+                            for name in data:
+                                data[name] = staged[name]
                             set_flash("success", f"{len(selected_traps)} traps changed to {bulk_label}.")
                             st.rerun()
                         except Exception as exc:
-                            data = snapshot
-                            save_data(data)
                             st.error(f"No build changes were committed: {exc}")
 
             view=data["Traps"].copy()
@@ -3951,7 +4115,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.1 · Field Usability and Admin")
+st.sidebar.caption("v8.7.2 · Recovery and Integrity")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
@@ -3964,26 +4128,69 @@ else:
 
 
     st.divider()
-    st.markdown("### Remove bundled sample data")
-    st.caption("Removes only records matching the shipped seed workbook. User-created records and anything still referenced are preserved.")
-    confirm_cleanup = st.checkbox(
-        "I understand this removes bundled sample records from the live workbook",
-        key="confirm_remove_seed_data",
-    )
-    if st.button(
-        "Remove bundled sample data",
-        key="remove_seed_data",
-        disabled=not confirm_cleanup,
-    ):
-        try:
-            data, removed_counts = remove_bundled_sample_data(data)
-            removed_total = sum(removed_counts.values())
-            details = [f"{name}: {count}" for name, count in removed_counts.items() if count]
-            set_flash(
-                "success",
-                f"{removed_total} bundled sample record{'s' if removed_total != 1 else ''} removed.",
-                details or ["No matching sample records remained."],
+    st.markdown("### Recovery and bundled data")
+
+    st.markdown("#### Restore a workbook backup")
+    backups = available_backups()
+    if backups:
+        backup_options = [str(path) for path in backups]
+        selected_backup = st.selectbox(
+            "Backup",
+            backup_options,
+            format_func=lambda value: f"{Path(value).name} · {workbook_summary(Path(value))}",
+            key="recovery_backup_select",
+        )
+        st.caption("Restoring creates a safety copy of the current workbook first.")
+        confirm_restore = st.checkbox(
+            "I understand this replaces the current workbook with the selected backup",
+            key="confirm_restore_backup",
+        )
+        if st.button("Restore selected backup", type="primary", disabled=not confirm_restore):
+            try:
+                safety_copy = restore_backup(Path(selected_backup))
+                set_flash(
+                    "success",
+                    "Backup restored.",
+                    [f"Restored {Path(selected_backup).name}.", f"Previous current state preserved as {safety_copy.name}."],
+                )
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Backup was not restored: {exc}")
+    else:
+        st.warning("No workbook backups were found on the persistent disk.")
+
+    st.markdown("#### Remove bundled demo records")
+    st.caption("This now uses the full bundled demo workbook, including its follow-up tasks. It previews the exact removal plan and blocks any broken references.")
+    try:
+        demo_plan, demo_counts = plan_demo_data_removal(data)
+        preview_rows = [{"Record type": name, "Planned removal": count} for name, count in demo_counts.items() if count]
+        if preview_rows:
+            st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
+            cleanup_reason = st.text_area(
+                "Reason",
+                value="Remove bundled demo records after first field trial",
+                key="safe_demo_cleanup_reason",
             )
-            st.rerun()
-        except Exception as exc:
-            st.error(f"Sample data was not removed: {exc}")
+            confirm_cleanup = st.checkbox(
+                "I have reviewed the plan above",
+                key="confirm_safe_demo_cleanup",
+            )
+            if st.button(
+                "Remove reviewed demo records",
+                disabled=not confirm_cleanup,
+                key="commit_safe_demo_cleanup",
+            ):
+                try:
+                    data = commit_demo_data_removal(data, demo_plan, cleanup_reason.strip())
+                    set_flash(
+                        "success",
+                        "Bundled demo records removed.",
+                        [f"{sum(demo_counts.values())} reviewed records removed, including matching demo follow-up tasks."],
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Demo records were not removed: {exc}")
+        else:
+            st.success("No removable bundled demo records remain.")
+    except Exception as exc:
+        st.error(f"Could not prepare the demo-removal plan: {exc}")

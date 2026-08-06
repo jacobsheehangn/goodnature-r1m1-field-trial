@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.7.1 Field Usability and Admin
+# R1/M1 Field Trial App — v8.7.2 Recovery and Integrity
 
 ## Deployment requirement
 
@@ -686,3 +686,16 @@ System-level changes from the first field trial:
 - bulk build change
 - planned-versus-actual visit timing label
 - controlled removal of bundled sample records
+
+
+## v8.7.2 recovery and integrity
+
+- restore any retained workbook backup, preserving the current state first
+- replace unsafe seed cleanup with dependency-aware full demo cleanup
+- include bundled demo follow-up tasks in cleanup
+- prove referential integrity before cleanup commit
+- stage the full trap-check transaction before one workbook save
+- roll back checks, windows, follow-ups and files together on failure
+- save bulk build changes once after validating all selected traps
+- prevent deployment-time repair when historical windows exist
+- show Bag ID prominently in follow-up lists and task headers
