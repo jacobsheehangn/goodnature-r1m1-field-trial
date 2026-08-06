@@ -1,68 +1,102 @@
-name: R1M1 release gate
+name: R1M1 release evidence
 
 on:
-  push:
+  pull_request:
     branches:
       - main
-
   workflow_dispatch:
     inputs:
       run_live_smoke:
-        description: Run the optional deployed Render smoke test
+        description: "Run the read-only Render staging smoke gate"
         required: false
-        default: false
+        default: true
+        type: boolean
+      package_candidate:
+        description: "Create a candidate ZIP only after all mandatory local gates pass"
+        required: false
+        default: true
         type: boolean
 
+permissions:
+  contents: read
+
 jobs:
-  release-gate:
-    name: Required release gate
+  local-evidence-gates:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install dependencies
+      - name: Install application and test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -r requirements-test.txt
           playwright install --with-deps chromium
 
-      - name: Static and workbook checks
-        run: python tests/release_gate.py
+      - name: Reset evidence directory
+        run: python scripts/reset_evidence.py
 
-      - name: Deterministic local browser tests
-        run: pytest tests/test_local_app.py
+      - name: Code and fixture-data gate
+        run: python tests/release_gate.py | tee evidence/code-data-gate.json
 
-      - name: Upload test screenshots
+      - name: Real browser workflow and visual evidence gate
+        env:
+          R1M1_CAPTURE_EVIDENCE: "1"
+        run: pytest -q tests/test_local_app.py --junitxml=evidence/browser-junit.xml
+
+      - name: Build and verify release evidence manifest
+        if: always()
+        run: python scripts/build_gate_report.py
+
+      - name: Enforce definition of done
+        run: python scripts/verify_release_evidence.py
+
+      - name: Upload complete evidence bundle
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: r1m1-local-test-screenshots
-          path: tests/screenshots
-          if-no-files-found: ignore
+          name: r1m1-release-evidence-${{ github.sha }}
+          path: evidence
+          if-no-files-found: error
+          retention-days: 30
 
-  deployed-smoke:
-    name: Optional deployed app smoke test
+      - name: Package candidate only after gates pass
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_candidate }}
+        run: python scripts/package_candidate.py
+
+      - name: Upload candidate package
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.package_candidate }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: r1m1-candidate-${{ github.sha }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  live-staging-smoke:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_smoke }}
-    needs: release-gate
-    continue-on-error: true
+    needs: local-evidence-gates
     runs-on: ubuntu-latest
-
+    timeout-minutes: 15
+    env:
+      R1M1_TEST_URL: ${{ secrets.R1M1_TEST_URL }}
+      R1M1_TEST_PASSWORD: ${{ secrets.R1M1_TEST_PASSWORD }}
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Require staging secrets
+        run: |
+          test -n "$R1M1_TEST_URL" || (echo "Missing R1M1_TEST_URL" && exit 1)
+          test -n "$R1M1_TEST_PASSWORD" || (echo "Missing R1M1_TEST_PASSWORD" && exit 1)
 
       - name: Install smoke-test dependencies
         run: |
@@ -70,8 +104,15 @@ jobs:
           pip install -r requirements-test.txt
           playwright install --with-deps chromium
 
-      - name: Run optional deployed app smoke test
-        env:
-          R1M1_TEST_URL: ${{ secrets.R1M1_TEST_URL }}
-          R1M1_TEST_PASSWORD: ${{ secrets.R1M1_TEST_PASSWORD }}
-        run: pytest tests/test_live_smoke.py
+      - name: Read-only live staging smoke
+        run: pytest -q tests/test_live_smoke.py --junitxml=live-staging-junit.xml
+
+      - name: Upload staging evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r1m1-live-staging-evidence-${{ github.sha }}
+          path: |
+            live-staging-junit.xml
+            tests/screenshots/live
+          if-no-files-found: warn
