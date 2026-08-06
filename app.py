@@ -867,7 +867,7 @@ def add_pending_photo(
 
 
 def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
-    """One-tap upload-only photo flow using the device's normal picker."""
+    """Upload-only photo queue that stays compact before and after processing."""
     photo_key = photo_session_key(visit_id, trap_id)
     nonce_key = photo_widget_nonce_key(visit_id, trap_id)
     st.session_state.setdefault(photo_key, [])
@@ -875,7 +875,6 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
 
     photos = st.session_state[photo_key]
     nonce = int(st.session_state.get(nonce_key, 0))
-
     uploaded = st.file_uploader(
         "Add photos",
         type=["jpg", "jpeg", "png", "webp"],
@@ -887,15 +886,10 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
         added_count = 0
         duplicate_count = 0
         for uploaded_file in uploaded:
-            added = add_pending_photo(
-                visit_id,
-                trap_id,
-                uploaded_file.getvalue(),
-                uploaded_file.type or "image/jpeg",
-                "Check evidence",
-                "Upload",
-            )
-            if added:
+            if add_pending_photo(
+                visit_id, trap_id, uploaded_file.getvalue(),
+                uploaded_file.type or "image/jpeg", "Check evidence", "Upload"
+            ):
                 added_count += 1
             else:
                 duplicate_count += 1
@@ -906,32 +900,29 @@ def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
         st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
         st.rerun()
 
-    feedback_key = f"photo_feedback_{visit_id}_{trap_id}"
-    feedback = st.session_state.pop(feedback_key, None)
+    feedback = st.session_state.pop(f"photo_feedback_{visit_id}_{trap_id}", None)
     if feedback:
         st.caption(feedback)
 
     if photos:
-        st.caption(
-            f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save"
-        )
-        per_row = 5
-        for row_start in range(0, len(photos), per_row):
-            row_photos = list(photos)[row_start:row_start + per_row]
-            cols = st.columns(per_row)
-            for offset, photo in enumerate(row_photos):
-                photo_index = row_start + offset
-                with cols[offset]:
-                    st.image(photo["bytes"], width=64)
-                    if st.button(
-                        "×",
-                        key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
-                        help="Remove photo",
-                        use_container_width=True,
-                    ):
-                        st.session_state[photo_key].pop(photo_index)
-                        st.rerun()
-
+        st.caption(f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save")
+        with st.container():
+            st.markdown('<span class="photo-grid-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+            for row_start in range(0, len(photos), 3):
+                row_photos = list(photos)[row_start:row_start + 3]
+                cols = st.columns(3, gap="small")
+                for offset, photo in enumerate(row_photos):
+                    photo_index = row_start + offset
+                    with cols[offset]:
+                        st.image(photo["bytes"], width=72)
+                        if st.button(
+                            "Remove",
+                            key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
+                            help="Remove photo",
+                            use_container_width=False,
+                        ):
+                            st.session_state[photo_key].pop(photo_index)
+                            st.rerun()
 
 
 def compress_photo_bytes(raw_bytes: bytes) -> bytes:
@@ -1382,7 +1373,7 @@ def app_card():
 
 
 def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> None:
-    """One stable trap-card component for both field states."""
+    """Compact field card with one checked-state indicator."""
     trap_id = str(tr["Trap ID"])
     product_build = f"{tr['Product']} · {tr['Build Version']}"
     location = trap_location_label(tr)
@@ -1391,27 +1382,25 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> No
     if checked:
         st.markdown(
             '<div class="visit-trap-card is-checked">'
-            '<div class="visit-trap-primary">'
-            f'<div class="visit-trap-id">{html.escape(trap_id)}</div>'
-            f'<div class="visit-trap-meta">{html.escape(product_build)}</div>'
+            '<div class="visit-trap-copy">'
+            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><strong class="visit-trap-status">✓ Checked</strong></div>'
+            f'<div class="visit-trap-line"><span>{html.escape(location)}</span><span class="visit-trap-meta">{html.escape(product_build)}</span></div>'
             '</div>'
-            '<div class="visit-trap-secondary">'
-            f'<div class="visit-trap-location">{html.escape(location)}</div>'
-            '<div class="visit-trap-status">✓ Checked</div>'
-            '</div>'
-            '<div class="visit-trap-checkmark" aria-label="Checked">✓</div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
 
     with st.container(border=True):
-        c1, c2, action = st.columns([1.05, 1.7, .72], vertical_alignment="center")
-        c1.markdown(f"**{trap_id}**")
-        c1.caption(product_build)
-        c2.write(location)
-        c2.caption(f"Route reference {route} · Not checked")
-        if action.button("Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True):
+        st.markdown('<span class="visit-unchecked-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="visit-trap-copy">'
+            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><span>{html.escape(location)}</span></div>'
+            f'<div class="visit-trap-line"><span class="visit-trap-meta">{html.escape(product_build)}</span><span class="visit-trap-meta">Route {html.escape(route)} · Not checked</span></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True):
             go("check", site_id=site_id, visit_id=visit_id, trap_id=trap_id)
 
 
@@ -2378,6 +2367,110 @@ button[kind="secondary"]:hover,
 </style>
 """, unsafe_allow_html=True)
 
+
+# v8.7.5 system-level visual repair. This is intentionally the final CSS layer.
+st.markdown("""
+<style>
+:root, html, body { color-scheme: only light !important; }
+[data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stMainBlockContainer"],
+[data-testid="stHeader"], [data-testid="stSidebar"], [data-testid="stSidebar"] > div {
+  background: #fff !important; color: #25262d !important;
+}
+header[data-testid="stHeader"] { border: 0 !important; box-shadow: none !important; }
+header[data-testid="stHeader"]::before, header[data-testid="stHeader"]::after { display:none !important; }
+
+/* Native controls: force readable light surfaces, including iOS dark preference. */
+input, textarea, select, button,
+[data-baseweb="input"], [data-baseweb="input"] > div,
+[data-baseweb="textarea"], [data-baseweb="textarea"] > div,
+[data-baseweb="select"], [data-baseweb="select"] > div,
+[data-baseweb="base-input"], [data-baseweb="base-input"] > div,
+[data-testid="stFileUploader"], [data-testid="stFileUploader"] section,
+[data-testid="stFileUploader"] section > div,
+[data-testid="stExpander"], [data-testid="stExpander"] details,
+[data-testid="stExpander"] summary,
+[data-testid="stDateInput"], [data-testid="stTimeInput"] {
+  color-scheme: only light !important;
+  background-color: #fff !important;
+  color: #25262d !important;
+}
+[data-testid="stFileUploader"] section { border-color:#d7d9dd !important; }
+[data-testid="stFileUploader"] small, [data-testid="stFileUploader"] span,
+[data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color:#25262d !important; }
+[data-testid="stTimeInput"] input, [data-testid="stDateInput"] input { background:#fff !important; color:#25262d !important; }
+
+/* Keep app navigation controls visible in every state. */
+[data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarCollapseButton"],
+[data-testid="stSidebarCollapsedControl"] button, [data-testid="stSidebarCollapseButton"] button {
+  opacity:1 !important; visibility:visible !important; color:#25262d !important; background:transparent !important;
+}
+[data-testid="stSidebarCollapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stSidebarCollapsedControl"] svg *, [data-testid="stSidebarCollapseButton"] svg * {
+  display:initial !important; visibility:visible !important; opacity:1 !important;
+  stroke:#25262d !important; color:#25262d !important;
+}
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="stSidebarCollapsedControl"] button::after { content:none !important; display:none !important; }
+[data-testid="stSidebar"] details > summary svg { display:initial !important; visibility:visible !important; opacity:1 !important; color:#25262d !important; }
+[data-testid="stSidebar"] details > summary svg * { stroke:#25262d !important; }
+[data-testid="stSidebar"] details > summary::after { content:none !important; display:none !important; }
+
+/* Compact field cards. */
+.visit-trap-card { min-height:0 !important; padding:.9rem 1rem !important; display:block !important; margin-bottom:.7rem !important; }
+.visit-trap-copy { display:grid; gap:.35rem; width:100%; }
+.visit-trap-line { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
+.visit-trap-meta { color:#737780; font-size:.9rem; }
+.visit-trap-status { color:#22683d; white-space:nowrap; }
+.visit-trap-card.is-checked { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) { margin-bottom:.7rem !important; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:.85rem 1rem !important; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
+
+/* Completed site state and compact site metadata. */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
+.site-card-compact { display:grid; gap:.35rem; }
+.site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:1.05rem; }
+.site-card-status { color:#22683d; font-size:.9rem; font-weight:700; white-space:nowrap; }
+.site-card-meta { color:#737780; font-size:.9rem; }
+
+/* Photo queue stays a real grid on mobile; no full-width remove bars. */
+[data-testid="stVerticalBlock"]:has(.photo-grid-marker) [data-testid="stHorizontalBlock"] {
+  display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important; gap:.55rem !important;
+}
+[data-testid="stVerticalBlock"]:has(.photo-grid-marker) [data-testid="column"] {
+  width:calc(33.333% - .4rem) !important; flex:1 1 0 !important; min-width:0 !important;
+}
+[data-testid="stVerticalBlock"]:has(.photo-grid-marker) img {
+  width:72px !important; height:72px !important; object-fit:cover !important; border-radius:9px !important; margin:0 auto !important;
+}
+[data-testid="stVerticalBlock"]:has(.photo-grid-marker) .stButton button {
+  min-height:2rem !important; height:2rem !important; width:auto !important; padding:0 .55rem !important;
+  font-size:.78rem !important; margin:.3rem auto 0 !important; display:block !important;
+}
+
+@media (max-width:700px) {
+  .block-container { padding-top:calc(5rem + env(safe-area-inset-top)) !important; }
+  h1 { font-size:2.35rem !important; line-height:1.05 !important; }
+  .visit-trap-line, .site-card-heading { gap:.55rem; }
+  .visit-trap-meta, .site-card-meta { font-size:.82rem; }
+  [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom:.75rem !important; }
+}
+</style>
+""", unsafe_allow_html=True)
+
+components.html("""
+<script>
+(() => {
+  const doc = window.parent.document;
+  doc.documentElement.style.colorScheme = 'light';
+  doc.body.style.colorScheme = 'light';
+  let meta = doc.querySelector('meta[name="color-scheme"]');
+  if (!meta) { meta = doc.createElement('meta'); meta.name = 'color-scheme'; doc.head.appendChild(meta); }
+  meta.content = 'only light';
+})();
+</script>
+""", height=0, width=0)
+
 require_authentication()
 show_environment_banner()
 data = load_data()
@@ -2501,7 +2594,6 @@ components.html(
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
 page = st.session_state.page
-scroll_to_top_once()
 show_flash()
 
 is_demo_data = any(data[name].astype(str).apply(lambda col: col.str.contains("synthetic|sample", case=False, na=False)).any().any() for name in ["Sites", "Windows"] if not data[name].empty)
@@ -2519,19 +2611,22 @@ if page == "sites":
         active = active_visit(data, sid); last = latest_completed_visit(data, sid)
         interval = int(float(s["Visit Interval Days"] or 3)); last_dt = parse_dt(last["End Time"]) if last is not None else None
         next_dt = last_dt + timedelta(days=interval) if last_dt else now()
+        completed_today = bool(last_dt and last_dt.date() == now().date())
         with app_card():
+            if completed_today:
+                st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+            status_text = "Completed today" if completed_today else ("Visit in progress" if active is not None else "")
             st.markdown(
-                f'<h3 class="site-card-title">{html.escape(str(s["Site Name"]))}</h3>',
+                '<div class="site-card-compact">'
+                f'<div class="site-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong><span class="site-card-status">{html.escape(status_text)}</span></div>'
+                f'<div class="site-card-meta">{len(traps)} active traps · Every {interval} days</div>'
+                f'<div class="site-card-meta">Last: {last_dt.strftime("%d %b %Y") if last_dt else "Not completed"} · Next: {"Due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
+                '</div>',
                 unsafe_allow_html=True,
             )
-            st.caption(f"{len(traps)} active traps · Visit every {interval} days")
-            st.write(f"Last completed: **{last_dt.strftime('%d %b %Y') if last_dt else 'No completed visit yet'}**")
-            if last is not None:
-                st.caption(f"Visit timing: {visit_timing_label(data, sid, last)}")
-            st.write(f"Next visit: **{'Due now' if next_dt.date() <= now().date() else next_dt.strftime('%d %b %Y')}**")
             if active is not None:
                 checks = data["Checks"][data["Checks"]["Visit ID"] == active["Visit ID"]]
-                st.caption(f"Visit in progress · {len(checks)} of {len(traps)} checked")
+                st.caption(f"{len(checks)} of {len(traps)} traps checked")
                 if st.button("Resume checking", key=f"resume_{sid}", type="primary"):
                     go("visit", site_id=sid, visit_id=active["Visit ID"])
             else:
@@ -2630,7 +2725,13 @@ elif page == "visit":
     traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
     traps = traps.sort_values(["_checked", "Product", "_route", "Trap ID"])
 
-    st.caption(f"{len(done)} of {len(data['Traps'][(data['Traps']['Site ID']==sid) & (data['Traps']['Status']=='Active')])} traps checked")
+    total_traps = len(data['Traps'][(data['Traps']['Site ID']==sid) & (data['Traps']['Status']=='Active')])
+    checked_count = len(done)
+    progress_value = min(1.0, checked_count / total_traps) if total_traps else 0.0
+    st.progress(progress_value, text=f"{checked_count} of {total_traps} traps checked")
+    all_checked = total_traps > 0 and checked_count >= total_traps
+    if all_checked:
+        message_panel("success", f"All {total_traps} traps checked", ["Finish the site check to record completion."])
     if traps.empty:
         helper("No traps match this filter.")
     else:
@@ -2639,15 +2740,24 @@ elif page == "visit":
             checked = trap_id in done
             render_visit_trap_card(tr, checked, vid, sid)
 
-    finish_col, pause_col = st.columns(2)
-    if finish_col.button("Finish site check", type="primary", use_container_width=True):
-        idx = data["Visits"].index[data["Visits"]["Visit ID"] == vid][0]
-        data["Visits"].at[idx, "End Time"] = dtstr()
-        data["Visits"].at[idx, "Status"] = "Complete"
-        save_data(data)
-        go("sites")
-    if pause_col.button("Pause and return to Trap sites", use_container_width=True):
-        go("sites")
+    st.markdown("### Site check actions")
+    with st.container(border=True):
+        if st.button(
+            "Finish site check",
+            type="primary",
+            use_container_width=True,
+            disabled=not all_checked,
+            help="Check every active trap before completing the site visit." if not all_checked else None,
+        ):
+            idx = data["Visits"].index[data["Visits"]["Visit ID"] == vid][0]
+            data["Visits"].at[idx, "End Time"] = dtstr()
+            data["Visits"].at[idx, "Status"] = "Complete"
+            save_data(data)
+            set_flash("success", f"{site_name(data, sid)} site check completed", [f"All {total_traps} traps were checked."])
+            st.session_state.completed_site_id = sid
+            go("sites")
+        if st.button("Pause and return to Trap sites", use_container_width=True):
+            go("sites")
 
 elif page == "check":
     sid, vid, trap_id = st.session_state.site_id, st.session_state.visit_id, st.session_state.trap_id
@@ -2776,7 +2886,9 @@ elif page == "check":
     else:
         d = tm = None
 
-    if st.button("Save check", type="primary", key=f"save_check_{trap_id}_{vid}"):
+    if st.button("Save check", type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True):
+        saving_feedback = st.empty()
+        saving_feedback.info("Saving check… Do not tap again.")
         errors = []
         if has_animal and not species:
             errors.append("Choose the species.")
@@ -3664,7 +3776,8 @@ elif page == "trap_edit":
         go("setup")
 
     st.divider()
-    with st.expander("Move trap"):
+    show_move = st.toggle("Move trap", key=f"show_move_{trap_id}")
+    if show_move:
         active_destinations = data["Sites"][
             (data["Sites"]["Status"] == "Active")
             & (data["Sites"]["Site ID"] != existing["Site ID"])
@@ -3734,54 +3847,6 @@ elif page == "setup":
             site_filter = filter_col.selectbox("Show traps from", ["All sites"] + data["Sites"]["Site ID"].tolist(), format_func=lambda x: x if x=="All sites" else site_name(data,x), key="setup_trap_site")
             if action_col.button("Add trap", type="primary"):
                 st.session_state.setup_trap=""; st.session_state.setup_mode="add"; st.rerun()
-
-            with st.expander("Change build for selected traps"):
-                active_traps = data["Traps"][data["Traps"]["Status"] == "Active"].copy()
-                trap_choices = active_traps["Trap ID"].astype(str).tolist()
-                selected_traps = st.multiselect("Traps", trap_choices)
-                available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
-                available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
-                bulk_label = st.selectbox("New build", available_builds["Label"].tolist(), key="bulk_build_label")
-                bulk_date = st.date_input("Effective date", value=now().date(), key="bulk_build_date")
-                bulk_time = st.time_input("Effective time", value=now().time(), key="bulk_build_time")
-                bulk_reason = st.text_area("Reason", key="bulk_build_reason")
-                if selected_traps:
-                    preview = active_traps[active_traps["Trap ID"].isin(selected_traps)][["Trap ID", "Product", "Build Version", "Site ID"]]
-                    st.dataframe(preview, hide_index=True, use_container_width=True)
-                confirm_bulk = st.checkbox("Apply this build change to every selected trap", key="confirm_bulk_build")
-                if st.button("Apply build change", type="primary", disabled=not (selected_traps and confirm_bulk), key="apply_bulk_build"):
-                    if not bulk_reason.strip():
-                        st.error("Enter a reason.")
-                    else:
-                        selected_build = available_builds[available_builds["Label"] == bulk_label].iloc[0]
-                        effective = datetime.combine(bulk_date, bulk_time).replace(microsecond=0)
-                        staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-                        try:
-                            # Validate every selected trap before changing any record.
-                            for selected_trap in selected_traps:
-                                tr_current = trap_row(staged, selected_trap)
-                                if (
-                                    str(tr_current["Product"]) == str(selected_build["Product"])
-                                    and str(tr_current["Build Version"]) == str(selected_build["Build Version"])
-                                ):
-                                    raise ValueError(f"{selected_trap} is already on {bulk_label}.")
-                            for selected_trap in selected_traps:
-                                change_trap_build(
-                                    staged,
-                                    selected_trap,
-                                    str(selected_build["Product"]),
-                                    str(selected_build["Build Version"]),
-                                    effective,
-                                    bulk_reason.strip(),
-                                    commit=False,
-                                )
-                            save_data(staged)
-                            for name in data:
-                                data[name] = staged[name]
-                            set_flash("success", f"{len(selected_traps)} traps changed to {bulk_label}.")
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(f"No build changes were committed: {exc}")
 
             view=data["Traps"].copy()
             if site_filter!="All sites": view=view[view["Site ID"]==site_filter]
@@ -3868,7 +3933,8 @@ elif page == "setup":
                             st.session_state.pop("setup_mode",None); st.rerun()
                 if mode=="edit":
                     st.divider()
-                    with st.expander("Move trap"):
+                    show_inline_move = st.toggle("Move trap", key=f"show_inline_move_{trap_id}")
+                    if show_inline_move:
                         active_destinations = data["Sites"][
                             (data["Sites"]["Status"] == "Active")
                             & (data["Sites"]["Site ID"] != existing["Site ID"])
@@ -4403,7 +4469,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.4 · Stabilisation")
+st.sidebar.caption("v8.7.5 · Stabilisation recovery")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
@@ -4414,3 +4480,7 @@ if storage_is_potentially_ephemeral():
 else:
     st.sidebar.caption("Storage check: writable · atomic workbook saves · automatic backups")
 
+
+
+# Navigation scroll reset runs last so the destination DOM is already mounted.
+scroll_to_top_once()

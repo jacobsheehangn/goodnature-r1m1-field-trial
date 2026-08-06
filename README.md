@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.7.4 Stabilisation
+# R1/M1 Field Trial App — v8.7.3 Light Mode and Data Cleanup
 
 ## Deployment requirement
 
@@ -710,14 +710,3 @@ System-level changes from the first field trial:
 - adds controlled removal of one invalid follow-up task with audit history
 - preserves the linked check and test window when removing a follow-up
 - adds safe removal of one unused build
-
-
-## v8.7.4 stabilisation
-
-- central navigation owns one-time scroll-to-top on deliberate page changes
-- one stable trap-card renderer for checked and unchecked states
-- one written checked state and one tick only
-- saved-check feedback returned to normal page flow
-- light theme controlled at source and native-control gaps tightened
-- Data & records remains explicit stateful navigation
-- focused browser tests cover non-kill save, three-photo kill, scroll reset and data-section persistence
