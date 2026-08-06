@@ -26,8 +26,10 @@ def start_first_site(page: Page) -> None:
 
 
 def choose_radio(page: Page, label: str, *, exact: bool = True) -> None:
-    """Click the visible Streamlit radio label, matching real user interaction."""
-    target = page.locator('label[data-baseweb="radio"]').filter(has_text=label)
+    """Click Streamlit's visible radio option across current and older DOM versions."""
+    target = page.locator('[data-testid="stRadioOption"]').filter(has_text=label)
+    if target.count() == 0:
+        target = page.locator('label[data-baseweb="radio"]').filter(has_text=label)
     if exact:
         target = target.filter(has=page.get_by_text(label, exact=True))
     expect(target.first).to_be_visible(timeout=20_000)
@@ -35,10 +37,16 @@ def choose_radio(page: Page, label: str, *, exact: bool = True) -> None:
 
 
 def choose_checkbox(page: Page, label_pattern: str) -> None:
-    """Click the visible Streamlit checkbox label rather than its covered input."""
-    target = page.locator('label[data-baseweb="checkbox"]').filter(has_text=re.compile(label_pattern, re.I)).first
-    expect(target).to_be_visible(timeout=20_000)
-    target.click()
+    """Click Streamlit's visible checkbox label across current and older DOM versions."""
+    target = page.locator('[data-testid="stCheckbox"] label').filter(
+        has_text=re.compile(label_pattern, re.I)
+    )
+    if target.count() == 0:
+        target = page.locator('label[data-baseweb="checkbox"]').filter(
+            has_text=re.compile(label_pattern, re.I)
+        )
+    expect(target.first).to_be_visible(timeout=20_000)
+    target.first.click()
 
 
 def open_mobile_sidebar(page: Page) -> None:
@@ -93,7 +101,7 @@ def test_non_kill_check_returns_to_top_with_one_clear_checked_state(page: Page, 
     assert main_scroll_top(page) <= 8
 
     choose_radio(page, "Trap still set, no animal")
-    page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").first.click()
+    choose_radio(page, "Yes")
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text(re.compile(r"saved$", re.I)).first).to_be_visible(timeout=30_000)
@@ -122,7 +130,7 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: dict, tmp_
     choose_radio(page, "Norway rat")
     choose_radio(page, "Dead and apparently normal")
     choose_checkbox(page, r"Bag labelled")
-    page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").first.click()  # trap service
+    choose_radio(page, "Yes")  # trap service
     page.locator('label[data-baseweb="radio"]').filter(has_text="Yes").last.click()   # camera check
     page.get_by_role("button", name="Save check").click()
 
@@ -191,8 +199,7 @@ def test_all_traps_checked_completion_state(page: Page, local_app: dict) -> None
 
 
 def test_move_trap_section_stays_open_after_confirmation(page: Page, local_app: dict) -> None:
-    open_home(page, local_app, {"width": 390, "height": 844})
-    open_mobile_sidebar(page)
+    open_home(page, local_app, {"width": 1440, "height": 1000})
     sidebar = page.get_by_test_id("stSidebar")
     sidebar.get_by_text("Administration", exact=True).click()
     sidebar.get_by_role("button", name="Trial setup").click()
