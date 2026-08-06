@@ -396,40 +396,48 @@ def require_authentication() -> None:
         return
 
     logo_path = APP_DIR / "goodnature_logo.png"
-    left, centre, right = st.columns([1, 1.3, 1])
-    with centre:
-        if logo_path.exists():
-            st.image(str(logo_path), width=190)
-        st.title("R1/M1 field trial")
-        st.caption("Enter the trial password to continue.")
-        with st.form("login_form", clear_on_submit=False):
-            supplied_password = st.text_input(
-                "Password",
-                type="password",
-                autocomplete="current-password",
-            )
-            submitted = st.form_submit_button(
-                "Sign in",
-                type="primary",
-                use_container_width=True,
-            )
+    st.markdown(
+        '<span class="login-page-marker" aria-hidden="true"></span>',
+        unsafe_allow_html=True,
+    )
+    if logo_path.exists():
+        st.image(str(logo_path), width=220)
+    st.markdown('<h1 class="login-title">R1/M1 field trial</h1>', unsafe_allow_html=True)
+    st.markdown(
+        '<p class="login-intro">Enter the trial password to continue.</p>',
+        unsafe_allow_html=True,
+    )
+    with st.form("login_form", clear_on_submit=False):
+        supplied_password = st.text_input(
+            "Password",
+            type="password",
+            autocomplete="current-password",
+        )
+        submitted = st.form_submit_button(
+            "Sign in",
+            type="primary",
+            use_container_width=True,
+        )
 
-        if submitted:
-            if hmac.compare_digest(supplied_password, APP_PASSWORD):
-                st.session_state.authenticated = True
-                st.session_state.failed_login_attempts = 0
-                st.query_params[AUTH_QUERY_KEY] = expected_access_token()
-                st.rerun()
-            else:
-                attempts = int(st.session_state.get("failed_login_attempts", 0)) + 1
-                st.session_state.failed_login_attempts = attempts
-                st.error("Incorrect password.")
-                if attempts >= 5:
-                    st.caption(
-                        "Several attempts have failed. Check the password with the trial lead."
-                    )
+    if submitted:
+        if hmac.compare_digest(supplied_password, APP_PASSWORD):
+            st.session_state.authenticated = True
+            st.session_state.failed_login_attempts = 0
+            st.query_params[AUTH_QUERY_KEY] = expected_access_token()
+            st.rerun()
+        else:
+            attempts = int(st.session_state.get("failed_login_attempts", 0)) + 1
+            st.session_state.failed_login_attempts = attempts
+            st.error("Incorrect password.")
+            if attempts >= 5:
+                st.caption(
+                    "Several attempts have failed. Check the password with the trial lead."
+                )
 
-        st.caption("Trial data is restricted to authorised Goodnature users.")
+    st.markdown(
+        '<p class="login-security">Trial data is restricted to authorised Goodnature users.</p>',
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 
@@ -1833,21 +1841,13 @@ hr {border-color: var(--line);}
 :root {
   --primary-color: #f36c21;
   --st-primary-color: #f36c21;
-}
-
-/* App sidebar controls must remain visible on a light header. */
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="stSidebarCollapseButton"],
-button[data-testid="stSidebarCollapsedControl"],
-button[data-testid="stSidebarCollapseButton"] {
+}/* App sidebar controls must remain visible on a light header. */
+[data-testid="stSidebarCollapseButton"], button[data-testid="stSidebarCollapseButton"] {
   color: var(--text) !important;
   background: #ffffff !important;
   opacity: 1 !important;
 }
-[data-testid="stSidebarCollapsedControl"] svg,
-[data-testid="stSidebarCollapseButton"] svg,
-button[data-testid="stSidebarCollapsedControl"] svg,
-button[data-testid="stSidebarCollapseButton"] svg {
+[data-testid="stSidebarCollapseButton"] svg, button[data-testid="stSidebarCollapseButton"] svg {
   color: var(--text) !important;
   fill: var(--text) !important;
   stroke: var(--text) !important;
@@ -1940,26 +1940,14 @@ label[data-baseweb="checkbox"] svg,
   fill: #ffffff !important;
   stroke: #ffffff !important;
 }
-
-[data-testid="stSidebarCollapsedControl"],
-[data-testid="stSidebarCollapseButton"],
-[data-testid="collapsedControl"],
-button[kind="header"],
-header button[aria-label*="sidebar" i],
-section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+[data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], button[kind="header"], header button[aria-label*="sidebar" i], section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
   background: #ffffff !important;
   color: #202124 !important;
   opacity: 1 !important;
   visibility: visible !important;
   z-index: 1002 !important;
 }
-
-[data-testid="stSidebarCollapsedControl"] *,
-[data-testid="stSidebarCollapseButton"] *,
-[data-testid="collapsedControl"] *,
-button[kind="header"] *,
-header button[aria-label*="sidebar" i] *,
-section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
+[data-testid="stSidebarCollapseButton"] *, [data-testid="collapsedControl"] *, button[kind="header"] *, header button[aria-label*="sidebar" i] *, section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
   color: #202124 !important;
   fill: #202124 !important;
   stroke: #202124 !important;
@@ -1967,12 +1955,7 @@ section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
 }
 
 @media (max-width: 700px) {
-  [data-testid="stSidebarCollapsedControl"],
-  [data-testid="stSidebarCollapseButton"],
-  [data-testid="collapsedControl"],
-  button[kind="header"],
-  header button[aria-label*="sidebar" i],
-  section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+[data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], button[kind="header"], header button[aria-label*="sidebar" i], section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
     min-width: 2.75rem !important;
     min-height: 2.75rem !important;
   }
@@ -2062,29 +2045,18 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 
 /* v8.6.63 — mobile sidebar control must remain visible on the white header. */
 @media (max-width: 768px) {
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"],
-  header[data-testid="stHeader"] [data-testid="collapsedControl"],
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i],
-  header[data-testid="stHeader"] button[aria-label*="menu" i] {
+header[data-testid="stHeader"] [data-testid="collapsedControl"], header[data-testid="stHeader"] button[aria-label*="sidebar" i], header[data-testid="stHeader"] button[aria-label*="menu" i] {
     color: #444a53 !important;
     background: #ffffff !important;
     opacity: 1 !important;
   }
-
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg,
-  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg,
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg,
-  header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
+header[data-testid="stHeader"] [data-testid="collapsedControl"] svg, header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg, header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
     color: #444a53 !important;
     fill: none !important;
     stroke: #444a53 !important;
     opacity: 1 !important;
   }
-
-  header[data-testid="stHeader"] [data-testid="stSidebarCollapsedControl"] svg *,
-  header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *,
-  header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg *,
-  header[data-testid="stHeader"] button[aria-label*="menu" i] svg * {
+header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *, header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg *, header[data-testid="stHeader"] button[aria-label*="menu" i] svg * {
     color: #444a53 !important;
     stroke: #444a53 !important;
     opacity: 1 !important;
@@ -2093,48 +2065,19 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 
 /* v8.6.66 — force all mobile navigation chevron geometry to dark grey. */
 @media (max-width: 768px) {
-  header[data-testid="stHeader"] button,
-  [data-testid="stSidebarCollapsedControl"],
-  [data-testid="stSidebarCollapseButton"],
-  [data-testid="collapsedControl"],
-  [data-testid="stSidebar"] details > summary {
+header[data-testid="stHeader"] button, [data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], [data-testid="stSidebar"] details > summary {
     color: #444a53 !important;
   }
-
-  header[data-testid="stHeader"] button svg,
-  [data-testid="stSidebarCollapsedControl"] svg,
-  [data-testid="stSidebarCollapseButton"] svg,
-  [data-testid="collapsedControl"] svg,
-  [data-testid="stSidebar"] details > summary svg {
+header[data-testid="stHeader"] button svg, [data-testid="stSidebarCollapseButton"] svg, [data-testid="collapsedControl"] svg, [data-testid="stSidebar"] details > summary svg {
     color: #444a53 !important;
     opacity: 1 !important;
   }
-
-  header[data-testid="stHeader"] button svg path,
-  header[data-testid="stHeader"] button svg polyline,
-  header[data-testid="stHeader"] button svg line,
-  [data-testid="stSidebarCollapsedControl"] svg path,
-  [data-testid="stSidebarCollapsedControl"] svg polyline,
-  [data-testid="stSidebarCollapsedControl"] svg line,
-  [data-testid="stSidebarCollapseButton"] svg path,
-  [data-testid="stSidebarCollapseButton"] svg polyline,
-  [data-testid="stSidebarCollapseButton"] svg line,
-  [data-testid="collapsedControl"] svg path,
-  [data-testid="collapsedControl"] svg polyline,
-  [data-testid="collapsedControl"] svg line,
-  [data-testid="stSidebar"] details > summary svg path,
-  [data-testid="stSidebar"] details > summary svg polyline,
-  [data-testid="stSidebar"] details > summary svg line {
+header[data-testid="stHeader"] button svg path, header[data-testid="stHeader"] button svg polyline, header[data-testid="stHeader"] button svg line, [data-testid="stSidebarCollapseButton"] svg path, [data-testid="stSidebarCollapseButton"] svg polyline, [data-testid="stSidebarCollapseButton"] svg line, [data-testid="collapsedControl"] svg path, [data-testid="collapsedControl"] svg polyline, [data-testid="collapsedControl"] svg line, [data-testid="stSidebar"] details > summary svg path, [data-testid="stSidebar"] details > summary svg polyline, [data-testid="stSidebar"] details > summary svg line {
     stroke: #444a53 !important;
     color: #444a53 !important;
     opacity: 1 !important;
   }
-
-  header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]),
-  [data-testid="stSidebarCollapsedControl"] svg path[fill]:not([fill="none"]),
-  [data-testid="stSidebarCollapseButton"] svg path[fill]:not([fill="none"]),
-  [data-testid="collapsedControl"] svg path[fill]:not([fill="none"]),
-  [data-testid="stSidebar"] details > summary svg path[fill]:not([fill="none"]) {
+header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-testid="stSidebarCollapseButton"] svg path[fill]:not([fill="none"]), [data-testid="collapsedControl"] svg path[fill]:not([fill="none"]), [data-testid="stSidebar"] details > summary svg path[fill]:not([fill="none"]) {
     fill: #444a53 !important;
   }
 }
@@ -2170,41 +2113,7 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 
 
 /* v8.6.71 — app sidebar controls only. Do not style Streamlit toolbar/settings. */
-@media (max-width: 768px) {
-  /* Collapsed app menu control at the far left of the header. */
-  [data-testid="stSidebarCollapsedControl"] {
-    position: relative !important;
-    background: transparent !important;
-    border: 0 !important;
-    box-shadow: none !important;
-    color: #444a53 !important;
-  }
-
-  [data-testid="stSidebarCollapsedControl"] button {
-    position: relative !important;
-    background: transparent !important;
-    border: 0 !important;
-    box-shadow: none !important;
-    color: #444a53 !important;
-  }
-
-  [data-testid="stSidebarCollapsedControl"] svg {
-    display: none !important;
-  }
-
-  [data-testid="stSidebarCollapsedControl"] button::after,
-  [data-testid="stSidebarCollapsedControl"]::after {
-    content: "";
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    width: .72rem;
-    height: .72rem;
-    border-left: 2.5px solid #444a53;
-    border-bottom: 2.5px solid #444a53;
-    transform: translate(-58%, -50%) rotate(45deg);
-    pointer-events: none;
-  }
+@media (max-width: 768px) {/* Collapsed app menu control at the far left of the header. */
 
   /* Open drawer: keep one native close control only. */
   [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
@@ -2522,29 +2431,19 @@ input, textarea, select, button,
 [data-testid="stFileUploader"] section { border-color:#d7d9dd !important; }
 [data-testid="stFileUploader"] small, [data-testid="stFileUploader"] span,
 [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color:#25262d !important; }
-[data-testid="stTimeInput"] input, [data-testid="stDateInput"] input { background:#fff !important; color:#25262d !important; }
-
-/* Keep app navigation controls visible in every state. */
-[data-testid="stSidebarCollapsedControl"], [data-testid="stSidebarCollapseButton"],
-[data-testid="stSidebarCollapsedControl"] button, [data-testid="stSidebarCollapseButton"] button {
+[data-testid="stTimeInput"] input, [data-testid="stDateInput"] input { background:#fff !important; color:#25262d !important; }/* Keep app navigation controls visible in every state. */
+[data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapseButton"] button {
   opacity:1 !important; visibility:visible !important; color:#25262d !important; background:transparent !important;
 }
-[data-testid="stSidebarCollapsedControl"] svg, [data-testid="stSidebarCollapseButton"] svg,
-[data-testid="stSidebarCollapsedControl"] svg *, [data-testid="stSidebarCollapseButton"] svg * {
+[data-testid="stSidebarCollapseButton"] svg, [data-testid="stSidebarCollapseButton"] svg * {
   display:initial !important; visibility:visible !important; opacity:1 !important;
   stroke:#25262d !important; color:#25262d !important;
 }
-[data-testid="stSidebarCollapsedControl"]::after,
-[data-testid="stSidebarCollapsedControl"] button::after { content:none !important; display:none !important; }
 [data-testid="stSidebar"] details > summary svg { display:initial !important; visibility:visible !important; opacity:1 !important; color:#25262d !important; }
 [data-testid="stSidebar"] details > summary svg * { stroke:#25262d !important; }
-[data-testid="stSidebar"] details > summary::after { content:none !important; display:none !important; }
-
-
-/* v8.7.5.1 — controlled menu-chevron repair.
+[data-testid="stSidebar"] details > summary::after { content:none !important; display:none !important; }/* v8.7.5.1 — controlled menu-chevron repair.
    App-owned icons avoid Streamlit SVG colour/shape regressions.
    Applies on desktop and mobile; never targets generic header buttons. */
-[data-testid="stSidebarCollapsedControl"],
 [data-testid="stSidebarCollapseButton"] {
   position: relative !important;
   opacity: 1 !important;
@@ -2554,8 +2453,6 @@ input, textarea, select, button,
   box-shadow: none !important;
   color: #25262d !important;
 }
-
-[data-testid="stSidebarCollapsedControl"] button,
 [data-testid="stSidebarCollapseButton"] button {
   position: relative !important;
   min-width: 2.5rem !important;
@@ -2565,36 +2462,10 @@ input, textarea, select, button,
   background: transparent !important;
   border: 0 !important;
   box-shadow: none !important;
-}
-
-/* Hide only the two native sidebar-control SVGs. */
-[data-testid="stSidebarCollapsedControl"] svg,
+}/* Hide only the two native sidebar-control SVGs. */
 [data-testid="stSidebarCollapseButton"] svg {
   display: none !important;
-}
-
-/* Closed drawer: right-pointing open chevron. */
-[data-testid="stSidebarCollapsedControl"]::after,
-[data-testid="stSidebarCollapsedControl"] button::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .68rem !important;
-  height: .68rem !important;
-  border-top: 2.5px solid #25262d !important;
-  border-right: 2.5px solid #25262d !important;
-  transform: translate(-65%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
-  opacity: 1 !important;
-}
-
-/* Avoid two pseudo-icons where Streamlit wraps the button. */
-[data-testid="stSidebarCollapsedControl"]:has(button)::after {
-  content: none !important;
-  display: none !important;
-}
+}/* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. */
 
 /* Open drawer: left-pointing close chevron. */
 [data-testid="stSidebarCollapseButton"]::after,
@@ -2616,13 +2487,8 @@ input, textarea, select, button,
 [data-testid="stSidebarCollapseButton"]:has(button)::after {
   content: none !important;
   display: none !important;
-}
-
-/* Maintain visible controls without hover-dependent colour changes. */
-[data-testid="stSidebarCollapsedControl"]:hover,
-[data-testid="stSidebarCollapseButton"]:hover,
-[data-testid="stSidebarCollapsedControl"] button:hover,
-[data-testid="stSidebarCollapseButton"] button:hover {
+}/* Maintain visible controls without hover-dependent colour changes. */
+[data-testid="stSidebarCollapseButton"]:hover, [data-testid="stSidebarCollapseButton"] button:hover {
   background: #f1f2f3 !important;
 }
 
@@ -2665,43 +2531,15 @@ input, textarea, select, button,
   .visit-trap-line, .site-card-heading { gap:.55rem; }
   .visit-trap-meta, .site-card-meta { font-size:.82rem; }
   [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom:.75rem !important; }
-}
-
-
-/* v8.7.5.3 — controlled single-chevron fix.
+}/* v8.7.5.3 — controlled single-chevron fix.
    Draw exactly one icon on the actual button only. Container and nested pseudo-elements
    are explicitly suppressed so wrapper differences cannot create a doubled glyph. */
-[data-testid="stSidebarCollapsedControl"]::before,
-[data-testid="stSidebarCollapsedControl"]::after,
-[data-testid="stSidebarCollapseButton"]::before,
-[data-testid="stSidebarCollapseButton"]::after,
-[data-testid="stSidebarCollapsedControl"] button::before,
-[data-testid="stSidebarCollapseButton"] button::before,
-[data-testid="stSidebarCollapsedControl"] button > *::before,
-[data-testid="stSidebarCollapsedControl"] button > *::after,
-[data-testid="stSidebarCollapseButton"] button > *::before,
-[data-testid="stSidebarCollapseButton"] button > *::after {
+[data-testid="stSidebarCollapseButton"]::before, [data-testid="stSidebarCollapseButton"]::after, [data-testid="stSidebarCollapseButton"] button::before, [data-testid="stSidebarCollapseButton"] button > *::before, [data-testid="stSidebarCollapseButton"] button > *::after {
   content: none !important;
   display: none !important;
 }
-
-[data-testid="stSidebarCollapsedControl"] svg,
 [data-testid="stSidebarCollapseButton"] svg {
   display: none !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] button::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .62rem !important;
-  height: .62rem !important;
-  border-top: 2.5px solid #25262d !important;
-  border-right: 2.5px solid #25262d !important;
-  transform: translate(-62%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
 }
 
 [data-testid="stSidebarCollapseButton"] button::after {
@@ -2758,19 +2596,13 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
     gap:.28rem !important;
     margin-bottom:.2rem !important;
   }
-}
-
-/* v8.7.5.6 — final drawer-control isolation.
+}/* v8.7.5.6 — final drawer-control isolation.
    Some Streamlit builds render an underlying double-arrow text glyph. Suppress
    all native button content, then draw one app-owned chevron on the button. */
-[data-testid="stSidebarCollapsedControl"]::before,
-[data-testid="stSidebarCollapsedControl"]::after,
-[data-testid="stSidebarCollapseButton"]::before,
-[data-testid="stSidebarCollapseButton"]::after {
+[data-testid="stSidebarCollapseButton"]::before, [data-testid="stSidebarCollapseButton"]::after {
   content:none !important;
   display:none !important;
 }
-[data-testid="stSidebarCollapsedControl"] button,
 [data-testid="stSidebarCollapseButton"] button {
   position:relative !important;
   font-size:0 !important;
@@ -2779,30 +2611,14 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
   text-shadow:none !important;
   overflow:visible !important;
 }
-[data-testid="stSidebarCollapsedControl"] button > *,
 [data-testid="stSidebarCollapseButton"] button > * {
   display:none !important;
   visibility:hidden !important;
   opacity:0 !important;
 }
-[data-testid="stSidebarCollapsedControl"] button::before,
 [data-testid="stSidebarCollapseButton"] button::before {
   content:none !important;
   display:none !important;
-}
-[data-testid="stSidebarCollapsedControl"] button::after {
-  content:"" !important;
-  display:block !important;
-  position:absolute !important;
-  left:50% !important;
-  top:50% !important;
-  width:.62rem !important;
-  height:.62rem !important;
-  border-top:2.5px solid #25262d !important;
-  border-right:2.5px solid #25262d !important;
-  transform:translate(-62%,-50%) rotate(45deg) !important;
-  pointer-events:none !important;
-  opacity:1 !important;
 }
 [data-testid="stSidebarCollapseButton"] button::after {
   content:"" !important;
@@ -2817,94 +2633,136 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
   transform:translate(-38%,-50%) rotate(45deg) !important;
   pointer-events:none !important;
   opacity:1 !important;
-}
-
-/* v8.7.5.10 — closed-menu control across both Streamlit DOM forms.
+}/* v8.7.5.10 — closed-menu control across both Streamlit DOM forms.
    On some deployments the test-id element is the clickable control itself;
    on others it wraps a nested button. Draw exactly one chevron in either case.
-   The working open-drawer control is intentionally untouched. */
-
-/* Direct-control form: suppress native content only when there is no nested button. */
-[data-testid="stSidebarCollapsedControl"]:not(:has(button)) {
-  position: relative !important;
-  font-size: 0 !important;
-  line-height: 0 !important;
-  color: transparent !important;
-  text-shadow: none !important;
-  overflow: visible !important;
-}
-
-[data-testid="stSidebarCollapsedControl"]:not(:has(button)) > * {
-  display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-}
-
-/* Remove earlier container pseudo-elements, then restore exactly one for
-   the direct-control DOM form. */
-[data-testid="stSidebarCollapsedControl"]::before {
-  content: none !important;
-  display: none !important;
-}
-
-[data-testid="stSidebarCollapsedControl"]:not(:has(button))::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .62rem !important;
-  height: .62rem !important;
-  border-top: 2.5px solid #25262d !important;
-  border-right: 2.5px solid #25262d !important;
-  transform: translate(-62%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
-  opacity: 1 !important;
-}
-
-/* Nested-button form: keep the proven button implementation and make sure the
+   The working open-drawer control is intentionally untouched. *//* Direct-control form: suppress native content only when there is no nested button. *//* Remove earlier container pseudo-elements, then restore exactly one for
+   the direct-control DOM form. *//* Nested-button form: keep the proven button implementation and make sure the
    wrapper itself cannot draw a second icon. */
-[data-testid="stSidebarCollapsedControl"]:has(button)::after {
-  content: none !important;
-  display: none !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] button {
-  position: relative !important;
-  font-size: 0 !important;
-  line-height: 0 !important;
-  color: transparent !important;
-  text-shadow: none !important;
-  overflow: visible !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] button > * {
-  display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] button::before {
-  content: none !important;
-  display: none !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] button::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .62rem !important;
-  height: .62rem !important;
-  border-top: 2.5px solid #25262d !important;
-  border-right: 2.5px solid #25262d !important;
-  transform: translate(-62%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
-  opacity: 1 !important;
-}
 
 </style>
+
+<style>
+/* v8.7.5.12 — single closed-menu implementation for Streamlit 1.60.0.
+   Open-drawer control rules are retained separately. */
+[data-testid="stSidebarCollapsedControl"] {
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  width:2.75rem !important;
+  height:2.75rem !important;
+  min-width:2.75rem !important;
+  min-height:2.75rem !important;
+  position:relative !important;
+  overflow:visible !important;
+  color:transparent !important;
+  font-size:0 !important;
+  line-height:0 !important;
+  opacity:1 !important;
+  visibility:visible !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] > *,
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapsedControl"] svg * {
+  visibility:hidden !important;
+  opacity:0 !important;
+}
+
+[data-testid="stSidebarCollapsedControl"]::before {
+  content:"" !important;
+  display:block !important;
+  width:.7rem !important;
+  height:.7rem !important;
+  border-top:2.5px solid #25262d !important;
+  border-right:2.5px solid #25262d !important;
+  transform:rotate(45deg) !important;
+  pointer-events:none !important;
+  opacity:1 !important;
+  visibility:visible !important;
+}
+
+/* Login page only. */
+body:has(.login-page-marker) [data-testid="stMainBlockContainer"] {
+  max-width:30rem !important;
+  margin:0 auto !important;
+  padding:clamp(2rem, 10vh, 7rem) 1.25rem 2rem !important;
+}
+.login-page-marker { display:none !important; }
+
+body:has(.login-page-marker) [data-testid="stImage"] {
+  margin:0 0 1.4rem 0 !important;
+}
+body:has(.login-page-marker) [data-testid="stImage"] img {
+  display:block !important;
+  width:13.75rem !important;
+  max-width:70vw !important;
+  height:auto !important;
+}
+.login-title {
+  margin:0 0 .65rem !important;
+  color:#25262d !important;
+  font-size:clamp(2.35rem, 6vw, 3.5rem) !important;
+  line-height:.98 !important;
+  letter-spacing:-.035em !important;
+}
+.login-intro,
+.login-security {
+  margin:0 !important;
+  color:#737780 !important;
+  font-size:1rem !important;
+  line-height:1.45 !important;
+}
+.login-intro { margin-bottom:1rem !important; }
+.login-security {
+  margin-top:1rem !important;
+  font-size:.9rem !important;
+}
+
+body:has(.login-page-marker) form[data-testid="stForm"] {
+  background:#f3f3f0 !important;
+  border:1px solid #d7d9dd !important;
+  border-radius:14px !important;
+  box-shadow:none !important;
+  padding:1rem !important;
+}
+body:has(.login-page-marker) [data-testid="stTextInput"] > div > div,
+body:has(.login-page-marker) [data-testid="stTextInput"] input,
+body:has(.login-page-marker) [data-testid="stTextInput"] button {
+  background:#fff !important;
+  color:#25262d !important;
+}
+body:has(.login-page-marker) [data-testid="stTextInput"] > div > div {
+  border-color:#b9bdc4 !important;
+}
+body:has(.login-page-marker) [data-testid="stTextInput"] button {
+  border:0 !important;
+  box-shadow:none !important;
+}
+body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button {
+  width:100% !important;
+  background:#f36c21 !important;
+  border:1px solid #f36c21 !important;
+  color:#fff !important;
+  box-shadow:none !important;
+}
+body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button:hover {
+  background:#d95b15 !important;
+  border-color:#d95b15 !important;
+}
+
+@media (max-width:700px) {
+  body:has(.login-page-marker) [data-testid="stMainBlockContainer"] {
+    max-width:none !important;
+    padding:4rem 1rem 1.5rem !important;
+  }
+  .login-title { font-size:2.65rem !important; }
+  body:has(.login-page-marker) form[data-testid="stForm"] {
+    padding:.9rem !important;
+  }
+}
+</style>
+
 """, unsafe_allow_html=True)
 
 components.html("""
@@ -4923,7 +4781,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.11 · Menu and copy cleanup")
+st.sidebar.caption("v8.7.5.12 · Framework and login stabilisation")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
