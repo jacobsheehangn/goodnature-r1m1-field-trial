@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.83 Restore Mobile Menu Control
+# R1/M1 Field Trial App — v8.7.1 Field Usability and Admin
 
 ## Deployment requirement
 
@@ -642,3 +642,47 @@ Fix:
 - hide only the actual Streamlit menu container
 - retain the known-good v8.6.71/v8.6.72 mobile chevron rules
 - retain refresh-persistent login, build identity and safe field setup
+
+
+## v8.6.84 inactive site handling
+
+- Trap sites shows Active sites only
+- direct access to an inactive site cannot start field work
+- Add trap offers Active sites only
+- an existing trap assigned to an inactive site can still be viewed in Administration
+- Administration continues to show inactive sites for history and reactivation
+
+
+## v8.7.0 field system rebuild
+
+System-level changes from the first field trial:
+
+- trap-first, any-order site visits
+- R1/M1 filter, search, unchecked traps first
+- no review page or forced next trap
+- direct save back to trap selector
+- site condition and lure condition removed from field entry
+- one trap-service confirmation
+- camera check follows trap service
+- kill-only bag, animal and photo fields
+- compact camera-roll photo queue
+- atomic check-and-photo persistence
+- missing-window repair from deployment time
+- controlled Move trap
+- controlled single-trap build change
+- active-trap guard when deactivating a site
+- three-day interval clarified as planned cadence only
+
+
+## v8.7.1
+
+- removes Photo type
+- one visible Add photos picker
+- compact thumbnail queue with × removal
+- verifies selected files, stored files and Photos table rows match
+- fixed visible save banner
+- green checked trap cards with written status
+- dedicated full-page trap editing
+- bulk build change
+- planned-versus-actual visit timing label
+- controlled removal of bundled sample records

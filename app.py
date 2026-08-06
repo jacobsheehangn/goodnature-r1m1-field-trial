@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.83 Restore Mobile Menu Control"
+APP_TITLE = "R1/M1 Field Trial — v8.7.1 Field Usability and Admin"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -633,6 +633,85 @@ def delete_unused_trap(data, trap_id):
     save_data(data)
 
 
+
+def audit_change(data, record_type, record_id, field, previous, new, reason):
+    data["Audit Log"] = pd.concat([
+        data["Audit Log"],
+        pd.DataFrame([[
+            make_id("CHG"), dtstr(), record_type, record_id, field,
+            str(previous), str(new), reason
+        ]], columns=SHEETS["Audit Log"])
+    ], ignore_index=True)
+
+
+def repair_missing_window(data, trap_id, reason="Missing deployment window repaired"):
+    if open_window(data, trap_id) is not None:
+        return str(open_window(data, trap_id)["Window ID"])
+    tr = trap_row(data, trap_id)
+    deployment = parse_dt(tr["Deployment Start"])
+    if deployment is None:
+        raise ValueError("Set a valid deployment date and time before starting the missing window.")
+    wid = start_window(data, trap_id, deployment)
+    audit_change(data, "Trap", trap_id, "Active test window", "", wid, reason)
+    save_data(data)
+    return wid
+
+
+def move_trap(data, trap_id, destination_site, effective_time, reason, route_order, location, camera_id):
+    tr = trap_row(data, trap_id)
+    old_site = str(tr["Site ID"])
+    if old_site == destination_site:
+        raise ValueError("Choose a different destination site.")
+    destination = data["Sites"][data["Sites"]["Site ID"] == destination_site]
+    if destination.empty or destination.iloc[0]["Status"] != "Active":
+        raise ValueError("The destination site must be Active.")
+    active_visits = data["Visits"][
+        (data["Visits"]["Status"] == "In progress")
+        & (data["Visits"]["Site ID"].isin([old_site, destination_site]))
+    ]
+    if not active_visits.empty:
+        raise ValueError("Finish or pause active visits at the source and destination sites before moving this trap.")
+    current = open_window(data, trap_id)
+    if current is not None:
+        idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
+        data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
+        data["Windows"].at[idx, "Status"] = "Closed"
+        data["Windows"].at[idx, "End Reason"] = "Trap moved"
+        data["Windows"].at[idx, "Review Status"] = "Not required"
+    idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+    data["Traps"].at[idx, "Site ID"] = destination_site
+    data["Traps"].at[idx, "Route Order"] = str(route_order)
+    data["Traps"].at[idx, "Location"] = location
+    data["Traps"].at[idx, "Camera ID"] = camera_id
+    new_window = start_window(data, trap_id, effective_time)
+    audit_change(data, "Trap", trap_id, "Site ID", old_site, destination_site, reason)
+    audit_change(data, "Trap", trap_id, "Route Order", tr["Route Order"], route_order, reason)
+    audit_change(data, "Trap", trap_id, "Location", tr["Location"], location, reason)
+    save_data(data)
+    return new_window
+
+
+def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason):
+    tr = trap_row(data, trap_id)
+    old_product, old_build = str(tr["Product"]), str(tr["Build Version"])
+    if old_product == new_product and old_build == new_build:
+        raise ValueError("Choose a different build.")
+    current = open_window(data, trap_id)
+    if current is not None:
+        idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
+        data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
+        data["Windows"].at[idx, "Status"] = "Closed"
+        data["Windows"].at[idx, "End Reason"] = "Build changed"
+        data["Windows"].at[idx, "Review Status"] = "Not required"
+    idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+    data["Traps"].at[idx, "Product"] = new_product
+    data["Traps"].at[idx, "Build Version"] = new_build
+    new_window = start_window(data, trap_id, effective_time)
+    audit_change(data, "Trap", trap_id, "Build Version", f"{old_product} · {old_build}", f"{new_product} · {new_build}", reason)
+    save_data(data)
+    return new_window
+
+
 def close_window(data, trap_id, when, finding, bag_id):
     w = open_window(data, trap_id)
     if w is None: return ""
@@ -758,96 +837,70 @@ def add_pending_photo(
 
 
 def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
-    """Upload-only photo flow. No camera stream or device camera request."""
+    """One-tap upload-only photo flow using the device's normal picker."""
     photo_key = photo_session_key(visit_id, trap_id)
-    mode_key = photo_capture_mode_key(visit_id, trap_id)
     nonce_key = photo_widget_nonce_key(visit_id, trap_id)
     st.session_state.setdefault(photo_key, [])
-    st.session_state.setdefault(mode_key, "")
     st.session_state.setdefault(nonce_key, 0)
 
     photos = st.session_state[photo_key]
-    photo_type = st.selectbox(
-        "Photo type",
-        ["Animal in trap", "Head / ears", "Strike location", "Trap condition", "Other"],
-        key=f"photo_type_{trap_id}_{visit_id}",
-    )
-
-    upload_label = "Add another photo" if photos else "Add photo"
-    if st.button(
-        upload_label,
-        key=f"open_upload_{trap_id}_{visit_id}",
-        use_container_width=True,
-    ):
-        st.session_state[mode_key] = "upload"
-        st.rerun()
-
-    mode = st.session_state.get(mode_key, "")
     nonce = int(st.session_state.get(nonce_key, 0))
 
-    if mode == "upload":
-        with app_card():
-            st.markdown("**Add photo**")
-            st.caption(
-                "Choose one or more images from this device. On mobile, use the phone's normal image picker."
+    uploaded = st.file_uploader(
+        "Add photos",
+        type=["jpg", "jpeg", "png", "webp"],
+        accept_multiple_files=True,
+        key=f"photo_upload_{trap_id}_{visit_id}_{nonce}",
+        help="Choose one or more images from the camera roll.",
+    )
+    if uploaded:
+        added_count = 0
+        duplicate_count = 0
+        for uploaded_file in uploaded:
+            added = add_pending_photo(
+                visit_id,
+                trap_id,
+                uploaded_file.getvalue(),
+                uploaded_file.type or "image/jpeg",
+                "Check evidence",
+                "Upload",
             )
-            uploaded = st.file_uploader(
-                "Choose images",
-                type=["jpg", "jpeg", "png", "webp"],
-                accept_multiple_files=True,
-                key=f"photo_upload_{trap_id}_{visit_id}_{nonce}",
-            )
-            if uploaded:
-                added_count = 0
-                duplicate_count = 0
-                for uploaded_file in uploaded:
-                    added = add_pending_photo(
-                        visit_id,
-                        trap_id,
-                        uploaded_file.getvalue(),
-                        uploaded_file.type or "image/jpeg",
-                        photo_type,
-                        "Upload",
-                    )
-                    if added:
-                        added_count += 1
-                    else:
-                        duplicate_count += 1
-                st.session_state[mode_key] = ""
-                st.session_state[nonce_key] = nonce + 1
-                message = f"{added_count} photo{'s' if added_count != 1 else ''} added."
-                if duplicate_count:
-                    message += f" {duplicate_count} duplicate{'s' if duplicate_count != 1 else ''} skipped."
-                st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
-                st.rerun()
-
-            if st.button("Cancel", key=f"cancel_upload_{trap_id}_{visit_id}"):
-                st.session_state[mode_key] = ""
-                st.session_state[nonce_key] = nonce + 1
-                st.rerun()
+            if added:
+                added_count += 1
+            else:
+                duplicate_count += 1
+        st.session_state[nonce_key] = nonce + 1
+        message = f"{added_count} photo{'s' if added_count != 1 else ''} added."
+        if duplicate_count:
+            message += f" {duplicate_count} duplicate{'s' if duplicate_count != 1 else ''} skipped."
+        st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
+        st.rerun()
 
     feedback_key = f"photo_feedback_{visit_id}_{trap_id}"
     feedback = st.session_state.pop(feedback_key, None)
     if feedback:
-        st.success(feedback)
+        st.caption(feedback)
 
     if photos:
         st.caption(
-            f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save with this check"
+            f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save"
         )
-        for photo_index, photo in enumerate(list(photos)):
-            with app_card():
-                st.image(
-                    photo["bytes"],
-                    caption=f"{photo.get('photo_type', 'Photo')} · {photo.get('source', 'Image')}",
-                    width=180,
-                )
-                if st.button(
-                    "Remove photo",
-                    key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
-                ):
-                    st.session_state[photo_key].pop(photo_index)
-                    st.rerun()
+        per_row = 5
+        for row_start in range(0, len(photos), per_row):
+            row_photos = list(photos)[row_start:row_start + per_row]
+            cols = st.columns(per_row)
+            for offset, photo in enumerate(row_photos):
+                photo_index = row_start + offset
+                with cols[offset]:
+                    st.image(photo["bytes"], width=64)
+                    if st.button(
+                        "×",
+                        key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
+                        help="Remove photo",
+                        use_container_width=True,
+                    ):
+                        st.session_state[photo_key].pop(photo_index)
+                        st.rerun()
 
 
 
@@ -914,6 +967,81 @@ def rollback_photo_files(paths) -> None:
         Path(path).unlink(missing_ok=True)
 
 
+
+def remove_bundled_sample_data(data):
+    """Remove only records that exactly match the bundled clean seed, preserving user-created and referenced records."""
+    seed_path = APP_DIR / "field_trial_data_clean_seed.xlsx"
+    if not seed_path.exists():
+        raise FileNotFoundError("Bundled clean seed workbook was not found.")
+    seed = pd.read_excel(seed_path, sheet_name=None, dtype=str).copy()
+    cleaned = {name: frame.copy() for name, frame in data.items()}
+    removed = {}
+
+    # Remove leaf records first, but only exact seed rows.
+    order = ["Photos", "Followups", "Checks", "Visits", "Windows", "Traps", "Sites", "Builds"]
+    id_columns = {
+        "Photos": "Photo ID",
+        "Followups": "Follow-up ID",
+        "Checks": "Check ID",
+        "Visits": "Visit ID",
+        "Windows": "Window ID",
+        "Traps": "Trap ID",
+        "Sites": "Site ID",
+    }
+
+    for sheet in order:
+        if sheet not in cleaned or sheet not in seed:
+            continue
+        current = cleaned[sheet].fillna("").astype(str)
+        baseline = seed[sheet].fillna("").astype(str)
+        if sheet == "Builds":
+            key_cols = ["Product", "Build Version"]
+            seed_keys = set(tuple(row) for row in baseline[key_cols].itertuples(index=False, name=None))
+            mask = current[key_cols].apply(tuple, axis=1).isin(seed_keys)
+        else:
+            key = id_columns.get(sheet)
+            if not key or key not in current.columns or key not in baseline.columns:
+                continue
+            seed_ids = set(baseline[key].tolist())
+            mask = current[key].isin(seed_ids)
+
+        # Preserve parent rows still referenced by non-seed/current records.
+        if sheet == "Traps":
+            referenced = set()
+            for child, col in [("Checks", "Trap ID"), ("Windows", "Trap ID"), ("Followups", "Trap ID"), ("Photos", "Trap ID")]:
+                if child in cleaned and col in cleaned[child].columns:
+                    referenced |= set(cleaned[child][col].astype(str))
+            mask &= ~current["Trap ID"].isin(referenced)
+        elif sheet == "Sites":
+            referenced = set()
+            for child, col in [("Traps", "Site ID"), ("Visits", "Site ID"), ("Windows", "Site ID"), ("Followups", "Site ID"), ("Photos", "Site ID")]:
+                if child in cleaned and col in cleaned[child].columns:
+                    referenced |= set(cleaned[child][col].astype(str))
+            mask &= ~current["Site ID"].isin(referenced)
+        elif sheet == "Builds":
+            referenced = set()
+            if "Traps" in cleaned:
+                referenced |= set(zip(cleaned["Traps"]["Product"].astype(str), cleaned["Traps"]["Build Version"].astype(str)))
+            if "Windows" in cleaned:
+                referenced |= set(zip(cleaned["Windows"]["Product"].astype(str), cleaned["Windows"]["Build Version"].astype(str)))
+            mask &= ~current[key_cols].apply(tuple, axis=1).isin(referenced)
+
+        removed[sheet] = int(mask.sum())
+        cleaned[sheet] = cleaned[sheet].loc[~mask].reset_index(drop=True)
+
+    audit_change(
+        cleaned,
+        "Workbook",
+        "FIELD_DATA",
+        "Bundled sample data",
+        "Present",
+        "Removed",
+        "Removed bundled seed records while preserving user-created and referenced records",
+    )
+    save_data(cleaned)
+    return cleaned, removed
+
+
 def nav_go(page: str):
     """Navigate from persistent app chrome."""
     go(page)
@@ -945,6 +1073,32 @@ def human_duration(minutes=None, hours=None) -> str:
     days = int(total_hours // 24)
     remaining = total_hours - days * 24
     return f"{days} d {remaining:.0f} hr" if remaining >= .5 else f"{days} d"
+
+
+
+def visit_timing_label(data, site_id: str, visit_row) -> str:
+    completed = data["Visits"][
+        (data["Visits"]["Site ID"] == site_id)
+        & (data["Visits"]["Status"] == "Complete")
+    ].copy()
+    if completed.empty:
+        return "First visit"
+    completed["_end"] = completed["End Time"].apply(parse_dt)
+    current_start = parse_dt(visit_row.get("Start Time", ""))
+    prior = completed[completed["_end"].notna()]
+    if current_start:
+        prior = prior[prior["_end"] < current_start]
+    if prior.empty:
+        return "First visit"
+    previous_end = prior.sort_values("_end").iloc[-1]["_end"]
+    site_rows = data["Sites"][data["Sites"]["Site ID"] == site_id]
+    planned_days = int(float(site_rows.iloc[0]["Visit Interval Days"] or 3)) if not site_rows.empty else 3
+    actual_days = (current_start - previous_end).total_seconds() / 86400 if current_start else planned_days
+    if actual_days < planned_days - 0.5:
+        return "Early"
+    if actual_days > planned_days + 0.5:
+        return "Late"
+    return "On schedule"
 
 
 def trap_has_camera(data, trap_id: str) -> bool:
@@ -1855,6 +2009,40 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
   pointer-events: none !important;
 }
 
+
+/* v8.7.1 — visible field completion states */
+.saved-check-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(.75rem + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 2000;
+  width: min(92vw, 560px);
+  background: #eaf7ef;
+  border: 1px solid #b9ddc5;
+  color: #22683d;
+  border-radius: 12px;
+  padding: .8rem 1rem;
+  box-shadow: 0 8px 24px rgba(37,38,45,.14);
+  font-weight: 700;
+  text-align: center;
+}
+.checked-trap-marker { display: none; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.checked-trap-marker),
+div[data-testid="stVerticalBlock"]:has(.checked-trap-marker) {
+  background: #eaf7ef !important;
+  border-color: #b9ddc5 !important;
+}
+.checked-status {
+  color: #22683d;
+  font-weight: 700;
+}
+.photo-tile img {
+  width: 64px !important;
+  height: 64px !important;
+  object-fit: cover !important;
+  border-radius: 8px !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1989,7 +2177,10 @@ if is_demo_data:
 
 if page == "sites":
     header("Trap sites", "Choose the trap site you are visiting today.")
-    for _, s in data["Sites"].iterrows():
+    active_sites = data["Sites"][data["Sites"]["Status"] == "Active"].copy()
+    if active_sites.empty:
+        helper("No active trap sites are available. Reactivate a site in Administration → Trial setup.")
+    for _, s in active_sites.iterrows():
         sid = s["Site ID"]
         traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")]
         active = active_visit(data, sid); last = latest_completed_visit(data, sid)
@@ -2002,6 +2193,8 @@ if page == "sites":
             )
             st.caption(f"{len(traps)} active traps · Visit every {interval} days")
             st.write(f"Last completed: **{last_dt.strftime('%d %b %Y') if last_dt else 'No completed visit yet'}**")
+            if last is not None:
+                st.caption(f"Visit timing: {visit_timing_label(data, sid, last)}")
             st.write(f"Next visit: **{'Due now' if next_dt.date() <= now().date() else next_dt.strftime('%d %b %Y')}**")
             if active is not None:
                 checks = data["Checks"][data["Checks"]["Visit ID"] == active["Visit ID"]]
@@ -2014,7 +2207,14 @@ if page == "sites":
                     go("visit", site_id=sid, visit_id=vid)
 
 elif page == "site":
-    sid = st.session_state.site_id; s = data["Sites"][data["Sites"]["Site ID"] == sid].iloc[0]
+    sid = st.session_state.site_id
+    site_matches = data["Sites"][data["Sites"]["Site ID"] == sid]
+    if site_matches.empty or site_matches.iloc[0]["Status"] != "Active":
+        message_panel("warning", "This trap site is inactive.", ["Reactivate it in Administration before starting field work."])
+        if st.button("Back to Trap sites"):
+            go("sites")
+        st.stop()
+    s = site_matches.iloc[0]
     if st.button("← Trap sites"): go("sites")
     traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")].copy()
     traps["_order"] = pd.to_numeric(traps["Route Order"], errors="coerce"); traps = traps.sort_values("_order")
@@ -2036,317 +2236,346 @@ elif page == "site":
 
 elif page == "start_visit":
     sid = st.session_state.site_id
+    site_matches = data["Sites"][data["Sites"]["Site ID"] == sid]
+    if site_matches.empty or site_matches.iloc[0]["Status"] != "Active":
+        message_panel("warning", "This trap site is inactive.", ["Reactivate it in Administration before starting field work."])
+        if st.button("Back to Trap sites"):
+            go("sites")
+        st.stop()
     vid = start_visit_now(data, sid, st.session_state.field_operator)
     go("visit", site_id=sid, visit_id=vid)
 
 elif page == "visit":
-    sid = st.session_state.site_id; vid = st.session_state.visit_id
+    sid = st.session_state.site_id
+    vid = st.session_state.visit_id
     visit_rows = data["Visits"][data["Visits"]["Visit ID"] == vid]
     if visit_rows.empty:
         message_panel("error", "This visit could not be found.", ["Return to Trap sites and start again."])
-        if st.button("Back to Trap sites"): go("sites")
+        if st.button("Back to Trap sites"):
+            go("sites")
         st.stop()
-    visit = visit_rows.iloc[0]
-    traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")].copy()
-    traps["_order"] = pd.to_numeric(traps["Route Order"], errors="coerce"); traps = traps.sort_values("_order")
-    checks = data["Checks"][data["Checks"]["Visit ID"] == vid]; done = set(checks["Trap ID"])
-    remaining=[x for x in traps["Trap ID"] if x not in done]
+
+    traps = data["Traps"][
+        (data["Traps"]["Site ID"] == sid)
+        & (data["Traps"]["Status"] == "Active")
+    ].copy()
+    checks = data["Checks"][data["Checks"]["Visit ID"] == vid]
+    done = set(checks["Trap ID"].astype(str))
+
+    header(site_name(data, sid), "Select the trap you are standing at.")
     saved = st.session_state.pop("saved_check", None)
-    header(site_name(data,sid), "")
     if saved:
-        task_text = saved.get("task_text", "")
-        consequence_text = task_text
-        if saved.get("new_window"):
-            consequence_text = (consequence_text + " " if consequence_text else "") + "New test window started."
-        elif saved.get("assessable"):
-            consequence_text = (consequence_text + " " if consequence_text else "") + "No new test window started."
-        if remaining:
-            nxt = trap_row(data, remaining[0])
-            success_state(
-                "Check saved",
-                recorded=[f"{saved['trap_id']} · {len(done)} of {len(traps)} complete"],
-                updated=[consequence_text] if consequence_text else [],
-                next_action=f"{remaining[0]} · {trap_location_label(nxt)}",
+        photo_text = f" · {saved.get('photo_count', 0)} photos stored" if saved.get("photo_count", 0) else ""
+        st.markdown(
+            f'<div class="saved-check-banner">{html.escape(str(saved["trap_id"]))} saved{html.escape(photo_text)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    filter_col, search_col = st.columns([1, 1.6])
+    product_filter = filter_col.radio(
+        "Trap type",
+        ["All", "R1", "M1"],
+        horizontal=True,
+        key=f"visit_product_filter_{vid}",
+    )
+    search_text = search_col.text_input(
+        "Find trap",
+        placeholder="Trap ID or location",
+        key=f"visit_trap_search_{vid}",
+    ).strip().lower()
+
+    if product_filter != "All":
+        traps = traps[traps["Product"] == product_filter]
+    if search_text:
+        traps = traps[
+            traps.apply(
+                lambda row: search_text in str(row["Trap ID"]).lower()
+                or search_text in trap_location_label(row).lower(),
+                axis=1,
             )
-            st.button(
-                "Check next trap",
-                type="primary",
-                key="success_next_trap",
-                on_click=set_page,
-                args=("check",),
-                kwargs={"site_id": sid, "visit_id": vid, "trap_id": remaining[0]},
-            )
-        else:
-            message_panel(
-                "success",
-                "Site check complete",
-                [f"{len(done)} of {len(traps)} traps checked", consequence_text],
-            )
-            if st.button("Finish site check", type="primary", key="success_finish_site"):
-                idx=data["Visits"].index[data["Visits"]["Visit ID"]==vid][0]
-                data["Visits"].at[idx,"End Time"]=dtstr(); data["Visits"].at[idx,"Status"]="Complete"; save_data(data)
-                go("sites")
+        ]
+
+    traps["_checked"] = traps["Trap ID"].astype(str).isin(done)
+    traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
+    traps = traps.sort_values(["_checked", "Product", "_route", "Trap ID"])
+
+    st.caption(f"{len(done)} of {len(data['Traps'][(data['Traps']['Site ID']==sid) & (data['Traps']['Status']=='Active')])} traps checked")
+    if traps.empty:
+        helper("No traps match this filter.")
     else:
-        st.progress(len(done)/max(len(traps),1), text=f"{len(done)} of {len(traps)} complete")
-        if remaining:
-            next_trap = remaining[0]; tr=trap_row(data,next_trap)
-            is_first = len(done) == 0
-            with app_card():
-                st.caption("FIRST TRAP" if is_first else "NEXT TRAP")
-                st.subheader(next_trap)
-                st.write(trap_location_label(tr))
-                st.caption(f"Trap {tr['Route Order']} · {tr['Build Version']}")
-                if st.button("Check trap" if is_first else "Check next trap", type="primary"):
-                    go("check", site_id=sid, visit_id=vid, trap_id=next_trap)
-            with st.expander("Choose another trap"):
-                st.caption("Use this only when you need to check a different trap next.")
-                other = st.selectbox("Trap", remaining, format_func=lambda x: f"{x} — {trap_location_label(trap_row(data, x))}")
-                if st.button("Check selected trap"): go("check", site_id=sid, visit_id=vid, trap_id=other)
-        else:
-            message_panel("success", "Every trap has been accounted for.", ["Finish the site when you are ready to leave."])
-            if st.button("Finish site check", type="primary"):
-                idx=data["Visits"].index[data["Visits"]["Visit ID"]==vid][0]
-                data["Visits"].at[idx,"End Time"]=dtstr(); data["Visits"].at[idx,"Status"]="Complete"; save_data(data)
-                go("sites")
-    with st.expander(f"View trap progress · {len(done)} of {len(traps)} complete", expanded=False):
         for _, tr in traps.iterrows():
-            trap_id = tr["Trap ID"]
-            status = "Checked" if trap_id in done else ("Next" if remaining and trap_id == remaining[0] else "Remaining")
-            css = "route-card-current" if status == "Next" else ""
-            st.markdown(f'<div class="{css}"></div>', unsafe_allow_html=True)
+            trap_id = str(tr["Trap ID"])
+            checked = trap_id in done
             with app_card():
-                cols=st.columns([.22,1,.42], vertical_alignment="center")
-                cols[0].markdown(f"**{int(float(tr['Route Order'])) if str(tr['Route Order']).strip() else '—'}**")
-                cols[1].markdown(f"**{trap_id}**"); cols[1].caption(trap_location_label(tr))
-                cols[2].write("✓" if status == "Checked" else status)
-    if remaining and st.button("Pause and return to Trap sites"):
+                if checked:
+                    st.markdown('<span class="checked-trap-marker"></span>', unsafe_allow_html=True)
+                c1, c2, action = st.columns([1.05, 1.7, .72], vertical_alignment="center")
+                c1.markdown(f"**{trap_id}**")
+                c1.caption(f"{tr['Product']} · {tr['Build Version']}")
+                c2.write(trap_location_label(tr))
+                if checked:
+                    c2.markdown('<span class="checked-status">✓ Checked</span>', unsafe_allow_html=True)
+                else:
+                    c2.caption(f"Route reference {tr['Route Order']} · Not checked")
+                if checked:
+                    action.markdown("**✓**")
+                elif action.button("Check", key=f"visit_check_{vid}_{trap_id}", use_container_width=True):
+                    go("check", site_id=sid, visit_id=vid, trap_id=trap_id)
+
+    finish_col, pause_col = st.columns(2)
+    if finish_col.button("Finish site check", type="primary", use_container_width=True):
+        idx = data["Visits"].index[data["Visits"]["Visit ID"] == vid][0]
+        data["Visits"].at[idx, "End Time"] = dtstr()
+        data["Visits"].at[idx, "Status"] = "Complete"
+        save_data(data)
+        go("sites")
+    if pause_col.button("Pause and return to Trap sites", use_container_width=True):
         go("sites")
 
 elif page == "check":
-    sid,vid,trap_id=st.session_state.site_id,st.session_state.visit_id,st.session_state.trap_id
-    tr=trap_row(data,trap_id); w=open_window(data,trap_id)
-    traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")].copy()
-    traps["_order"] = pd.to_numeric(traps["Route Order"], errors="coerce"); traps = traps.sort_values("_order")
-    done = set(data["Checks"][data["Checks"]["Visit ID"] == vid]["Trap ID"])
-    total_traps = len(traps)
-    route_number = int(float(tr["Route Order"])) if str(tr["Route Order"]).strip() else "—"
-    progress_number = len(done) + (0 if trap_id in done else 1)
-    st.markdown(
-        f'<div class="field-sticky-header"><div class="trap">{html.escape(str(trap_id))}</div>'
-        f'<div class="meta">Trap {progress_number} of {total_traps} · {html.escape(site_name(data,sid))}<br>{html.escape(trap_location_label(tr))}</div></div>',
-        unsafe_allow_html=True,
-    )
-    if st.button("← Back to traps"): go("visit",site_id=sid,visit_id=vid)
+    sid, vid, trap_id = st.session_state.site_id, st.session_state.visit_id, st.session_state.trap_id
+    tr = trap_row(data, trap_id)
+    w = open_window(data, trap_id)
+
+    if st.button("← Back to trap selector"):
+        go("visit", site_id=sid, visit_id=vid)
+
+    header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
+
     if w is None:
-        message_panel("error", "This trap has no active test window.", ["Do not record a check until the missing window has been resolved in Trial history or Setup."])
-        st.stop()
-    st.caption(f"Current window · {tr['Build Version']} · started {human_dt(w['Start Time'])}")
-    with app_card():
-        st.markdown("### 1. What did you find?")
-        finding=st.radio("Choose the closest match",FINDINGS, index=None, label_visibility="collapsed", key=f"finding_{trap_id}_{vid}")
-        if finding is None:
-            st.caption("Choose one finding to continue.")
-            st.stop()
-        bag_id=""; has_animal = finding == "Dead animal found"
-        if has_animal:
-            bag_key=f"bag_id_{vid}_{trap_id}"
-            if bag_key not in st.session_state: st.session_state[bag_key]=next_bag_id(data,sid)
-            bag_id=st.session_state[bag_key]
-            message_panel("warning", f"Write {bag_id} on the bag now.", ["Bag and label the animal before continuing."])
-        species=""; rat_type=""; condition=""; animal_bagged=False; next_step=2
-        if has_animal:
-            st.markdown(f"### {next_step}. Record and clear the animal"); next_step += 1
-            species=st.selectbox("Species",SPECIES,index=None,placeholder="Choose species",key=f"species_{trap_id}_{vid}")
-            rat_type=st.selectbox("Rat type",RAT_TYPES,index=None,placeholder="Choose rat type",key=f"rat_type_{trap_id}_{vid}") if species=="Rat" else ""
-            condition=st.selectbox("Animal condition when found",ANIMAL_CONDITION,index=None,placeholder="Choose observed condition",help="Record what you can physically see. This is not the final humane-kill conclusion.",key=f"condition_{trap_id}_{vid}")
-            animal_bagged=st.checkbox(f"Animal bagged and labelled {bag_id}",key=f"bagged_{trap_id}_{vid}")
-
-            st.markdown("#### Photograph the animal")
-            st.caption("Add a clear photo before removing the animal. Include the head and ears where possible. Photos are linked to this check and bag ID.")
-            render_check_photo_capture(vid, trap_id)
-        elif finding=="Trap fired, no animal":
-            st.warning("Camera review will determine whether this was a missed kill, false activation or non-target event.")
-        elif finding in ["Trap missing", "Unable to check"]:
-            st.warning("This window will close as not assessable and no new window will start.")
-        st.markdown(f"### {next_step}. Service the trap"); next_step += 1
-        inspectable = finding not in ["Trap missing", "Unable to check"]
-        if inspectable:
-            lure=st.selectbox("Lure condition found",LURE,index=None,placeholder="Choose lure condition",key=f"lure_{trap_id}_{vid}")
-            relure_choice=st.radio("Fresh lure added?",["Yes","No"],index=None,horizontal=True,key=f"relured_{trap_id}_{vid}")
-            relured = relure_choice == "Yes"
-            trap_state_options = (["Fired and reset", "Not ready / could not reset", "Could not assess"]
-                                  if finding in ["Dead animal found", "Trap fired, no animal"]
-                                  else ["Still set and ready", "Fired and reset", "Not ready / could not reset", "Could not assess"])
-            trap_state=st.radio(
-                "How was the trap left?",
-                trap_state_options,
-                index=None,
-                key=f"trap_state_{trap_id}_{vid}",
-                help="Choose what actually happened. Firing and resetting is not required when reluring if the trap remained set and ready.",
-            )
-            readiness = "Yes" if trap_state in ["Still set and ready", "Fired and reset"] else ("No" if trap_state == "Not ready / could not reset" else "Could not assess" if trap_state else None)
-        else:
-            lure=""; relure_choice="Not applicable"; relured=False; trap_state="Could not assess"; readiness="Could not assess"
-            st.caption("Lure and trap readiness cannot be confirmed for this finding.")
-        site_condition=st.selectbox("Site condition",["Normal","Disturbed","Other"],index=None,placeholder="Choose site condition",key=f"site_condition_{trap_id}_{vid}")
-        camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
-        if camera_assigned:
-            st.markdown(f"### {next_step}. Check the camera")
-            camera_ready_choice=st.radio("Camera ready and covering the trap?",["Yes","No","Could not assess"],index=None,key=f"camera_ready_{trap_id}_{vid}")
-            if camera_ready_choice == "No":
-                camera=st.selectbox("Camera issue",[x for x in CAMERA if x != "Working"],index=None,placeholder="Choose camera issue",key=f"camera_issue_{trap_id}_{vid}")
-                covers=st.selectbox("Camera still covers trap",["No","Unsure","Yes"],index=None,placeholder="Choose coverage status",key=f"covers_{trap_id}_{vid}")
-                adjusted=st.checkbox("Camera adjusted",key=f"adjusted_{trap_id}_{vid}")
-            elif camera_ready_choice == "Yes":
-                camera="Working"; covers="Yes"; adjusted=False
-            else:
-                camera="Unsure"; covers="Unsure"; adjusted=False
-        else:
-            camera_ready_choice="Not applicable"; camera="No camera"; covers="Not applicable"; adjusted=False
-            st.caption("No camera is assigned to this trap. Camera review is not required.")
-        notes=st.text_area("Anything else to record?",height=72,key=f"notes_{trap_id}_{vid}")
-        change_time=st.toggle("Change check time",value=False,key=f"change_time_{trap_id}_{vid}")
-        if change_time:
-            c1,c2=st.columns(2); d=c1.date_input("Check date",value=now().date(),key=f"check_date_{trap_id}_{vid}"); tm=c2.time_input("Check time",value=now().time(),key=f"check_time_{trap_id}_{vid}")
-        else:
-            d=None; tm=None
-        submitted=st.button("Review check",type="primary",key=f"review_check_{trap_id}_{vid}")
-    if submitted:
-        errors=[]
-        if finding=="Dead animal found" and not species: errors.append("Choose the species found.")
-        if finding=="Dead animal found" and species=="Rat" and not rat_type: errors.append("Choose Norway rat, Ship rat or Unclear.")
-        if finding=="Dead animal found" and not condition: errors.append("Choose the animal condition observed.")
-        if finding=="Dead animal found" and not animal_bagged: errors.append(f"Bag and label the animal **{bag_id}**, then confirm it above.")
-        if inspectable and not lure: errors.append("Choose the lure condition found.")
-        if inspectable and relure_choice is None: errors.append("Confirm whether fresh lure was added.")
-        if inspectable and trap_state is None: errors.append("Choose how the trap was left.")
-        if inspectable and readiness in ["No","Could not assess"] and not notes.strip(): errors.append("Add a note explaining why the trap was not confirmed ready.")
-        if not site_condition: errors.append("Choose the site condition.")
-        if camera_assigned and camera_ready_choice is None: errors.append("Confirm whether the camera is ready and covering the trap.")
-        if camera_assigned and camera_ready_choice == "No" and not camera: errors.append("Choose the camera issue.")
-        if camera_assigned and camera_ready_choice == "No" and not covers: errors.append("Choose whether the camera still covers the trap.")
-        if errors:
-            message_panel("error","Complete the highlighted check details.",errors)
-        else:
-            check_time=datetime.combine(d,tm).replace(microsecond=0) if change_time else now()
-            if trap_state in ["Still set and ready", "Fired and reset"]:
-                ready=True
-                trap_function="Tested and working" if trap_state == "Fired and reset" else "Not function-tested"
-            elif trap_state == "Not ready / could not reset":
-                ready=False; trap_function="No"
-            else:
-                trap_state="Not assessed"; ready=False; trap_function="Unsure"
-            photos = st.session_state.get(photo_session_key(vid, trap_id), []) if has_animal else []
-            st.session_state.pending_check={"check_time":check_time,"finding":finding,"species":species,"rat_type":rat_type,"condition":condition,"bag_id":bag_id,"animal_bagged":animal_bagged,"lure":lure,"relured":relured,"trap_state":trap_state,"ready":ready,"trap_function":trap_function,"site_condition":site_condition,"camera":camera,"covers":covers,"adjusted":adjusted,"notes":notes,"photo_count":len(photos)}
-            go("check_confirm", site_id=sid, visit_id=vid, trap_id=trap_id)
-
-elif page == "check_confirm":
-    sid,vid,trap_id=st.session_state.site_id,st.session_state.visit_id,st.session_state.trap_id; p=st.session_state.pending_check
-    tr=trap_row(data,trap_id); bag_id=p.get("bag_id","")
-    camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
-    camera_ready = (not camera_assigned) or (p["camera"] == "Working" and p["covers"] == "Yes")
-    assessable = p["finding"] not in ["Trap missing", "Unable to check"]
-    will_start = bool(p["relured"] and p["ready"] and camera_ready and assessable)
-    st.button("← Edit check", on_click=set_page, args=("check",), kwargs={"site_id": sid, "visit_id": vid, "trap_id": trap_id})
-    header("Confirm check", f"{trap_id} · {trap_location_label(tr)}")
-
-    st.markdown("### You recorded")
-    with app_card():
-        st.markdown(f"- **Finding:** {p['finding']}")
-        st.markdown(f"- **Trap condition:** {p['trap_state']}")
-        st.markdown(f"- **Fresh lure added:** {'Yes' if p.get('relured') else 'No'}")
-        if bag_id:
-            st.markdown(f"- **Bag labelled:** {bag_id}")
-        if p.get("photo_count", 0):
-            st.markdown(f"- **Photos ready to save:** {p['photo_count']}")
-        camera_summary = ("No camera assigned" if not camera_assigned else ("Working and covering the trap" if camera_ready else "Issue recorded"))
-        st.markdown(f"- **Camera:** {camera_summary}")
-        if p.get("site_condition") and p["site_condition"] != "Normal":
-            st.markdown(f"- **Site condition:** {p['site_condition']}")
-
-    st.markdown("### After saving, the app will")
-    with app_card():
-        st.markdown("- Close the current test window at the recorded check time")
-        if assessable and camera_assigned:
-            st.markdown("- Create a camera review task linked to this trap and test window")
-        if p["finding"] == "Dead animal found":
-            st.markdown("- Create a necropsy review task linked to the bag ID")
-        camera_issue = camera_issue_required(camera_assigned, p["camera"], p["covers"])
-        if camera_issue:
-            st.markdown("- Create a camera-issue task")
-        if will_start:
-            st.markdown("- Start a new test window")
-        else:
-            reasons=[]
-            if not p["relured"]: reasons.append("fresh lure was not added")
-            if not p["ready"]: reasons.append("the trap was not confirmed ready")
-            if camera_assigned and not camera_ready: reasons.append("the camera was not confirmed working and covering the trap")
-            if not assessable: reasons.append("the trap was not assessable")
-            st.markdown("- **Not** start a new test window")
-            st.caption("Reason: " + ", ".join(reasons) + ".")
-
-    st.markdown("### Next")
-    st.write("Save this check, then continue to the next trap.")
-    if st.button("Save check",type="primary"):
-        active=open_window(data,trap_id)
-        if active is None:
-            st.error("Save blocked: this trap no longer has an active window. Return to the line and resolve the window before trying again.")
-        else:
-            old_id=close_window(data,trap_id,p["check_time"],p["finding"],bag_id)
-            new_id=start_window(data,trap_id,p["check_time"]) if will_start else ""
-            reset_required = p["trap_state"] in ["Fired and reset", "Not ready / could not reset"]
-            reset_done = p["trap_state"] == "Fired and reset"
-            idxs=data["Windows"].index[data["Windows"]["Window ID"]==old_id].tolist()
-            if idxs:
-                data["Windows"].at[idxs[0],"Species"]=p.get("species","")
-                data["Windows"].at[idxs[0],"Rat Type"]=p.get("rat_type","")
-            check_id = make_id("CHK")
-            row=[check_id,vid,trap_id,old_id,dtstr(p["check_time"]),p["finding"],p["species"],p.get("rat_type",""),p["condition"],bag_id,"Yes" if bag_id else "No","Yes" if p.get("animal_bagged") else "No",p["lure"],"Yes" if p["relured"] else "No","Yes" if reset_required else "No","Yes" if reset_done else "No","Yes" if p["ready"] else "No",p["trap_function"],p["site_condition"],p["camera"],p["covers"],"Yes" if p["adjusted"] else "No",new_id,p["notes"]]
-            data["Checks"]=pd.concat([data["Checks"],pd.DataFrame([row],columns=SHEETS["Checks"])],ignore_index=True)
-            photos = st.session_state.get(photo_session_key(vid, trap_id), [])
-            prepared_photo_rows = []
-            saved_photo_files = []
-            if assessable and camera_assigned:
-                priority="High" if p["finding"]=="Trap fired, no animal" else "Normal"
-                add_followup(data,"Camera review",sid,trap_id,vid,old_id,bag_id,p["finding"],"Confirm whether target interaction occurred, its level, first interaction time, strike-area entry, activation, kill and video evidence",priority)
-            if p["finding"]=="Dead animal found":
-                add_followup(data,"Necropsy review",sid,trap_id,vid,old_id,bag_id,"Dead animal collected","Add necropsy result, weight range, measurements and final humane-kill conclusion","Normal")
-            camera_issue = camera_issue_required(camera_assigned, p["camera"], p["covers"])
-            if camera_issue:
-                add_followup(data,"Camera issue",sid,trap_id,vid,old_id,bag_id,"Camera issue","Resolve camera condition and record the evidence gap","High")
-            refresh_review_status(data,old_id)
-            photos_before = data["Photos"].copy()
+        message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
+        if st.button("Start window and continue", type="primary"):
             try:
-                prepared_photo_rows, saved_photo_files = prepare_check_photos(photos, check_id, old_id, trap_id, sid, bag_id)
-                if prepared_photo_rows:
-                    data["Photos"] = pd.concat([data["Photos"], pd.DataFrame(prepared_photo_rows, columns=SHEETS["Photos"])], ignore_index=True)
-                save_data(data)
+                repair_missing_window(data, trap_id)
+                st.rerun()
             except Exception as exc:
-                rollback_photo_files(saved_photo_files)
-                data["Photos"] = photos_before
-                st.error(f"Save failed. No photos or trap-check data were committed: {exc}")
-                st.stop()
-            st.session_state.pop("pending_check",None)
-            st.session_state.pop(f"bag_id_{vid}_{trap_id}",None)
-            st.session_state.pop(photo_session_key(vid, trap_id), None)
-            st.session_state.pop(photo_capture_mode_key(vid, trap_id), None)
-            st.session_state.pop(photo_widget_nonce_key(vid, trap_id), None)
-            st.session_state.pop(f"photo_feedback_{vid}_{trap_id}", None)
-            created_tasks=[]
-            if assessable and camera_assigned: created_tasks.append("Camera review")
-            if p["finding"]=="Dead animal found": created_tasks.append("necropsy task")
-            if camera_issue: created_tasks.append("camera-issue task")
-            if not created_tasks:
-                task_text="No follow-up tasks required."
-            elif len(created_tasks)==1:
-                task_text=f"{created_tasks[0][0].upper() + created_tasks[0][1:]} created."
-            else:
-                task_text=f"{', '.join(created_tasks[:-1])} and {created_tasks[-1]} created."
-                task_text=task_text[0].upper()+task_text[1:]
-            if saved_photo_files:
-                task_text = (task_text + " " if task_text else "") + f"{len(saved_photo_files)} photo{'s' if len(saved_photo_files) != 1 else ''} saved."
-            st.session_state.saved_check={"trap_id":trap_id,"task_text":task_text,"new_window":will_start,"assessable":assessable}
-            go("visit",site_id=sid,visit_id=vid)
+                st.error(str(exc))
+        st.stop()
+
+    st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
+    finding = st.radio(
+        "What did you find?",
+        FINDINGS,
+        index=None,
+        key=f"finding_{trap_id}_{vid}",
+    )
+    if finding is None:
+        st.caption("Choose one finding to continue.")
+        st.stop()
+
+    has_animal = finding == "Dead animal found"
+    assessable = finding not in ["Trap missing", "Unable to check"]
+    bag_id = ""
+    species = ""
+    rat_type = ""
+    condition = ""
+    bag_labelled = False
+
+    if has_animal:
+        bag_key = f"bag_id_{vid}_{trap_id}"
+        if bag_key not in st.session_state:
+            st.session_state[bag_key] = next_bag_id(data, sid)
+        bag_id = st.session_state[bag_key]
+        message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
+        st.markdown("### Photos")
+        st.caption("Choose the photos already taken from the camera roll.")
+        render_check_photo_capture(vid, trap_id)
+        species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
+        if species == "Rat":
+            rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
+        condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
+        bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+    elif finding == "Trap fired, no animal":
+        st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
+    elif not assessable:
+        st.warning("This check will close the current window and no new window will start.")
+
+    service_ready = False
+    service_reason = ""
+    if assessable:
+        st.markdown("### Trap service")
+        service_choice = st.radio(
+            "Trap relured, reset and ready?",
+            ["Yes", "No"],
+            index=None,
+            horizontal=True,
+            key=f"service_ready_{trap_id}_{vid}",
+        )
+        service_ready = service_choice == "Yes"
+        if service_choice == "No":
+            service_reason = st.text_area(
+                "Why is the trap not ready?",
+                key=f"service_reason_{trap_id}_{vid}",
+            ).strip()
+    else:
+        service_choice = "Not applicable"
+
+    camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
+    camera = "No camera"
+    covers = "Not applicable"
+    adjusted = False
+    camera_ready = True
+    if camera_assigned and assessable:
+        st.markdown("### Camera check")
+        camera_choice = st.radio(
+            "Camera working and covering the trap?",
+            ["Yes", "No", "Could not assess"],
+            index=None,
+            key=f"camera_ready_{trap_id}_{vid}",
+        )
+        if camera_choice == "Yes":
+            camera, covers, camera_ready = "Working", "Yes", True
+        elif camera_choice == "No":
+            camera = st.radio(
+                "Camera issue",
+                [x for x in CAMERA if x != "Working"],
+                index=None,
+                key=f"camera_issue_{trap_id}_{vid}",
+            ) or ""
+            covers = st.radio(
+                "Camera still covers the trap?",
+                ["Yes", "No", "Unsure"],
+                index=None,
+                key=f"covers_{trap_id}_{vid}",
+            ) or ""
+            adjusted = st.checkbox("Camera adjusted", key=f"adjusted_{trap_id}_{vid}")
+            camera_ready = False
+        elif camera_choice == "Could not assess":
+            camera, covers, camera_ready = "Unsure", "Unsure", False
+        else:
+            camera_choice = None
+            camera_ready = False
+    else:
+        camera_choice = "Not applicable"
+        if not camera_assigned:
+            st.caption("No camera assigned.")
+
+    notes = st.text_area("Anything else to record?", height=72, key=f"notes_{trap_id}_{vid}")
+    change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
+    if change_time:
+        c1, c2 = st.columns(2)
+        d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}")
+        tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}")
+    else:
+        d = tm = None
+
+    if st.button("Save check", type="primary", key=f"save_check_{trap_id}_{vid}"):
+        errors = []
+        if has_animal and not species:
+            errors.append("Choose the species.")
+        if has_animal and species == "Rat" and not rat_type:
+            errors.append("Choose the rat type.")
+        if has_animal and not condition:
+            errors.append("Choose the animal condition.")
+        if has_animal and not bag_labelled:
+            errors.append(f"Confirm that bag {bag_id} is labelled.")
+        if assessable and service_choice is None:
+            errors.append("Confirm whether the trap is relured, reset and ready.")
+        if assessable and service_choice == "No" and not service_reason:
+            errors.append("Record why the trap is not ready.")
+        if camera_assigned and assessable and camera_choice is None:
+            errors.append("Complete the camera check.")
+        if camera_assigned and assessable and camera_choice == "No" and not camera:
+            errors.append("Choose the camera issue.")
+        if camera_assigned and assessable and camera_choice == "No" and not covers:
+            errors.append("Record whether the camera covers the trap.")
+        if errors:
+            message_panel("error", "Complete these details before saving.", errors)
+            st.stop()
+
+        check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
+        photos = st.session_state.get(photo_session_key(vid, trap_id), []) if has_animal else []
+        active = open_window(data, trap_id)
+        if active is None:
+            message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
+            if st.button("Start missing window", key=f"repair_on_save_{trap_id}_{vid}"):
+                repair_missing_window(data, trap_id)
+                st.rerun()
+            st.stop()
+
+        old_id = close_window(data, trap_id, check_time, finding, bag_id)
+        will_start = bool(assessable and service_ready and camera_ready)
+        new_id = start_window(data, trap_id, check_time) if will_start else ""
+        idxs = data["Windows"].index[data["Windows"]["Window ID"] == old_id].tolist()
+        if idxs:
+            data["Windows"].at[idxs[0], "Species"] = species
+            data["Windows"].at[idxs[0], "Rat Type"] = rat_type
+
+        check_id = make_id("CHK")
+        trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
+        trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
+        row = [
+            check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
+            condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
+            "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
+            "Yes" if service_ready else "No", "Yes" if service_ready else "No",
+            trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
+            (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
+        ]
+        data["Checks"] = pd.concat([data["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
+
+        if assessable and camera_assigned:
+            priority = "High" if finding == "Trap fired, no animal" else "Normal"
+            add_followup(data, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
+                         "Confirm target interaction, activation, kill and video evidence", priority)
+        if has_animal:
+            add_followup(data, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
+                         "Dead animal collected",
+                         "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
+        if assessable and not service_ready:
+            add_followup(data, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
+                         service_reason, "Restore the trap to service and record the outcome", "High")
+        if camera_issue_required(camera_assigned, camera, covers):
+            add_followup(data, "Camera issue", sid, trap_id, vid, old_id, bag_id,
+                         "Camera issue", "Resolve camera condition and record the evidence gap", "High")
+
+        refresh_review_status(data, old_id)
+        photos_before = data["Photos"].copy()
+        saved_photo_files = []
+        try:
+            prepared_rows, saved_photo_files = prepare_check_photos(
+                photos, check_id, old_id, trap_id, sid, bag_id
+            )
+            expected_photo_count = len(photos)
+            if len(prepared_rows) != expected_photo_count or len(saved_photo_files) != expected_photo_count:
+                raise RuntimeError(
+                    f"Photo save incomplete: expected {expected_photo_count}, prepared {len(prepared_rows)}, stored {len(saved_photo_files)}."
+                )
+            missing_files = [str(path) for path in saved_photo_files if not Path(path).exists()]
+            if missing_files:
+                raise RuntimeError("One or more photo files were not present after saving.")
+            if prepared_rows:
+                data["Photos"] = pd.concat(
+                    [data["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
+                    ignore_index=True,
+                )
+            committed_photo_rows = len(
+                data["Photos"][data["Photos"]["Check ID"].astype(str) == str(check_id)]
+            )
+            if committed_photo_rows != expected_photo_count:
+                raise RuntimeError(
+                    f"Photo record mismatch: expected {expected_photo_count}, recorded {committed_photo_rows}."
+                )
+            save_data(data)
+        except Exception as exc:
+            rollback_photo_files(saved_photo_files)
+            data["Photos"] = photos_before
+            st.error(f"Save failed. No check or photo record was committed: {exc}")
+            st.stop()
+
+        for key in [
+            f"bag_id_{vid}_{trap_id}",
+            photo_session_key(vid, trap_id),
+            photo_capture_mode_key(vid, trap_id),
+            photo_widget_nonce_key(vid, trap_id),
+            f"photo_feedback_{vid}_{trap_id}",
+        ]:
+            st.session_state.pop(key, None)
+        st.session_state.saved_check = {
+            "trap_id": trap_id,
+            "photo_count": len(saved_photo_files),
+        }
+        go("visit", site_id=sid, visit_id=vid)
 
 elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
@@ -3067,6 +3296,102 @@ elif page == "results":
         st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
 
 
+elif page == "trap_edit":
+    trap_id = st.session_state.get("trap_id", "")
+    existing = trap_row(data, trap_id)
+    if existing is None:
+        message_panel("error", "This trap could not be found.")
+        if st.button("Back to Trial setup"):
+            go("setup")
+        st.stop()
+
+    if st.button("← Back to Trial setup"):
+        go("setup")
+    header(f"Edit {trap_id}", f"{site_name(data, existing['Site ID'])} · {trap_location_label(existing)}")
+
+    with st.form(f"trap_edit_page_{trap_id}"):
+        location = st.text_input("Location description", value=trap_location_label(existing))
+        camera = st.text_input("Camera ID", value=existing["Camera ID"])
+        order = st.number_input(
+            "Route reference",
+            min_value=1,
+            step=1,
+            value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1,
+        )
+        status = st.radio(
+            "Status",
+            ["Active", "Inactive"],
+            index=0 if existing["Status"] == "Active" else 1,
+            horizontal=True,
+        )
+        notes = st.text_area("Notes", value=existing["Notes"])
+        save_edit = st.form_submit_button("Save changes", type="primary")
+    if save_edit:
+        idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+        data["Traps"].at[idx, "Location"] = location.strip()
+        data["Traps"].at[idx, "Camera ID"] = camera.strip()
+        data["Traps"].at[idx, "Route Order"] = str(order)
+        data["Traps"].at[idx, "Status"] = status
+        data["Traps"].at[idx, "Notes"] = notes
+        save_data(data)
+        set_flash("success", f"{trap_id} updated.")
+        go("setup")
+
+    st.divider()
+    with st.expander("Move trap"):
+        active_destinations = data["Sites"][
+            (data["Sites"]["Status"] == "Active")
+            & (data["Sites"]["Site ID"] != existing["Site ID"])
+        ]["Site ID"].tolist()
+        if active_destinations:
+            destination = st.selectbox("Destination site", active_destinations, format_func=lambda x: site_name(data, x))
+            move_location = st.text_input("Location at destination", value="")
+            move_order = st.number_input("Route reference at destination", min_value=1, step=1, value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1)
+            move_camera = st.text_input("Camera ID at destination", value=existing["Camera ID"])
+            move_reason = st.text_area("Reason for move")
+            move_date = st.date_input("Effective date", value=now().date())
+            move_time = st.time_input("Effective time", value=now().time())
+            confirm_move = st.checkbox("Close the current window and start a new window at the destination")
+            if st.button("Move trap", type="primary", disabled=not confirm_move):
+                try:
+                    move_trap(
+                        data, trap_id, destination,
+                        datetime.combine(move_date, move_time).replace(microsecond=0),
+                        move_reason.strip(), move_order, move_location.strip(), move_camera.strip()
+                    )
+                    set_flash("success", f"{trap_id} moved.", [f"New site: {site_name(data, destination)}."])
+                    go("setup")
+                except Exception as exc:
+                    st.error(str(exc))
+        else:
+            st.caption("No other active sites are available.")
+
+    with st.expander("Change build"):
+        available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
+        available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
+        current_label = f"{existing['Product']} · {existing['Build Version']}"
+        options = [x for x in available_builds["Label"].tolist() if x != current_label]
+        if options:
+            new_label = st.selectbox("New build", options)
+            build_reason = st.text_area("Reason for build change")
+            build_date = st.date_input("Effective date", value=now().date(), key=f"dedicated_build_date_{trap_id}")
+            build_time = st.time_input("Effective time", value=now().time(), key=f"dedicated_build_time_{trap_id}")
+            confirm_build = st.checkbox("Close the current window and start a new window on this build")
+            if st.button("Change build", type="primary", disabled=not confirm_build):
+                selected = available_builds[available_builds["Label"] == new_label].iloc[0]
+                try:
+                    change_trap_build(
+                        data, trap_id, str(selected["Product"]), str(selected["Build Version"]),
+                        datetime.combine(build_date, build_time).replace(microsecond=0),
+                        build_reason.strip(),
+                    )
+                    set_flash("success", f"{trap_id} build changed.", [f"New build: {new_label}."])
+                    go("setup")
+                except Exception as exc:
+                    st.error(str(exc))
+        else:
+            st.caption("No other available builds.")
+
 elif page == "setup":
     header("Trial setup", "Manage the sites, traps and build versions used in this trial.")
     section = st.radio("What do you need to manage?", ["Traps", "Trap sites", "Builds"], horizontal=True)
@@ -3083,6 +3408,45 @@ elif page == "setup":
             site_filter = filter_col.selectbox("Show traps from", ["All sites"] + data["Sites"]["Site ID"].tolist(), format_func=lambda x: x if x=="All sites" else site_name(data,x), key="setup_trap_site")
             if action_col.button("Add trap", type="primary"):
                 st.session_state.setup_trap=""; st.session_state.setup_mode="add"; st.rerun()
+
+            with st.expander("Change build for selected traps"):
+                active_traps = data["Traps"][data["Traps"]["Status"] == "Active"].copy()
+                trap_choices = active_traps["Trap ID"].astype(str).tolist()
+                selected_traps = st.multiselect("Traps", trap_choices)
+                available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
+                available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
+                bulk_label = st.selectbox("New build", available_builds["Label"].tolist(), key="bulk_build_label")
+                bulk_date = st.date_input("Effective date", value=now().date(), key="bulk_build_date")
+                bulk_time = st.time_input("Effective time", value=now().time(), key="bulk_build_time")
+                bulk_reason = st.text_area("Reason", key="bulk_build_reason")
+                if selected_traps:
+                    preview = active_traps[active_traps["Trap ID"].isin(selected_traps)][["Trap ID", "Product", "Build Version", "Site ID"]]
+                    st.dataframe(preview, hide_index=True, use_container_width=True)
+                confirm_bulk = st.checkbox("Apply this build change to every selected trap", key="confirm_bulk_build")
+                if st.button("Apply build change", type="primary", disabled=not (selected_traps and confirm_bulk), key="apply_bulk_build"):
+                    if not bulk_reason.strip():
+                        st.error("Enter a reason.")
+                    else:
+                        selected_build = available_builds[available_builds["Label"] == bulk_label].iloc[0]
+                        effective = datetime.combine(bulk_date, bulk_time).replace(microsecond=0)
+                        snapshot = {name: frame.copy() for name, frame in data.items()}
+                        try:
+                            for selected_trap in selected_traps:
+                                change_trap_build(
+                                    data,
+                                    selected_trap,
+                                    str(selected_build["Product"]),
+                                    str(selected_build["Build Version"]),
+                                    effective,
+                                    bulk_reason.strip(),
+                                )
+                            set_flash("success", f"{len(selected_traps)} traps changed to {bulk_label}.")
+                            st.rerun()
+                        except Exception as exc:
+                            data = snapshot
+                            save_data(data)
+                            st.error(f"No build changes were committed: {exc}")
+
             view=data["Traps"].copy()
             if site_filter!="All sites": view=view[view["Site ID"]==site_filter]
             if view.empty:
@@ -3102,7 +3466,7 @@ elif page == "setup":
                         c4.write(tr["Camera ID"] or "No camera")
                         c4.caption(tr["Status"])
                         if action.button("Edit", key=f"setup_edit_trap_{trap_id}"):
-                            st.session_state.setup_trap=trap_id; st.session_state.setup_mode="edit"; st.rerun()
+                            go("trap_edit", trap_id=trap_id)
         if panel is not None:
             with panel:
                 existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
@@ -3121,11 +3485,15 @@ elif page == "setup":
                 existing_build_label=(f"{existing['Product']} · {existing['Build Version']}" if existing is not None else "")
                 with st.form("trap_setup_panel"):
                     trap_id=st.text_input("Trap ID",value=existing["Trap ID"] if existing is not None else "",disabled=mode=="edit",help="Permanent physical trap ID. Do not include the site code.")
-                    build_label=st.selectbox("Build",build_options,index=(build_options.index(existing_build_label) if existing_build_label in build_options else 0))
+                    build_label=st.selectbox("Build",build_options,index=(build_options.index(existing_build_label) if existing_build_label in build_options else 0),disabled=mode=="edit",help="Use Change build for an existing trap.")
                     build_row=assignable_builds[assignable_builds["Build label"]==build_label].iloc[0]
                     product=str(build_row["Product"]); build=str(build_row["Build Version"])
                     st.caption(f"Trap type: {product}")
-                    site_options=data["Sites"]["Site ID"].tolist(); site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x))
+                    active_site_options=data["Sites"][data["Sites"]["Status"]=="Active"]["Site ID"].tolist()
+                    site_options=active_site_options.copy()
+                    if existing is not None and existing["Site ID"] not in site_options:
+                        site_options=[existing["Site ID"]]+site_options
+                    site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x),help="Use Move trap for an existing trap.",disabled=mode=="edit")
                     location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
                     order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
@@ -3164,6 +3532,92 @@ elif page == "setup":
                             st.session_state.pop("setup_mode",None); st.rerun()
                 if mode=="edit":
                     st.divider()
+                    with st.expander("Move trap"):
+                        active_destinations = data["Sites"][
+                            (data["Sites"]["Status"] == "Active")
+                            & (data["Sites"]["Site ID"] != existing["Site ID"])
+                        ]["Site ID"].tolist()
+                        if not active_destinations:
+                            st.caption("No other active sites are available.")
+                        else:
+                            destination = st.selectbox(
+                                "Destination site",
+                                active_destinations,
+                                format_func=lambda x: site_name(data, x),
+                                key=f"move_destination_{trap_id}",
+                            )
+                            move_order = st.number_input(
+                                "Route reference",
+                                min_value=1,
+                                step=1,
+                                value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1,
+                                key=f"move_order_{trap_id}",
+                            )
+                            move_location = st.text_input(
+                                "Location at destination",
+                                value="",
+                                key=f"move_location_{trap_id}",
+                            )
+                            move_camera = st.text_input(
+                                "Camera ID at destination",
+                                value=existing["Camera ID"],
+                                key=f"move_camera_{trap_id}",
+                            )
+                            move_date = st.date_input("Effective date", value=now().date(), key=f"move_date_{trap_id}")
+                            move_time = st.time_input("Effective time", value=now().time(), key=f"move_time_{trap_id}")
+                            move_reason = st.text_area("Reason for move", key=f"move_reason_{trap_id}")
+                            confirm_move = st.checkbox(
+                                f"Move {trap_id} from {site_name(data, existing['Site ID'])} and start a new window",
+                                key=f"confirm_move_{trap_id}",
+                            )
+                            if st.button("Move trap", type="primary", key=f"move_trap_{trap_id}", disabled=not confirm_move):
+                                if not move_reason.strip():
+                                    st.error("Enter a reason for the move.")
+                                elif not move_location.strip():
+                                    st.error("Enter the trap location at the destination.")
+                                else:
+                                    try:
+                                        effective = datetime.combine(move_date, move_time).replace(microsecond=0)
+                                        move_trap(data, trap_id, destination, effective, move_reason.strip(), move_order, move_location.strip(), move_camera.strip())
+                                        set_flash("success", f"{trap_id} moved.", [f"New site: {site_name(data, destination)}.", "Historical windows remain on the previous site."])
+                                        st.session_state.pop("setup_mode", None)
+                                        st.session_state.pop("setup_trap", None)
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(str(exc))
+
+                    with st.expander("Change build"):
+                        available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
+                        available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
+                        current_label = f"{existing['Product']} · {existing['Build Version']}"
+                        build_choices = [x for x in available_builds["Label"].tolist() if x != current_label]
+                        if not build_choices:
+                            st.caption("No other available builds.")
+                        else:
+                            new_label = st.selectbox("New build", build_choices, key=f"change_build_{trap_id}")
+                            build_date = st.date_input("Effective date", value=now().date(), key=f"build_change_date_{trap_id}")
+                            build_time = st.time_input("Effective time", value=now().time(), key=f"build_change_time_{trap_id}")
+                            build_reason = st.text_area("Reason for build change", key=f"build_change_reason_{trap_id}")
+                            confirm_build = st.checkbox(
+                                "Close the current window and start a new one on this build",
+                                key=f"confirm_build_change_{trap_id}",
+                            )
+                            if st.button("Change build", type="primary", key=f"commit_build_change_{trap_id}", disabled=not confirm_build):
+                                if not build_reason.strip():
+                                    st.error("Enter a reason for the build change.")
+                                else:
+                                    selected = available_builds[available_builds["Label"] == new_label].iloc[0]
+                                    effective = datetime.combine(build_date, build_time).replace(microsecond=0)
+                                    try:
+                                        change_trap_build(data, trap_id, str(selected["Product"]), str(selected["Build Version"]), effective, build_reason.strip())
+                                        set_flash("success", f"{trap_id} build changed.", [f"New build: {new_label}.", "Previous windows retain the previous build."])
+                                        st.session_state.pop("setup_mode", None)
+                                        st.session_state.pop("setup_trap", None)
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(str(exc))
+
+                    st.divider()
                     if trap_can_be_deleted(data, trap_id):
                         st.caption("This trap has no field history and can be deleted.")
                         confirm_delete=st.checkbox(f"Delete {trap_id}", key=f"confirm_delete_{trap_id}")
@@ -3192,7 +3646,7 @@ elif page == "setup":
                     c1.markdown(f"**{site_row['Site Name']}**")
                     c1.caption(sid)
                     c2.write(f"{trap_count} active traps")
-                    c2.caption(f"Every {site_row['Visit Interval Days']} days")
+                    c2.caption(f"Planned every {site_row['Visit Interval Days']} days")
                     c3.write(site_row["Status"])
                     c3.caption("Mobile coverage confirmed" if site_row.get("Mobile Coverage Confirmed","")=="Yes" else "Mobile coverage not confirmed")
                     if action.button("Edit", key=f"setup_edit_site_{sid}"):
@@ -3205,7 +3659,7 @@ elif page == "setup":
                     sid=st.text_input("Site ID",value=ex["Site ID"] if ex is not None else "",disabled=mode=="edit")
                     name=st.text_input("Site name",value=ex["Site Name"] if ex is not None else "")
                     interval=3
-                    st.number_input("Visit interval days",min_value=3,max_value=3,step=1,value=3,disabled=True,help="The trial method is currently fixed at a 3-day check interval.")
+                    st.number_input("Visit interval days",min_value=3,max_value=3,step=1,value=3,disabled=True,help="Three days is the planned cadence, not a validity limit. Earlier or later checks remain valid and use their actual timestamps.")
                     coverage=st.selectbox("Mobile coverage confirmed",["Yes","No"],index=0 if ex is not None and ex.get("Mobile Coverage Confirmed","")=="Yes" else 1,help="Only activate sites with reliable mobile data coverage across the site.")
                     status=st.selectbox("Status",["Active","Inactive"],index=0 if ex is None or ex["Status"]=="Active" else 1)
                     notes=st.text_area("Notes",value=ex["Notes"] if ex is not None else "")
@@ -3221,6 +3675,13 @@ elif page == "setup":
                         st.error("That site code already exists."); st.stop()
                     if status=="Active" and coverage!="Yes":
                         st.error("Confirm reliable mobile coverage before activating this site."); st.stop()
+                    active_traps_at_site = len(data["Traps"][
+                        (data["Traps"]["Site ID"] == sid)
+                        & (data["Traps"]["Status"] == "Active")
+                    ])
+                    if mode=="edit" and status=="Inactive" and active_traps_at_site:
+                        st.error(f"Move or deactivate the {active_traps_at_site} active trap{'s' if active_traps_at_site != 1 else ''} at this site before making it inactive.")
+                        st.stop()
                     row=[sid,name.strip(),str(interval),coverage,status,notes]
                     if mode=="edit":
                         idx=data["Sites"].index[data["Sites"]["Site ID"]==sid][0]
@@ -3490,7 +3951,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.83 · Restore Mobile Menu Control")
+st.sidebar.caption("v8.7.1 · Field Usability and Admin")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
@@ -3500,3 +3961,29 @@ if storage_is_potentially_ephemeral():
     st.sidebar.error("Storage may be temporary. Set R1M1_DATA_DIR to a persistent mounted folder before field use.")
 else:
     st.sidebar.caption("Storage check: writable · atomic workbook saves · automatic backups")
+
+
+    st.divider()
+    st.markdown("### Remove bundled sample data")
+    st.caption("Removes only records matching the shipped seed workbook. User-created records and anything still referenced are preserved.")
+    confirm_cleanup = st.checkbox(
+        "I understand this removes bundled sample records from the live workbook",
+        key="confirm_remove_seed_data",
+    )
+    if st.button(
+        "Remove bundled sample data",
+        key="remove_seed_data",
+        disabled=not confirm_cleanup,
+    ):
+        try:
+            data, removed_counts = remove_bundled_sample_data(data)
+            removed_total = sum(removed_counts.values())
+            details = [f"{name}: {count}" for name, count in removed_counts.items() if count]
+            set_flash(
+                "success",
+                f"{removed_total} bundled sample record{'s' if removed_total != 1 else ''} removed.",
+                details or ["No matching sample records remained."],
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Sample data was not removed: {exc}")
