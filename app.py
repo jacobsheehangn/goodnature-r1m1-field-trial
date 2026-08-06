@@ -2605,45 +2605,8 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
 
 </style>
 
-<style>
-/* v8.7.5.12 — single closed-menu implementation for Streamlit 1.60.0.
+<style>/* v8.7.5.12 — single closed-menu implementation for Streamlit 1.60.0.
    Open-drawer control rules are retained separately. */
-[data-testid="stSidebarCollapsedControl"] {
-  display:flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  width:2.75rem !important;
-  height:2.75rem !important;
-  min-width:2.75rem !important;
-  min-height:2.75rem !important;
-  position:relative !important;
-  overflow:visible !important;
-  color:transparent !important;
-  font-size:0 !important;
-  line-height:0 !important;
-  opacity:1 !important;
-  visibility:visible !important;
-}
-
-[data-testid="stSidebarCollapsedControl"] > *,
-[data-testid="stSidebarCollapsedControl"] svg,
-[data-testid="stSidebarCollapsedControl"] svg * {
-  visibility:hidden !important;
-  opacity:0 !important;
-}
-
-[data-testid="stSidebarCollapsedControl"]::before {
-  content:"" !important;
-  display:block !important;
-  width:.7rem !important;
-  height:.7rem !important;
-  border-top:2.5px solid #25262d !important;
-  border-right:2.5px solid #25262d !important;
-  transform:rotate(45deg) !important;
-  pointer-events:none !important;
-  opacity:1 !important;
-  visibility:visible !important;
-}
 
 /* Login page only. */
 body:has(.login-page-marker) [data-testid="stMainBlockContainer"] {
@@ -2757,6 +2720,133 @@ components.html("""
 """, height=0, width=0)
 
 require_authentication()
+
+components.html(
+    """
+    <script>
+    (() => {
+      const parentWindow = window.parent;
+      const doc = parentWindow.document;
+      const STYLE_ID = "r1m1-closed-menu-style";
+      const BUTTON_ID = "r1m1-closed-menu-button";
+      const OBSERVER_KEY = "__r1m1ClosedMenuObserver";
+
+      if (!doc.getElementById(STYLE_ID)) {
+        const style = doc.createElement("style");
+        style.id = STYLE_ID;
+        style.textContent = `
+          [data-testid="stSidebarCollapsedControl"] {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+          }
+
+          #${BUTTON_ID} {
+            position: fixed;
+            top: calc(.55rem + env(safe-area-inset-top));
+            left: .65rem;
+            z-index: 1000000;
+            width: 2.75rem;
+            height: 2.75rem;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            margin: 0;
+            border: 0;
+            border-radius: .65rem;
+            background: rgba(255,255,255,.96);
+            color: #25262d;
+            box-shadow: none;
+            font: 700 2rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            -webkit-appearance: none;
+            appearance: none;
+            cursor: pointer;
+            touch-action: manipulation;
+          }
+
+          #${BUTTON_ID}:focus-visible {
+            outline: 3px solid rgba(243,108,33,.35);
+            outline-offset: 2px;
+          }
+        `;
+        doc.head.appendChild(style);
+      }
+
+      let button = doc.getElementById(BUTTON_ID);
+      if (!button) {
+        button = doc.createElement("button");
+        button.id = BUTTON_ID;
+        button.type = "button";
+        button.setAttribute("aria-label", "Open menu");
+        button.setAttribute("title", "Open menu");
+        button.textContent = "›";
+        doc.body.appendChild(button);
+      }
+
+      const sidebarIsOpen = () => {
+        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+        if (!sidebar) return false;
+        const rect = sidebar.getBoundingClientRect();
+        const style = parentWindow.getComputedStyle(sidebar);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 40 &&
+          rect.right > 8
+        );
+      };
+
+      const nativeOpenControl = () => {
+        const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
+        if (!wrapper) return null;
+        if (wrapper.matches("button")) return wrapper;
+        return wrapper.querySelector("button") || wrapper;
+      };
+
+      const update = () => {
+        const nativeControl = nativeOpenControl();
+        const shouldShow = Boolean(nativeControl) && !sidebarIsOpen();
+        button.style.display = shouldShow ? "flex" : "none";
+      };
+
+      button.onclick = () => {
+        const nativeControl = nativeOpenControl();
+        if (!nativeControl) return;
+        nativeControl.click();
+        requestAnimationFrame(update);
+        [80, 200, 450].forEach((delay) => parentWindow.setTimeout(update, delay));
+      };
+
+      parentWindow.__r1m1UpdateClosedMenu = update;
+
+      if (!parentWindow[OBSERVER_KEY]) {
+        const observer = new MutationObserver(() => {
+          if (parentWindow.__r1m1UpdateClosedMenu) {
+            parentWindow.__r1m1UpdateClosedMenu();
+          }
+        });
+        observer.observe(doc.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["style", "class", "aria-expanded"]
+        });
+        parentWindow.addEventListener("resize", update, { passive: true });
+        parentWindow.addEventListener("orientationchange", update, { passive: true });
+        parentWindow[OBSERVER_KEY] = observer;
+      }
+
+      update();
+      requestAnimationFrame(update);
+      [100, 300, 800].forEach((delay) => parentWindow.setTimeout(update, delay));
+    })();
+    </script>
+    """,
+    height=0,
+    width=0,
+)
+
 data = load_data()
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
@@ -2897,7 +2987,7 @@ if page == "sites":
             status_text = "Ready to finish" if active_complete else "In progress"
             status_class = "is-warning" if active_complete else "is-progress"
         elif completed_today:
-            status_text = "Completed today"
+            status_text = "Last checked today"
             status_class = "is-complete"
         else:
             status_text = ""
@@ -4759,7 +4849,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.13 · Page rhythm cleanup")
+st.sidebar.caption("v8.7.5.14 · Safari menu and site status")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
