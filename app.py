@@ -1372,6 +1372,37 @@ def app_card():
         yield
 
 
+def render_compact_card_content(
+    *,
+    title: str,
+    right_label: str = "",
+    main_line: str = "",
+    meta_line: str = "",
+) -> None:
+    """Render the shared compact card hierarchy without relying on Streamlit wrappers."""
+    right_html = (
+        f'<span class="shared-card-label">{html.escape(str(right_label))}</span>'
+        if right_label else ""
+    )
+    main_html = (
+        f'<div class="shared-card-main">{html.escape(str(main_line))}</div>'
+        if main_line else ""
+    )
+    meta_html = (
+        f'<div class="shared-card-meta">{html.escape(str(meta_line))}</div>'
+        if meta_line else ""
+    )
+    st.markdown(
+        '<div class="shared-card-copy">'
+        '<div class="shared-card-heading">'
+        f'<strong>{html.escape(str(title))}</strong>{right_html}'
+        '</div>'
+        f'{main_html}{meta_html}'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> None:
     """Compact field card with one checked-state indicator."""
     trap_id = str(tr["Trap ID"])
@@ -1391,14 +1422,12 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> No
         )
         return
 
-    with st.container(border=True):
-        st.markdown('<span class="visit-unchecked-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="visit-trap-copy">'
-            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><span>{html.escape(location)}</span></div>'
-            f'<div class="visit-trap-line"><span class="visit-trap-meta">{html.escape(product_build)}</span><span class="visit-trap-meta">Route {html.escape(route)} · Not checked</span></div>'
-            '</div>',
-            unsafe_allow_html=True,
+    with app_card():
+        render_compact_card_content(
+            title=trap_id,
+            right_label=location,
+            main_line=product_build,
+            meta_line=f"Route {route} · Not checked",
         )
         if st.button("Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True):
             go("check", site_id=site_id, visit_id=visit_id, trap_id=trap_id)
@@ -2364,6 +2393,102 @@ button[kind="secondary"]:hover,
   background: transparent !important;
   color: #25262d !important;
 }
+
+
+/* v8.7.5.2 — shared card system and single drawer control.
+   This final layer intentionally overrides earlier page-specific card geometry. */
+:root {
+  --card-bg: #f3f3f0;
+  --card-border: #d7d9dd;
+  --card-success-bg: #eef8f1;
+  --card-success-border: #b9ddc5;
+}
+
+/* All app-owned record/task cards share one neutral surface. */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
+div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker),
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
+  background: var(--card-bg) !important;
+  border: 1px solid var(--card-border) !important;
+  border-radius: 14px !important;
+  box-shadow: none !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
+  padding: .9rem 1rem !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) {
+  background: var(--card-success-bg) !important;
+  border-color: var(--card-success-border) !important;
+}
+
+.shared-card-copy { display:grid; gap:.32rem; width:100%; margin:0 0 .35rem 0; }
+.shared-card-heading { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; }
+.shared-card-heading strong { color:var(--text); font-size:1rem; }
+.shared-card-main { color:var(--text); font-size:.95rem; }
+.shared-card-meta { color:var(--muted); font-size:.86rem; line-height:1.4; }
+.shared-card-label { color:var(--text); font-size:.88rem; text-align:right; }
+.shared-card-status { font-size:.88rem; font-weight:700; text-align:right; white-space:nowrap; }
+.shared-card-status.is-complete { color:#22683d; }
+.shared-card-status.is-progress { color:#2f5f8f; }
+.shared-card-status.is-warning { color:#75530b; }
+
+/* Field cards use the same neutral base and identical geometry between states. */
+.visit-trap-card,
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
+  background:var(--card-bg) !important;
+}
+.visit-trap-card.is-checked {
+  background:var(--card-success-bg) !important;
+  border-color:var(--card-success-border) !important;
+}
+.visit-trap-card { padding:.9rem 1rem !important; margin-bottom:.7rem !important; min-height:0 !important; }
+
+/* Compact action spacing inside all shared cards. */
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton {
+  margin-top:.35rem !important;
+}
+[data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton button,
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button {
+  min-height:2.7rem !important;
+}
+
+/* Exactly one app-owned drawer-close chevron. Hide every native drawing layer. */
+[data-testid="stSidebarCollapseButton"] svg,
+[data-testid="stSidebarCollapseButton"] svg *,
+[data-testid="stSidebarCollapseButton"]::before,
+[data-testid="stSidebarCollapseButton"] > *::before,
+[data-testid="stSidebarCollapseButton"] > *::after {
+  display:none !important;
+  content:none !important;
+}
+[data-testid="stSidebarCollapseButton"]::after { display:none !important; content:none !important; }
+[data-testid="stSidebarCollapseButton"] button::after {
+  content:"" !important;
+  display:block !important;
+  position:absolute !important;
+  left:50% !important;
+  top:50% !important;
+  width:.68rem !important;
+  height:.68rem !important;
+  border-left:2.5px solid #25262d !important;
+  border-bottom:2.5px solid #25262d !important;
+  transform:translate(-35%,-50%) rotate(45deg) !important;
+  pointer-events:none !important;
+  opacity:1 !important;
+}
+
+@media (max-width:700px) {
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div,
+  .visit-trap-card { padding:.8rem .9rem !important; }
+  .shared-card-heading { gap:.5rem; }
+  .shared-card-heading strong { font-size:.96rem; }
+  .shared-card-main { font-size:.9rem; }
+  .shared-card-meta, .shared-card-label, .shared-card-status { font-size:.82rem; }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -2415,6 +2540,92 @@ input, textarea, select, button,
 [data-testid="stSidebar"] details > summary svg * { stroke:#25262d !important; }
 [data-testid="stSidebar"] details > summary::after { content:none !important; display:none !important; }
 
+
+/* v8.7.5.1 — controlled menu-chevron repair.
+   App-owned icons avoid Streamlit SVG colour/shape regressions.
+   Applies on desktop and mobile; never targets generic header buttons. */
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapseButton"] {
+  position: relative !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  color: #25262d !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="stSidebarCollapseButton"] button {
+  position: relative !important;
+  min-width: 2.5rem !important;
+  min-height: 2.5rem !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Hide only the two native sidebar-control SVGs. */
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapseButton"] svg {
+  display: none !important;
+}
+
+/* Closed drawer: right-pointing open chevron. */
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="stSidebarCollapsedControl"] button::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .68rem !important;
+  height: .68rem !important;
+  border-top: 2.5px solid #25262d !important;
+  border-right: 2.5px solid #25262d !important;
+  transform: translate(-65%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+}
+
+/* Avoid two pseudo-icons where Streamlit wraps the button. */
+[data-testid="stSidebarCollapsedControl"]:has(button)::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Open drawer: left-pointing close chevron. */
+[data-testid="stSidebarCollapseButton"]::after,
+[data-testid="stSidebarCollapseButton"] button::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .68rem !important;
+  height: .68rem !important;
+  border-left: 2.5px solid #25262d !important;
+  border-bottom: 2.5px solid #25262d !important;
+  transform: translate(-35%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+}
+
+[data-testid="stSidebarCollapseButton"]:has(button)::after {
+  content: none !important;
+  display: none !important;
+}
+
+/* Maintain visible controls without hover-dependent colour changes. */
+[data-testid="stSidebarCollapsedControl"]:hover,
+[data-testid="stSidebarCollapseButton"]:hover,
+[data-testid="stSidebarCollapsedControl"] button:hover,
+[data-testid="stSidebarCollapseButton"] button:hover {
+  background: #f1f2f3 !important;
+}
+
 /* Compact field cards. */
 .visit-trap-card { min-height:0 !important; padding:.9rem 1rem !important; display:block !important; margin-bottom:.7rem !important; }
 .visit-trap-copy { display:grid; gap:.35rem; width:100%; }
@@ -2454,6 +2665,158 @@ input, textarea, select, button,
   .visit-trap-line, .site-card-heading { gap:.55rem; }
   .visit-trap-meta, .site-card-meta { font-size:.82rem; }
   [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom:.75rem !important; }
+}
+
+
+/* v8.7.5.3 — controlled single-chevron fix.
+   Draw exactly one icon on the actual button only. Container and nested pseudo-elements
+   are explicitly suppressed so wrapper differences cannot create a doubled glyph. */
+[data-testid="stSidebarCollapsedControl"]::before,
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="stSidebarCollapseButton"]::before,
+[data-testid="stSidebarCollapseButton"]::after,
+[data-testid="stSidebarCollapsedControl"] button::before,
+[data-testid="stSidebarCollapseButton"] button::before,
+[data-testid="stSidebarCollapsedControl"] button > *::before,
+[data-testid="stSidebarCollapsedControl"] button > *::after,
+[data-testid="stSidebarCollapseButton"] button > *::before,
+[data-testid="stSidebarCollapseButton"] button > *::after {
+  content: none !important;
+  display: none !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] svg,
+[data-testid="stSidebarCollapseButton"] svg {
+  display: none !important;
+}
+
+[data-testid="stSidebarCollapsedControl"] button::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .62rem !important;
+  height: .62rem !important;
+  border-top: 2.5px solid #25262d !important;
+  border-right: 2.5px solid #25262d !important;
+  transform: translate(-62%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+}
+
+[data-testid="stSidebarCollapseButton"] button::after {
+  content: "" !important;
+  display: block !important;
+  position: absolute !important;
+  left: 50% !important;
+  top: 50% !important;
+  width: .62rem !important;
+  height: .62rem !important;
+  border-left: 2.5px solid #25262d !important;
+  border-bottom: 2.5px solid #25262d !important;
+  transform: translate(-38%, -50%) rotate(45deg) !important;
+  pointer-events: none !important;
+}
+
+/* v8.7.5.4 — targeted shared base for the two missed trap-card surfaces only.
+   Other card pages are intentionally untouched. */
+.setup-trap-card-marker { display:none !important; }
+
+[data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker),
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
+  background:#f3f3f0 !important;
+  border:1px solid #d7d9dd !important;
+  border-radius:14px !important;
+  box-shadow:none !important;
+}
+
+[data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) > div,
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
+  padding:.85rem 1rem !important;
+}
+
+/* Streamlit wrapper fallback for mobile DOM variants. Keep the selector limited to
+   a bordered block containing one of the two page-specific markers. */
+div[data-testid="stVerticalBlock"]:has(.setup-trap-card-marker)[style*="border"],
+div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"] {
+  background:#f3f3f0 !important;
+  border-color:#d7d9dd !important;
+  border-radius:14px !important;
+  box-shadow:none !important;
+}
+
+@media (max-width:700px) {
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker),
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
+    margin-bottom:.7rem !important;
+  }
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) > div,
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
+    padding:.8rem .9rem !important;
+  }
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) .shared-card-copy {
+    gap:.28rem !important;
+    margin-bottom:.2rem !important;
+  }
+}
+
+/* v8.7.5.6 — final drawer-control isolation.
+   Some Streamlit builds render an underlying double-arrow text glyph. Suppress
+   all native button content, then draw one app-owned chevron on the button. */
+[data-testid="stSidebarCollapsedControl"]::before,
+[data-testid="stSidebarCollapsedControl"]::after,
+[data-testid="stSidebarCollapseButton"]::before,
+[data-testid="stSidebarCollapseButton"]::after {
+  content:none !important;
+  display:none !important;
+}
+[data-testid="stSidebarCollapsedControl"] button,
+[data-testid="stSidebarCollapseButton"] button {
+  position:relative !important;
+  font-size:0 !important;
+  line-height:0 !important;
+  color:transparent !important;
+  text-shadow:none !important;
+  overflow:visible !important;
+}
+[data-testid="stSidebarCollapsedControl"] button > *,
+[data-testid="stSidebarCollapseButton"] button > * {
+  display:none !important;
+  visibility:hidden !important;
+  opacity:0 !important;
+}
+[data-testid="stSidebarCollapsedControl"] button::before,
+[data-testid="stSidebarCollapseButton"] button::before {
+  content:none !important;
+  display:none !important;
+}
+[data-testid="stSidebarCollapsedControl"] button::after {
+  content:"" !important;
+  display:block !important;
+  position:absolute !important;
+  left:50% !important;
+  top:50% !important;
+  width:.62rem !important;
+  height:.62rem !important;
+  border-top:2.5px solid #25262d !important;
+  border-right:2.5px solid #25262d !important;
+  transform:translate(-62%,-50%) rotate(45deg) !important;
+  pointer-events:none !important;
+  opacity:1 !important;
+}
+[data-testid="stSidebarCollapseButton"] button::after {
+  content:"" !important;
+  display:block !important;
+  position:absolute !important;
+  left:50% !important;
+  top:50% !important;
+  width:.62rem !important;
+  height:.62rem !important;
+  border-left:2.5px solid #25262d !important;
+  border-bottom:2.5px solid #25262d !important;
+  transform:translate(-38%,-50%) rotate(45deg) !important;
+  pointer-events:none !important;
+  opacity:1 !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2612,20 +2975,29 @@ if page == "sites":
         interval = int(float(s["Visit Interval Days"] or 3)); last_dt = parse_dt(last["End Time"]) if last is not None else None
         next_dt = last_dt + timedelta(days=interval) if last_dt else now()
         completed_today = bool(last_dt and last_dt.date() == now().date())
+        checks = data["Checks"][data["Checks"]["Visit ID"] == active["Visit ID"]] if active is not None else pd.DataFrame()
+        active_complete = active is not None and len(traps) > 0 and len(checks) >= len(traps)
+        if active is not None:
+            status_text = "Ready to finish" if active_complete else "In progress"
+            status_class = "is-warning" if active_complete else "is-progress"
+        elif completed_today:
+            status_text = "Completed today"
+            status_class = "is-complete"
+        else:
+            status_text = ""
+            status_class = ""
         with app_card():
-            if completed_today:
+            if completed_today and active is None:
                 st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-            status_text = "Completed today" if completed_today else ("Visit in progress" if active is not None else "")
             st.markdown(
-                '<div class="site-card-compact">'
-                f'<div class="site-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong><span class="site-card-status">{html.escape(status_text)}</span></div>'
-                f'<div class="site-card-meta">{len(traps)} active traps · Every {interval} days</div>'
-                f'<div class="site-card-meta">Last: {last_dt.strftime("%d %b %Y") if last_dt else "Not completed"} · Next: {"Due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
+                '<div class="shared-card-copy site-card-compact">'
+                f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong><span class="shared-card-status {status_class}">{html.escape(status_text)}</span></div>'
+                f'<div class="shared-card-meta">{len(traps)} active traps · Every {interval} days</div>'
+                f'<div class="shared-card-meta">Last {last_dt.strftime("%d %b %Y") if last_dt else "not completed"} · Next {"due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
                 '</div>',
                 unsafe_allow_html=True,
             )
             if active is not None:
-                checks = data["Checks"][data["Checks"]["Visit ID"] == active["Visit ID"]]
                 st.caption(f"{len(checks)} of {len(traps)} traps checked")
                 if st.button("Resume checking", key=f"resume_{sid}", type="primary"):
                     go("visit", site_id=sid, visit_id=active["Visit ID"])
@@ -3251,15 +3623,17 @@ elif page == "followups":
             for _,item_row in fu.iterrows():
                 row_fid=item_row["Follow-up ID"]
                 with app_card():
-                    c1,c2,c3,action=st.columns([1.1,1.25,1.65,0.62],vertical_alignment="center")
-                    c1.markdown(f"**{item_row['Trap ID']}**"); c1.caption(site_name(data,item_row["Site ID"]))
-                    c2.write(item_row["Follow-up Type"]); c2.caption(item_row["Priority"])
-                    if str(item_row.get("Bag ID", "")).strip():
-                        c3.markdown(f"**Bag {item_row['Bag ID']}**")
-                        c3.caption(f"{item_row['Reason'] or 'Dead animal follow-up'} · Created {human_dt(item_row['Created Time'])}")
-                    else:
-                        c3.write(item_row["Reason"] or "—"); c3.caption(f"Created {human_dt(item_row['Created Time'])}")
-                    if action.button("Review",key=f"followup_review_{row_fid}",use_container_width=True):
+                    bag_text = f"Bag {item_row['Bag ID']} · " if str(item_row.get("Bag ID", "")).strip() else ""
+                    reason_text = item_row["Reason"] or "—"
+                    st.markdown(
+                        '<div class="shared-card-copy">'
+                        f'<div class="shared-card-heading"><strong>{html.escape(str(item_row["Trap ID"]))}</strong><span class="shared-card-label">{html.escape(str(item_row["Follow-up Type"]))}</span></div>'
+                        f'<div class="shared-card-meta">{html.escape(site_name(data,item_row["Site ID"]))} · {html.escape(str(item_row["Priority"]))}</div>'
+                        f'<div class="shared-card-meta">{html.escape(bag_text + str(reason_text))} · Created {html.escape(human_dt(item_row["Created Time"]))}</div>'
+                        '</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if st.button("Review",key=f"followup_review_{row_fid}",use_container_width=True):
                         st.session_state.followup_panel=row_fid; st.rerun()
     else:
         matches=data["Followups"][data["Followups"]["Follow-up ID"]==selected_followup_id]
@@ -3857,16 +4231,17 @@ elif page == "setup":
                 for _, tr in view.sort_values(["Site ID", "_route_num"]).iterrows():
                     trap_id = tr["Trap ID"]
                     with app_card():
-                        c1, c2, c3, c4, action = st.columns([1.05, 1.25, 1.0, 1.0, 0.7], vertical_alignment="center")
-                        c1.markdown(f"**{trap_id}**")
-                        c1.caption(tr["Product"])
-                        c2.write(trap_location_label(tr))
-                        c2.caption(site_name(data, tr["Site ID"]))
-                        c3.write(tr["Build Version"] or "—")
-                        c3.caption(f"Trap {tr['Route Order']}")
-                        c4.write(tr["Camera ID"] or "No camera")
-                        c4.caption(tr["Status"])
-                        if action.button("Edit", key=f"setup_edit_trap_{trap_id}"):
+                        st.markdown('<span class="setup-trap-card-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+                        camera_text = tr["Camera ID"] or "No camera"
+                        st.markdown(
+                            '<div class="shared-card-copy">'
+                            f'<div class="shared-card-heading"><strong>{html.escape(str(trap_id))}</strong><span class="shared-card-label">{html.escape(str(tr["Status"]))}</span></div>'
+                            f'<div class="shared-card-main">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
+                            f'<div class="shared-card-meta">{html.escape(str(tr["Product"]))} · Build {html.escape(str(tr["Build Version"] or "—"))} · {html.escape(str(camera_text))} · Route {html.escape(str(tr["Route Order"] or "—"))}</div>'
+                            '</div>',
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("Edit", key=f"setup_edit_trap_{trap_id}"):
                             go("trap_edit", trap_id=trap_id)
         if panel is not None:
             with panel:
@@ -4044,14 +4419,18 @@ elif page == "setup":
                 sid = site_row["Site ID"]
                 trap_count = len(data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")])
                 with app_card():
-                    c1, c2, c3, action = st.columns([1.3, 1.0, 1.15, 0.7], vertical_alignment="center")
-                    c1.markdown(f"**{site_row['Site Name']}**")
-                    c1.caption(sid)
-                    c2.write(f"{trap_count} active traps")
-                    c2.caption(f"Planned every {site_row['Visit Interval Days']} days")
-                    c3.write(site_row["Status"])
-                    c3.caption("Mobile coverage confirmed" if site_row.get("Mobile Coverage Confirmed","")=="Yes" else "Mobile coverage not confirmed")
-                    if action.button("Edit", key=f"setup_edit_site_{sid}"):
+                    coverage_text = (
+                        "Mobile coverage confirmed"
+                        if site_row.get("Mobile Coverage Confirmed", "") == "Yes"
+                        else "Mobile coverage not confirmed"
+                    )
+                    render_compact_card_content(
+                        title=str(site_row["Site Name"]),
+                        right_label=str(site_row["Status"]),
+                        main_line=f"{sid} · {trap_count} active trap{'s' if trap_count != 1 else ''}",
+                        meta_line=f"Every {site_row['Visit Interval Days']} days · {coverage_text}",
+                    )
+                    if st.button("Edit", key=f"setup_edit_site_{sid}"):
                         st.session_state.setup_site=sid; st.session_state.site_mode="edit"; st.rerun()
         if panel is not None:
             with panel:
@@ -4175,14 +4554,15 @@ elif page == "setup":
                     & (data["Traps"]["Status"] == "Active")
                 ])
                 with app_card():
-                    c1, c2, c3, action = st.columns([1.15, 1.15, 1.3, 0.7], vertical_alignment="center")
-                    c1.markdown(f"**{version}**")
-                    c1.caption(product_code)
-                    c2.write(build_row["Build Status"])
-                    c2.caption(f"{active_traps} active traps")
-                    c3.write((parse_dt(build_row["First Active Date"]).strftime("%d %b %Y") if parse_dt(build_row["First Active Date"]) else "—"))
-                    c3.caption(build_row["Notes"] or "No notes")
-                    if action.button("Edit", key=f"setup_edit_build_{product_code}_{version}"):
+                    first_active = parse_dt(build_row["First Active Date"])
+                    first_active_text = first_active.strftime("%d %b %Y") if first_active else "—"
+                    render_compact_card_content(
+                        title=f"{product_code} Build {version}",
+                        right_label=str(build_row["Build Status"]),
+                        main_line=f"{active_traps} active trap{'s' if active_traps != 1 else ''}",
+                        meta_line=f"First active {first_active_text} · {build_row['Notes'] or 'No notes'}",
+                    )
+                    if st.button("Edit", key=f"setup_edit_build_{product_code}_{version}"):
                         st.session_state.setup_build=build_identity
                         st.session_state.build_mode="edit"
                         st.rerun()
@@ -4469,7 +4849,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5 · Stabilisation recovery")
+st.sidebar.caption("v8.7.5.8 · Explicit card components")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):

@@ -710,3 +710,7 @@ System-level changes from the first field trial:
 - adds controlled removal of one invalid follow-up task with audit history
 - preserves the linked check and test window when removing a follow-up
 - adds safe removal of one unused build
+
+
+## v8.7.5.2 controlled scope
+See `CONTROLLED_FIX_v8_7_5_2.md`.

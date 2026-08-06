@@ -302,3 +302,24 @@ A requested UI change is not just a selector or CSS instruction. Before implemen
 define the full interaction across closed, open, mobile and desktop states, preserve
 unrelated behaviour, and use established interface conventions unless the product
 requires otherwise.
+
+## Shared card system (v8.7.5.2)
+
+All record, task, site and field cards use one visual base:
+
+- soft neutral grey background (`#F3F3F0`)
+- light grey border (`#D7D9DD`)
+- 14 px radius
+- no shadow
+- compact padding on mobile
+- identity/status first, main context second, supporting metadata grouped third
+- one action area only
+
+Variants:
+
+- normal: neutral grey
+- completed/checked: pale green background and green border, with identical geometry
+- warning/ready to finish: neutral card with clear warning status text
+- inactive: neutral card with reduced emphasis and explicit status
+
+Page-specific card layouts must not introduce different surfaces, spacing systems or nested card borders.
