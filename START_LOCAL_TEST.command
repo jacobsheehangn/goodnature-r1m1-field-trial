@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-echo "R1/M1 Field Trial — v8.6.82 Clean Regression Repair"
+echo "R1/M1 Field Trial — v8.6.83 Restore Mobile Menu Control"
 echo "Preparing local test environment..."
 
 if ! command -v python3 >/dev/null 2>&1; then

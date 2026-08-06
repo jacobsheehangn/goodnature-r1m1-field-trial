@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.82 Clean Regression Repair
+# R1/M1 Field Trial App — v8.6.83 Restore Mobile Menu Control
 
 ## Deployment requirement
 
@@ -628,3 +628,17 @@ This release requires manual iPhone confirmation for both reported regressions.
 - retains only targeted hiding of Streamlit's redundant menu
 - keeps restored mobile chevron behaviour
 - keeps refresh-persistent signed-token restoration
+
+
+## v8.6.83 restore mobile menu control
+
+Root cause:
+- the CSS hid buttons labelled `View app menu`
+- Streamlit uses that label for the mobile sidebar control
+- the chevron styling remained, but the entire control was hidden
+
+Fix:
+- remove all title/aria-label button hiding
+- hide only the actual Streamlit menu container
+- retain the known-good v8.6.71/v8.6.72 mobile chevron rules
+- retain refresh-persistent login, build identity and safe field setup
