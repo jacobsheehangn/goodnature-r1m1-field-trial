@@ -2725,32 +2725,37 @@ components.html(
     """
     <script>
     (() => {
-      const w = window.parent;
-      const d = w.document;
-      const STYLE_ID = "r1m1-mobile-menu-style";
-      const BUTTON_ID = "r1m1-mobile-menu-button";
-      const OVERLAY_ID = "r1m1-mobile-menu-overlay";
-      const CLASS_NAME = "r1m1-mobile-menu-open";
+      const parentWindow = window.parent;
+      const doc = parentWindow.document;
+      const STYLE_ID = "r1m1-closed-menu-style";
+      const BUTTON_ID = "r1m1-closed-menu-button";
+      const OBSERVER_KEY = "__r1m1ClosedMenuObserver";
 
-      if (!d.getElementById(STYLE_ID)) {
-        const style = d.createElement("style");
+      if (!doc.getElementById(STYLE_ID)) {
+        const style = doc.createElement("style");
         style.id = STYLE_ID;
         style.textContent = `
+          [data-testid="stSidebarCollapsedControl"] {
+            opacity: 0 !important;
+            visibility: hidden !important;
+            pointer-events: none !important;
+          }
+
           #${BUTTON_ID} {
             position: fixed;
             top: calc(.55rem + env(safe-area-inset-top));
             left: .65rem;
-            z-index: 1000002;
+            z-index: 1000000;
             width: 2.75rem;
             height: 2.75rem;
-            display: flex;
+            display: none;
             align-items: center;
             justify-content: center;
             padding: 0;
             margin: 0;
             border: 0;
             border-radius: .65rem;
-            background: rgba(255,255,255,.97);
+            background: rgba(255,255,255,.96);
             color: #25262d;
             box-shadow: none;
             font: 700 2rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -2760,106 +2765,81 @@ components.html(
             touch-action: manipulation;
           }
 
-          #${OVERLAY_ID} {
-            position: fixed;
-            inset: 0;
-            z-index: 999998;
-            display: none;
-            background: rgba(0,0,0,.22);
-            -webkit-tap-highlight-color: transparent;
-          }
-
-          html.${CLASS_NAME} #${OVERLAY_ID} {
-            display: block;
-          }
-
-          html.${CLASS_NAME} [data-testid="stSidebar"] {
-            transform: translateX(300px) !important;
-            visibility: visible !important;
-            z-index: 1000001 !important;
-          }
-
-          @media (min-width: 701px) {
-            #${BUTTON_ID},
-            #${OVERLAY_ID} {
-              display: none !important;
-            }
+          #${BUTTON_ID}:focus-visible {
+            outline: 3px solid rgba(243,108,33,.35);
+            outline-offset: 2px;
           }
         `;
-        d.head.appendChild(style);
+        doc.head.appendChild(style);
       }
 
-      let button = d.getElementById(BUTTON_ID);
+      let button = doc.getElementById(BUTTON_ID);
       if (!button) {
-        button = d.createElement("button");
+        button = doc.createElement("button");
         button.id = BUTTON_ID;
         button.type = "button";
         button.setAttribute("aria-label", "Open menu");
         button.setAttribute("title", "Open menu");
         button.textContent = "›";
-        d.body.appendChild(button);
+        doc.body.appendChild(button);
       }
 
-      let overlay = d.getElementById(OVERLAY_ID);
-      if (!overlay) {
-        overlay = d.createElement("div");
-        overlay.id = OVERLAY_ID;
-        overlay.setAttribute("aria-hidden", "true");
-        d.body.appendChild(overlay);
-      }
-
-      const sidebar = () => d.querySelector('[data-testid="stSidebar"]');
-
-      const openMenu = () => {
-        const side = sidebar();
-        if (!side) return;
-        d.documentElement.classList.add(CLASS_NAME);
-        button.style.display = "none";
-        side.setAttribute("aria-hidden", "false");
+      const sidebarIsOpen = () => {
+        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
+        if (!sidebar) return false;
+        const rect = sidebar.getBoundingClientRect();
+        const style = parentWindow.getComputedStyle(sidebar);
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 40 &&
+          rect.right > 8
+        );
       };
 
-      const closeMenu = () => {
-        const side = sidebar();
-        d.documentElement.classList.remove(CLASS_NAME);
-        if (w.innerWidth <= 700) button.style.display = "flex";
-        if (side) side.setAttribute("aria-hidden", "true");
+      const nativeOpenControl = () => {
+        const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
+        if (!wrapper) return null;
+        if (wrapper.matches("button")) return wrapper;
+        return wrapper.querySelector("button") || wrapper;
       };
 
-      button.onclick = openMenu;
-      overlay.onclick = closeMenu;
-
-      d.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") closeMenu();
-      });
-
-      const observerKey = "__r1m1MobileMenuObserver";
-      w.__r1m1MobileMenuSync = () => {
-        const side = sidebar();
-        if (!side) return;
-        const rect = side.getBoundingClientRect();
-        const open = d.documentElement.classList.contains(CLASS_NAME);
-        if (!open && w.innerWidth <= 700 && rect.right <= 8) {
-          button.style.display = "flex";
-        }
-        if (w.innerWidth > 700) {
-          d.documentElement.classList.remove(CLASS_NAME);
-        }
+      const update = () => {
+        const nativeControl = nativeOpenControl();
+        const shouldShow = Boolean(nativeControl) && !sidebarIsOpen();
+        button.style.display = shouldShow ? "flex" : "none";
       };
 
-      if (!w[observerKey]) {
+      button.onclick = () => {
+        const nativeControl = nativeOpenControl();
+        if (!nativeControl) return;
+        nativeControl.click();
+        requestAnimationFrame(update);
+        [80, 200, 450].forEach((delay) => parentWindow.setTimeout(update, delay));
+      };
+
+      parentWindow.__r1m1UpdateClosedMenu = update;
+
+      if (!parentWindow[OBSERVER_KEY]) {
         const observer = new MutationObserver(() => {
-          if (w.__r1m1MobileMenuSync) w.__r1m1MobileMenuSync();
+          if (parentWindow.__r1m1UpdateClosedMenu) {
+            parentWindow.__r1m1UpdateClosedMenu();
+          }
         });
-        observer.observe(d.body, { childList: true, subtree: true });
-        w.addEventListener("resize", w.__r1m1MobileMenuSync, { passive: true });
-        w.addEventListener("orientationchange", () => {
-          w.setTimeout(w.__r1m1MobileMenuSync, 150);
-        }, { passive: true });
-        w[observerKey] = observer;
+        observer.observe(doc.body, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ["style", "class", "aria-expanded"]
+        });
+        parentWindow.addEventListener("resize", update, { passive: true });
+        parentWindow.addEventListener("orientationchange", update, { passive: true });
+        parentWindow[OBSERVER_KEY] = observer;
       }
 
-      w.__r1m1CloseMobileMenu = closeMenu;
-      w.__r1m1MobileMenuSync();
+      update();
+      requestAnimationFrame(update);
+      [100, 300, 800].forEach((delay) => parentWindow.setTimeout(update, delay));
     })();
     </script>
     """,
@@ -2868,6 +2848,8 @@ components.html(
 )
 
 data = load_data()
+if "page" not in st.session_state: st.session_state.page = "sites"
+if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
 PRIMARY_NAV = {"Trap sites": "sites", "Traps": "network", "Follow-ups": "followups", "Trial performance": "results"}
 SECONDARY_NAV = {"Trial setup": "setup", "Data & records": "data_management"}
@@ -4867,7 +4849,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.16 · Mobile sidebar control")
+st.sidebar.caption("v8.7.5.14 · Safari menu and site status")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
