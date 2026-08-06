@@ -441,20 +441,6 @@ def require_authentication() -> None:
     st.stop()
 
 
-def show_environment_banner() -> None:
-    if DEPLOYMENT_ENVIRONMENT == "staging":
-        st.markdown(
-            """
-            <div class="staging-banner" role="status">
-              <span class="staging-banner-mobile"><strong>FIELD PILOT</strong> — Live trial data</span>
-              <span class="staging-banner-desktop"><strong>FIELD PILOT</strong> — Live trial data</span>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    elif DEPLOYMENT_ENVIRONMENT not in {"production", "local"}:
-        st.info(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
-
 
 def ensure_storage_ready() -> None:
     """Create and verify the configured durable-data directories."""
@@ -1750,19 +1736,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stAlert"] {border-radius: 12px;}
 hr {border-color: var(--line);}
 
-.staging-banner {
-  background: #fff9c9;
-  border: 1px solid #e4d976;
-  border-radius: 12px;
-  color: var(--text);
-  margin: 0 0 1.25rem 0;
-  padding: .7rem 1rem;
-  line-height: 1.35;
-}
-.staging-banner, .staging-banner * {color: var(--text) !important;}
-.staging-banner-mobile {display: none;}
-.staging-banner-desktop {display: inline;}
-
 .field-sticky-header {
   background: rgba(255,255,255,.97);
   border: 1px solid var(--line);
@@ -1801,16 +1774,6 @@ hr {border-color: var(--line);}
   [data-baseweb="select"] input {
     font-size: 16px !important;
   }
-
-  .staging-banner {
-    margin-bottom: 1rem;
-    padding: .55rem .8rem;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .staging-banner-mobile {display: inline;}
-  .staging-banner-desktop {display: none;}
 
   .message-panel {padding: .9rem 1rem; margin-bottom: 1rem;}
 
@@ -2762,6 +2725,21 @@ body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button:hover {
   }
 }
 </style>
+
+<style>
+/* v8.7.5.13 — authoritative page rhythm after removal of the retired field-pilot banner.
+   Keep only normal Streamlit-header and menu-control clearance. */
+body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
+  padding-top:3.25rem !important;
+}
+
+@media (max-width:700px) {
+  body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
+    padding-top:calc(3.75rem + env(safe-area-inset-top)) !important;
+  }
+}
+</style>
+
 
 """, unsafe_allow_html=True)
 
@@ -4781,7 +4759,7 @@ elif page == "data_management":
                             st.error(str(exc))
 
 st.sidebar.divider()
-st.sidebar.caption("v8.7.5.12 · Framework and login stabilisation")
+st.sidebar.caption("v8.7.5.13 · Page rhythm cleanup")
 if st.sidebar.button("Sign out", key="sign_out"):
     st.session_state.clear()
     st.rerun()
