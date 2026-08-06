@@ -5,7 +5,7 @@ On Mac, double-click `START_LOCAL_TEST.command`.
 Local records are stored separately in `local_test_data/`.
 Use `RESET_LOCAL_TEST_DATA.command` to restore fresh demo data.
 
-# R1/M1 Field Trial App — v8.6.79 Build Identity Fix
+# R1/M1 Field Trial App — v8.6.82 Clean Regression Repair
 
 ## Deployment requirement
 
@@ -609,3 +609,22 @@ A full controlled Move trap workflow is intentionally deferred until after the f
 - uses product and version in build edit keys and edit lookup
 - counts active traps against the correct product and version
 - keeps all v8.6.78 field-setup protections
+
+
+## v8.6.81 regression repair
+
+- removes the v8.6.76 mobile drawer positioning override
+- restores the prior mobile chevron behaviour
+- retains only targeted hiding of Streamlit's redundant menu
+- restores the signed access token to the URL whenever an authenticated session lacks it
+- keeps Product + Build Version identity and field-setup protections
+
+This release requires manual iPhone confirmation for both reported regressions.
+
+
+## v8.6.82 clean regression repair
+
+- removes all broad Streamlit toolbar hiding selectors
+- retains only targeted hiding of Streamlit's redundant menu
+- keeps restored mobile chevron behaviour
+- keeps refresh-persistent signed-token restoration

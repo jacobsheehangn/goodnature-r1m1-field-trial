@@ -18,7 +18,7 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.6.79 Build Identity Fix"
+APP_TITLE = "R1/M1 Field Trial — v8.6.82 Clean Regression Repair"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -376,6 +376,8 @@ def access_token_is_valid() -> bool:
 def require_authentication() -> None:
     """Require the shared pilot password before loading or displaying trial data."""
     if st.session_state.get("authenticated"):
+        if APP_PASSWORD and not access_token_is_valid():
+            st.query_params[AUTH_QUERY_KEY] = expected_access_token()
         return
 
     if not APP_PASSWORD:
@@ -390,6 +392,7 @@ def require_authentication() -> None:
     # or exposing the shared password.
     if access_token_is_valid():
         st.session_state.authenticated = True
+        st.query_params[AUTH_QUERY_KEY] = expected_access_token()
         return
 
     logo_path = APP_DIR / "goodnature_logo.png"
@@ -1139,7 +1142,7 @@ header[data-testid="stHeader"] {
   background: #ffffff !important;
   border-bottom: 1px solid #eceef1 !important;
 }
-header[data-testid="stHeader"] [data-testid="stToolbar"] {
+header[data-testid="stHeader"] {
   background: transparent !important;
   overflow: visible !important;
 }
@@ -1838,12 +1841,12 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
   }
 
   /* Explicitly leave Streamlit's settings/toolbar control untouched. */
-  header[data-testid="stHeader"] [data-testid="stToolbar"] button {
+  header[data-testid="stHeader"] button {
     background: initial !important;
   }
 }
 
-/* v8.6.76 — hide only Streamlit's redundant app-menu control. */
+/* Hide only Streamlit's redundant app-menu control; app navigation is untouched. */
 [data-testid="stMainMenu"],
 button[title="View app menu"],
 button[aria-label="View app menu"],
@@ -1853,33 +1856,6 @@ button[aria-label="View app menu"],
   pointer-events: none !important;
 }
 
-/* v8.6.76 — conventional mobile drawer: open left, close top right inside drawer. */
-@media (max-width: 768px) {
-  [data-testid="stSidebar"] {
-    position: relative !important;
-  }
-
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-    position: absolute !important;
-    top: calc(.85rem + env(safe-area-inset-top)) !important;
-    right: .85rem !important;
-    left: auto !important;
-    width: 2.75rem !important;
-    height: 2.75rem !important;
-    min-width: 2.75rem !important;
-    min-height: 2.75rem !important;
-    margin: 0 !important;
-    padding: 0 !important;
-    z-index: 1004 !important;
-    background: transparent !important;
-    border: 0 !important;
-    box-shadow: none !important;
-  }
-
-  [data-testid="stSidebar"] > div:first-child {
-    padding-top: calc(4.5rem + env(safe-area-inset-top)) !important;
-  }
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -3515,7 +3491,7 @@ elif page == "data_management":
             st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
 
 st.sidebar.divider()
-st.sidebar.caption("v8.6.79 · Build Identity Fix")
+st.sidebar.caption("v8.6.82 · Clean Regression Repair")
 st.sidebar.caption(f"Environment: {DEPLOYMENT_ENVIRONMENT}")
 st.sidebar.caption(f"Data folder: {DATA_ROOT}")
 if st.sidebar.button("Sign out", key="sign_out"):
