@@ -1349,18 +1349,37 @@ def app_card():
         yield
 
 
+def status_pill(label: str, kind: str = "none") -> str:
+    """Shared status indicator markup: a pale-background pill for a state
+    worth drawing the eye to (kind in "success"/"guidance"/"warning"), or
+    plain muted text when kind == "none" — a background fact (e.g.
+    Inactive) that's deliberately not meant to visually compete with the
+    states that are. Returns HTML; callers compose it into their own
+    st.markdown call rather than this rendering directly, so it works both
+    standalone and inside render_compact_card_content below."""
+    if not label:
+        return ""
+    if kind == "none":
+        return f'<span class="shared-card-label">{html.escape(str(label))}</span>'
+    return f'<span class="status-pill status-pill-{html.escape(str(kind))}">{html.escape(str(label))}</span>'
+
+
 def render_compact_card_content(
     *,
     title: str,
     right_label: str = "",
+    right_label_kind: Optional[str] = None,
     main_line: str = "",
     meta_line: str = "",
 ) -> None:
     """Render the shared compact card hierarchy without relying on Streamlit wrappers."""
-    right_html = (
-        f'<span class="shared-card-label">{html.escape(str(right_label))}</span>'
-        if right_label else ""
-    )
+    if right_label_kind is not None:
+        right_html = status_pill(right_label, right_label_kind)
+    else:
+        right_html = (
+            f'<span class="shared-card-label">{html.escape(str(right_label))}</span>'
+            if right_label else ""
+        )
     main_html = (
         f'<div class="shared-card-main">{html.escape(str(main_line))}</div>'
         if main_line else ""
@@ -2510,7 +2529,16 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   width: 100%;
 }
 
-.st-key-app_top_navigation [data-testid="stHorizontalBlock"] {
+/* No space before [data-testid] deliberately: stHorizontalBlock is a
+   data-testid on .st-key-app_top_navigation itself, not a descendant of
+   it — the previous descendant-combinator selector here could never match
+   anything (confirmed via devtools: zero matched rules), so this row was
+   silently running on Streamlit's own default 1rem gap the whole time.
+   That extra width was enough to overflow the row at normal desktop
+   widths, forcing Administration onto its own second line — which is what
+   was actually behind the "Administration sits lower" symptom, not a
+   same-row height mismatch between stPageLink and stPopover. */
+.st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
   width: 100%;
   flex-wrap: wrap !important;
   align-items: center !important;
@@ -2518,8 +2546,16 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   row-gap: .42rem !important;
 }
 
+/* [data-testid="stPopoverButton"] here, not "[stPopover] > button": the
+   real button sits behind an extra unnamed wrapper div (stPopover > div >
+   button), so the old "> button" direct-child selector never matched
+   anything either (confirmed via devtools — zero matched rules, same
+   failure mode as the stHorizontalBlock gap selector above). The
+   Administration pill's visible styling up to now came entirely from
+   broader app-wide button rules, not from this nav-specific block, which
+   is why its padding/height never quite matched its siblings. */
 .st-key-app_top_navigation [data-testid="stPageLink"] a,
-.st-key-app_top_navigation [data-testid="stPopover"] > button {
+.st-key-app_top_navigation [data-testid="stPopoverButton"] {
   width: auto !important;
   min-height: 2.55rem !important;
   padding: .42rem .85rem !important;
@@ -2537,12 +2573,12 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
    hardcoded dark-theme colour, which wins over the <a> rule above through
    normal inheritance rules regardless of !important. Target it directly. */
 .st-key-app_top_navigation [data-testid="stPageLink"] a *,
-.st-key-app_top_navigation [data-testid="stPopover"] > button * {
+.st-key-app_top_navigation [data-testid="stPopoverButton"] * {
   color: #25262d !important;
 }
 
 .st-key-app_top_navigation [data-testid="stPageLink"] a:hover,
-.st-key-app_top_navigation [data-testid="stPopover"] > button:hover {
+.st-key-app_top_navigation [data-testid="stPopoverButton"]:hover {
   border-color: #b8bcc2 !important;
   background: #f7f7f5 !important;
 }
@@ -2556,13 +2592,13 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 }
 
 @media (max-width: 700px) {
-  .st-key-app_top_navigation [data-testid="stHorizontalBlock"] {
+  .st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
     column-gap: .32rem !important;
     row-gap: .38rem !important;
   }
 
   .st-key-app_top_navigation [data-testid="stPageLink"] a,
-  .st-key-app_top_navigation [data-testid="stPopover"] > button {
+  .st-key-app_top_navigation [data-testid="stPopoverButton"] {
     min-height: 2.65rem !important;
     padding: .43rem .72rem !important;
   }
@@ -2695,6 +2731,89 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 [data-testid="stRadioOption"]:has(input:disabled)::before,
 [data-testid="stCheckbox"] > label:has(input:disabled)::before {
   opacity: .5 !important;
+}
+</style>
+
+<style>
+/* UI polish: desktop card width cap. This container already had a plain
+   (non-!important) max-width:1220px via .block-container, which still left
+   cards visibly bunched left with a large empty gap on a real desktop
+   screen. First tried 760px, matching the original design review — but
+   verification against the actual Trial performance page found 5 of 9
+   st.metric labels (both the "Performance at a glance" stat row and the
+   Camera conversion funnel breakdown) truncate with an ellipsis at that
+   width, since column width there is a further 2-3-way division of
+   whatever this container measures. 1020px is the point where all of them
+   fit without truncating, checked directly against rendered label
+   scrollWidth/clientWidth, while still meaningfully narrower than 1220px.
+   The funnel's narrowest label sits in a 1.2-of-5 column split, so it
+   needs a disproportionate amount of overall width increase to close a
+   small pixel gap — don't assume a round number like 960 or 1000 is
+   enough without re-measuring scrollWidth/clientWidth directly.
+   Scoped with the same body:not(:has(.login-page-marker)) guard the
+   existing "authoritative page rhythm" padding-top rule already uses, to
+   avoid an !important-vs-!important fight with the login page's own
+   max-width:30rem rule on this same selector. min-width:701px (not just
+   applying unconditionally) so this can never compete with the existing
+   @media (max-width:700px) card-padding rule below — mobile must render
+   identically to before this change. */
+@media (min-width: 701px) {
+  body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
+    max-width: 1020px !important;
+    margin-left: auto !important;
+    margin-right: auto !important;
+  }
+
+  /* Cards were padded/spaced for a container that used to sprawl edge to
+     edge; capping the width alone (tried first) made them read as
+     noticeably cramped. Loosen padding and internal rhythm to match, desktop
+     only — mobile's existing tighter spacing already reads correctly at
+     that width and must stay untouched. */
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
+    padding: 1.375rem 1.5rem !important;
+  }
+
+  .shared-card-copy { gap: .4rem !important; }
+  /* Extra breathing room specifically after the title/status heading row,
+     stacked on top of the base .shared-card-copy gap above (grid gaps and
+     child margins don't collapse), rather than raising the base gap for
+     every line and losing the tighter rhythm between metadata lines. */
+  .shared-card-heading + .shared-card-main,
+  .shared-card-heading + .shared-card-meta {
+    margin-top: .4rem !important;
+  }
+
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton {
+    margin-top: 1.1rem !important;
+  }
+}
+</style>
+
+<style>
+/* UI polish: shared status_pill() treatment. Card status labels (Active,
+   Current, In progress, Ready to finish, Last checked today) previously
+   rendered as page-specific bare coloured/black text with no shared
+   component, which is how the inconsistency drifted in the first place.
+   Applies at every width — unlike the card max-width/spacing block above,
+   there's no reason a pill needs to be desktop-only, and the bare-text
+   inconsistency was confirmed at mobile width too. */
+.status-pill {
+  display: inline-block;
+  padding: .2rem .6rem;
+  border-radius: 999px;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.status-pill-success { background: #eaf7ef; color: #22683d; }
+.status-pill-guidance { background: #edf4fb; color: #235f93; }
+.status-pill-warning { background: #fff3d9; color: #775900; }
+
+@media (max-width: 700px) {
+  .status-pill { font-size: .78rem; padding: .18rem .5rem; }
 }
 </style>
 
@@ -2885,19 +3004,19 @@ if page == "sites":
         active_complete = active is not None and len(traps) > 0 and len(checks) >= len(traps)
         if active is not None:
             status_text = "Ready to finish" if active_complete else "In progress"
-            status_class = "is-warning" if active_complete else "is-progress"
+            status_kind = "warning" if active_complete else "guidance"
         elif completed_today:
             status_text = "Last checked today"
-            status_class = "is-complete"
+            status_kind = "success"
         else:
             status_text = ""
-            status_class = ""
+            status_kind = "none"
         with app_card():
             if completed_today and active is None:
                 st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
             st.markdown(
                 '<div class="shared-card-copy site-card-compact">'
-                f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong><span class="shared-card-status {status_class}">{html.escape(status_text)}</span></div>'
+                f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
                 f'<div class="shared-card-meta">{len(traps)} active traps · Every {interval} days</div>'
                 f'<div class="shared-card-meta">Last {last_dt.strftime("%d %b %Y") if last_dt else "not completed"} · Next {"due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
                 '</div>',
@@ -4243,7 +4362,7 @@ elif page == "setup":
                         camera_text = tr["Camera ID"] or "No camera"
                         st.markdown(
                             '<div class="shared-card-copy">'
-                            f'<div class="shared-card-heading"><strong>{html.escape(str(trap_id))}</strong><span class="shared-card-label">{html.escape(str(tr["Status"]))}</span></div>'
+                            f'<div class="shared-card-heading"><strong>{html.escape(str(trap_id))}</strong>{status_pill(str(tr["Status"]), "success" if tr["Status"] == "Active" else "none")}</div>'
                             f'<div class="shared-card-main">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
                             f'<div class="shared-card-meta">{html.escape(str(tr["Product"]))} · Build {html.escape(str(tr["Build Version"] or "—"))} · {html.escape(str(camera_text))} · Route {html.escape(str(tr["Route Order"] or "—"))}</div>'
                             '</div>',
@@ -4435,6 +4554,7 @@ elif page == "setup":
                     render_compact_card_content(
                         title=str(site_row["Site Name"]),
                         right_label=str(site_row["Status"]),
+                        right_label_kind="success" if site_row["Status"] == "Active" else "none",
                         main_line=f"{sid} · {trap_count} active trap{'s' if trap_count != 1 else ''}",
                         meta_line=f"Every {site_row['Visit Interval Days']} days · {coverage_text}",
                     )
@@ -4567,6 +4687,7 @@ elif page == "setup":
                     render_compact_card_content(
                         title=f"{product_code} Build {version}",
                         right_label=str(build_row["Build Status"]),
+                        right_label_kind="success" if build_row["Build Status"] == "Current" else "none",
                         main_line=f"{active_traps} active trap{'s' if active_traps != 1 else ''}",
                         meta_line=f"First active {first_active_text} · {build_row['Notes'] or 'No notes'}",
                     )
