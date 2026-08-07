@@ -802,10 +802,17 @@ def scroll_to_top_once():
           const doc = parent.document;
 
           const reset = () => {
-            const topAnchor = doc.getElementById('r1m1-page-top');
-            if (topAnchor) {
-              try { topAnchor.scrollIntoView({block: 'start', inline: 'nearest', behavior: 'auto'}); } catch (_) {}
-            }
+            // Deliberately not using topAnchor.scrollIntoView() here: the
+            // #r1m1-page-top marker sits after the top nav bar in the DOM
+            // (app.py places it just below the nav container), so scrolling
+            // it to the top of the viewport pushes the nav bar itself off
+            // the top of the screen — confirmed by tracing getBoundingClientRect()
+            // on the nav during a live navigation, where it measured -65px
+            // (fully above the viewport) for the entire ~2s retry window,
+            // reproducing the reported "nav bar disappears on every click"
+            // symptom exactly. The targets loop below scrolls every actual
+            // known scroll container directly to (0,0) with no dependency
+            // on any element's position, which is what was needed all along.
             const targets = [
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
@@ -3583,7 +3590,7 @@ elif page == "network":
                 render_compact_card_content(
                     title=trap_id,
                     right_label=site_name(data, tr["Site ID"]),
-                    main_line=f"{trap_location_label(tr)} · Trap {tr['Route Order']}",
+                    main_line=trap_location_label(tr),
                     meta_line=(
                         f"{tr['Build Version']} · "
                         f"{len(kills)} kill{'s' if len(kills) != 1 else ''} · "
