@@ -2604,65 +2604,96 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 /* Native radio/checkbox: computed color-scheme is correct (verified via
    devtools), but Chromium's native widget painter still renders the
    unchecked state using the OS dark theme regardless. Native form-control
-   theming is unreliable across browsers for this, so stop depending on it:
-   fully custom-draw both controls instead. This is the only fix that holds
-   across Chrome, Safari and any OS/browser dark-mode setting, since it no
-   longer asks the browser to paint a themed widget at all. */
-input[type="radio"],
-input[type="checkbox"] {
-  appearance: none !important;
-  -webkit-appearance: none !important;
-  width: 18px !important;
-  height: 18px !important;
-  min-width: 18px !important;
-  margin: 0 !important;
-  border: 2px solid #25262d !important;
-  background-color: #ffffff !important;
+   theming is unreliable across browsers for this, so stop depending on it.
+   Root cause (confirmed by inspecting the live DOM): react-aria wraps the
+   real <input> in a "visually hidden" span (overflow:hidden, 1x1px) for
+   accessibility, and draws the control everyone actually sees as separate
+   decorative divs layered next to it, each carrying Streamlit's hardcoded
+   dark-theme colours. Restyling the <input> itself can never work — it is
+   permanently clipped to 1px regardless of any CSS applied to it. Instead:
+   neutralise every one of Streamlit's decorative divs (colour and layout
+   footprint) and draw the entire indicator ourselves via ::before/::after
+   on the one stable, testid-anchored ancestor, using :has(input:checked)
+   for state. This depends on nothing native or theme-related, so it holds
+   across Chrome, Safari and any OS/browser dark-mode setting. */
+/* Colour only — do not touch size/margin/padding here. react-aria's press
+   handling depends on these divs' actual geometry for its hit-region
+   calculation; collapsing them to 0x0 silently broke click/check entirely
+   (confirmed: Playwright's force-click stopped toggling state). */
+[data-testid="stRadioOption"] div,
+[data-testid="stCheckbox"] > label div {
+  background-color: transparent !important;
   background-image: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* position:relative only — deliberately not display:flex (broke the
+   label's text children into flex items, stacking letters one per line)
+   and no added padding-left: the label already reserves space for the
+   original (still same-sized, now just transparent) decorative divs, so
+   the indicator below is placed directly in that existing gap rather than
+   pushing the text out further. */
+[data-testid="stRadioOption"],
+[data-testid="stCheckbox"] > label {
   position: relative !important;
-  flex-shrink: 0;
-  vertical-align: middle;
 }
-input[type="radio"] {
-  border-radius: 50% !important;
-}
-input[type="checkbox"] {
-  border-radius: 4px !important;
-}
-input[type="radio"]:checked,
-input[type="checkbox"]:checked {
-  border-color: #f36c21 !important;
-}
-input[type="radio"]:checked {
-  background-color: #ffffff !important;
-}
-input[type="radio"]:checked::after {
+
+[data-testid="stRadioOption"]::before,
+[data-testid="stCheckbox"] > label::before {
   content: "" !important;
   position: absolute !important;
+  left: 0 !important;
   top: 50% !important;
-  left: 50% !important;
+  transform: translateY(-50%) !important;
+  box-sizing: border-box !important;
+  width: 18px !important;
+  height: 18px !important;
+  border: 2px solid #25262d !important;
+  background: #ffffff !important;
+}
+[data-testid="stRadioOption"]::before {
+  border-radius: 50% !important;
+}
+[data-testid="stCheckbox"] > label::before {
+  border-radius: 4px !important;
+}
+
+[data-testid="stRadioOption"]:has(input:checked)::before,
+[data-testid="stCheckbox"] > label:has(input:checked)::before {
+  border-color: #f36c21 !important;
+}
+[data-testid="stCheckbox"] > label:has(input:checked)::before {
+  background: #f36c21 !important;
+}
+
+/* Orange centre dot for a checked radio. */
+[data-testid="stRadioOption"]:has(input:checked)::after {
+  content: "" !important;
+  position: absolute !important;
+  left: 5px !important;
+  top: 50% !important;
   width: 8px !important;
   height: 8px !important;
   border-radius: 50% !important;
   background: #f36c21 !important;
-  transform: translate(-50%, -50%) !important;
+  transform: translateY(-50%) !important;
 }
-input[type="checkbox"]:checked {
-  background-color: #f36c21 !important;
-}
-input[type="checkbox"]:checked::after {
+/* White checkmark for a checked checkbox. */
+[data-testid="stCheckbox"] > label:has(input:checked)::after {
   content: "" !important;
   position: absolute !important;
-  top: 42% !important;
-  left: 49% !important;
-  width: 4px !important;
-  height: 8px !important;
+  left: 6px !important;
+  top: 45% !important;
+  width: 5px !important;
+  height: 9px !important;
   border: solid #ffffff !important;
   border-width: 0 2px 2px 0 !important;
-  transform: translate(-50%, -50%) rotate(45deg) !important;
+  transform: translateY(-60%) rotate(45deg) !important;
 }
-input[type="radio"]:disabled,
-input[type="checkbox"]:disabled {
+
+[data-testid="stRadioOption"]:has(input:disabled)::before,
+[data-testid="stCheckbox"] > label:has(input:disabled)::before {
   opacity: .5 !important;
 }
 </style>
