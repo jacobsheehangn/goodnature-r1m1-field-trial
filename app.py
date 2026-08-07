@@ -2533,13 +2533,22 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   white-space: nowrap !important;
 }
 
+/* Streamlit's react-aria nav-link text sits in a nested span carrying its own
+   hardcoded dark-theme colour, which wins over the <a> rule above through
+   normal inheritance rules regardless of !important. Target it directly. */
+.st-key-app_top_navigation [data-testid="stPageLink"] a *,
+.st-key-app_top_navigation [data-testid="stPopover"] > button * {
+  color: #25262d !important;
+}
+
 .st-key-app_top_navigation [data-testid="stPageLink"] a:hover,
 .st-key-app_top_navigation [data-testid="stPopover"] > button:hover {
   border-color: #b8bcc2 !important;
   background: #f7f7f5 !important;
 }
 
-.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"] {
+.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"],
+.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"] * {
   background: #f3f3f0 !important;
   border-color: #b8bcc2 !important;
   color: #25262d !important;
@@ -2557,6 +2566,104 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
     min-height: 2.65rem !important;
     padding: .43rem .72rem !important;
   }
+}
+</style>
+
+<style>
+/* Dark-mode leak fix for Streamlit's react-aria-based widgets (popover panel,
+   Material icons, native radio/checkbox). These ship their own colours that
+   bypass the app's light-theme CSS, which was written against the older
+   BaseWeb widget markup and only reaches container-level elements, not these
+   deeply-nested ones. See STYLE_GUIDE.md "Forms and controls": unselected
+   controls must be white/dark-outline, never solid black or theme-dependent. */
+
+/* Popover panel (e.g. Administration menu): no existing rule covered the
+   panel body itself, only its trigger button, so it fell back to Streamlit's
+   built-in dark theme (#0E1117 background, #FAFAFA text). */
+[data-testid="stPopoverBody"] {
+  background: #ffffff !important;
+  color: #25262d !important;
+  border: 1px solid #d7d9dd !important;
+}
+[data-testid="stPopoverBody"] * {
+  color: #25262d !important;
+}
+[data-testid="stPopoverBody"] button[kind="secondary"],
+[data-testid="stPopoverBody"] [data-testid="stBaseButton-secondary"] {
+  background: #ffffff !important;
+  border-color: #d7d9dd !important;
+}
+
+/* Material icon glyphs (accordion/expander chevrons etc.) render as text
+   ligatures in their own span; force them to the app text colour everywhere
+   so none can inherit a stray dark-theme value. */
+[data-testid="stIconMaterial"] {
+  color: #25262d !important;
+}
+
+/* Native radio/checkbox: computed color-scheme is correct (verified via
+   devtools), but Chromium's native widget painter still renders the
+   unchecked state using the OS dark theme regardless. Native form-control
+   theming is unreliable across browsers for this, so stop depending on it:
+   fully custom-draw both controls instead. This is the only fix that holds
+   across Chrome, Safari and any OS/browser dark-mode setting, since it no
+   longer asks the browser to paint a themed widget at all. */
+input[type="radio"],
+input[type="checkbox"] {
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 18px !important;
+  margin: 0 !important;
+  border: 2px solid #25262d !important;
+  background-color: #ffffff !important;
+  background-image: none !important;
+  position: relative !important;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+input[type="radio"] {
+  border-radius: 50% !important;
+}
+input[type="checkbox"] {
+  border-radius: 4px !important;
+}
+input[type="radio"]:checked,
+input[type="checkbox"]:checked {
+  border-color: #f36c21 !important;
+}
+input[type="radio"]:checked {
+  background-color: #ffffff !important;
+}
+input[type="radio"]:checked::after {
+  content: "" !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  background: #f36c21 !important;
+  transform: translate(-50%, -50%) !important;
+}
+input[type="checkbox"]:checked {
+  background-color: #f36c21 !important;
+}
+input[type="checkbox"]:checked::after {
+  content: "" !important;
+  position: absolute !important;
+  top: 42% !important;
+  left: 49% !important;
+  width: 4px !important;
+  height: 8px !important;
+  border: solid #ffffff !important;
+  border-width: 0 2px 2px 0 !important;
+  transform: translate(-50%, -50%) rotate(45deg) !important;
+}
+input[type="radio"]:disabled,
+input[type="checkbox"]:disabled {
+  opacity: .5 !important;
 }
 </style>
 
