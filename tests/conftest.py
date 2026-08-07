@@ -95,7 +95,10 @@ def local_app(tmp_path: Path):
 def page():
     with sync_playwright() as p:
         try:
-            browser = p.chromium.launch(headless=True)
+            launch_kwargs = {"headless": True}
+            if Path("/usr/bin/chromium").exists():
+                launch_kwargs["executable_path"] = "/usr/bin/chromium"
+            browser = p.chromium.launch(**launch_kwargs)
         except Exception as exc:
             pytest.fail(
                 "Chromium is not installed. Run `playwright install chromium`. " + str(exc),

@@ -1,0 +1,414 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+:root { color-scheme: light; font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color:#25262d; }
+* { box-sizing:border-box; }
+body { margin:0; background:#fff; color:#25262d; }
+.uploader { border:1px solid #d7d9dd; border-radius:12px; padding:12px; background:#fff; }
+.label { font-weight:700; font-size:16px; margin-bottom:10px; }
+.pick-row { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.pick { display:inline-flex; align-items:center; justify-content:center; min-height:42px; padding:0 16px; border:1px solid #d7d9dd; border-radius:10px; background:#fff; font-size:16px; cursor:pointer; }
+.hint { font-size:14px; color:#737780; }
+input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; }
+.summary { min-height:24px; margin:12px 0 8px; color:#737780; font-size:14px; }
+.grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; align-items:start; }
+.card { min-width:0; border:1px solid #e1e2e5; border-radius:10px; padding:8px; background:#fff; overflow:hidden; }
+.thumb { width:100%; aspect-ratio:1/1; border-radius:8px; background:#f3f3f0; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.thumb img { width:100%; height:100%; object-fit:contain; display:block; }
+.placeholder { width:28px; height:28px; border:3px solid #d7d9dd; border-top-color:#f36c21; border-radius:50%; animation:spin .9s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+.status { height:22px; line-height:22px; margin-top:6px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:13px; color:#737780; }
+.status.failed { color:#b42318; font-weight:700; }
+.status.saved { color:#22683d; }
+.detail { height:18px; line-height:18px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:11px; color:#737780; }
+.actions { height:34px; display:flex; align-items:end; gap:6px; }
+.actions button { height:30px; min-width:0; padding:0 9px; border:1px solid #d7d9dd; border-radius:8px; background:#fff; color:#25262d; font-size:13px; cursor:pointer; }
+.actions button.retry { border-color:#b42318; color:#b42318; }
+.actions button:disabled { opacity:.55; cursor:default; }
+@media (max-width:700px) {
+  .grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+  .card { padding:7px; }
+  .status { font-size:12px; }
+  .detail { font-size:10.5px; }
+  .actions button { padding:0 7px; font-size:12px; }
+}
+</style>
+</head>
+<body>
+<div class="uploader">
+  <div class="label">Add photos</div>
+  <div class="pick-row">
+    <label class="pick" for="photo-input">↥&nbsp;&nbsp;Upload</label>
+    <span class="hint">JPG, PNG, WEBP, HEIC where supported</span>
+  </div>
+  <input id="photo-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple />
+</div>
+<div id="summary" class="summary"></div>
+<div id="grid" class="grid"></div>
+<script>
+(() => {
+  const cards = new Map();
+  const locallyRemoved = new Set();
+  let renderArgs = {photos:[], removed_ids:[], disabled:false, retry_delays_ms:[1000,2000,4000], max_raw_bytes:20*1024*1024, max_prepared_bytes:2*1024*1024};
+  let eventCounter = 0;
+  let inflightId = null;
+  let uploadQueue = [];
+  const input = document.getElementById('photo-input');
+  const grid = document.getElementById('grid');
+  const summary = document.getElementById('summary');
+  const ACK_TIMEOUT_MS = 10000;
+  const MAX_PREPARED_BYTES = () => Math.min(Number(renderArgs.max_prepared_bytes)||2*1024*1024, Math.floor(1.85*1024*1024));
+  const MAX_RAW_BYTES = () => Number(renderArgs.max_raw_bytes)||20*1024*1024;
+
+  const post = (type, payload={}) => window.parent.postMessage({isStreamlitMessage:true, type, ...payload}, '*');
+  const ready = () => post('streamlit:componentReady', {apiVersion:1});
+  const setHeight = () => post('streamlit:setFrameHeight', {height: Math.max(150, document.documentElement.scrollHeight)});
+  const emit = (value) => post('streamlit:setComponentValue', {value});
+  const uid = () => `PHOTO-${Date.now()}-${Math.random().toString(16).slice(2,10).toUpperCase()}`;
+  const retryDelays = () => Array.isArray(renderArgs.retry_delays_ms) && renderArgs.retry_delays_ms.length === 3 ? renderArgs.retry_delays_ms : [1000,2000,4000];
+
+  function currentSelections() {
+    return [...cards.values()]
+      .filter(card => !locallyRemoved.has(card.photo_id))
+      .map(card => ({photo_id:card.photo_id, name:card.name || 'photo.jpg'}));
+  }
+
+  function clientFailuresSnapshot() {
+    return [...cards.values()]
+      .filter(card => !locallyRemoved.has(card.photo_id) && card.status==='failed' && card.manual_required)
+      .map(card => ({
+        photo_id:card.photo_id, name:card.name || 'photo.jpg', retryable:!!card.retryable,
+        error_code:card.failure_code || (card.retryable?'automatic_retries_exhausted':'browser_prepare_failed'),
+        user_error:card.retryable?'Upload failed':'This photo could not be prepared. Remove it and select it again.',
+        attempt:card.attempt||0, detail:card.error||'',
+      }));
+  }
+
+  function syncFailures() {
+    emit({
+      event_id:`failure-sync-${Date.now()}-${++eventCounter}`, action:'sync_failures',
+      selections:currentSelections(), client_failures:clientFailuresSnapshot(),
+    });
+  }
+
+  function statusLabel(status) {
+    return ({preparing:'Preparing…', queued:'Uploading…', uploading:'Uploading…', retrying:'Retrying…', saved:'Saved', failed:'Upload failed'}[status] || status || 'Preparing…');
+  }
+
+  function detailLabel(card) {
+    if (card.status !== 'failed') return '';
+    if (card.retryable && card.manual_required && card.data_url) return 'Tap Retry to try again.';
+    return 'Remove and select it again.';
+  }
+
+  function clearTimers(card) {
+    if (!card) return;
+    if (card.retryTimer) clearTimeout(card.retryTimer);
+    if (card.ackTimer) clearTimeout(card.ackTimer);
+    card.retryTimer = null;
+    card.ackTimer = null;
+  }
+
+  function render() {
+    for (const id of (renderArgs.removed_ids || [])) {
+      locallyRemoved.add(String(id));
+      const existing = cards.get(String(id));
+      clearTimers(existing);
+      cards.delete(String(id));
+      uploadQueue = uploadQueue.filter(item => item.id !== String(id));
+      if (inflightId === String(id)) inflightId = null;
+    }
+
+    const server = new Map((renderArgs.photos || []).map(p => [String(p.photo_id), p]));
+    const missingToReport = [];
+
+    for (const [id, serverCard] of server) {
+      if (locallyRemoved.has(id)) continue;
+      const card = cards.get(id);
+      if (!card) {
+        if (serverCard.status === 'saved') {
+          cards.set(id, {...serverCard, name:serverCard.name || 'photo.jpg', data_url:'', autoRetriesUsed:0, manual_required:false});
+        } else if (serverCard.status === 'pending') {
+          cards.set(id, {
+            photo_id:id, name:serverCard.name || 'photo.jpg', status:'failed', preview:'', data_url:'',
+            error:'Upload interrupted', retryable:false, manual_required:true, autoRetriesUsed:3, missingReported:true, failure_code:'browser_refresh_interrupted',
+          });
+          missingToReport.push(id);
+        } else {
+          cards.set(id, {
+            ...serverCard, name:serverCard.name || 'photo.jpg', data_url:'', autoRetriesUsed:3,
+            manual_required:true,
+          });
+        }
+        continue;
+      }
+
+      if (serverCard.status === 'saved') {
+        clearTimers(card);
+        card.status = 'saved';
+        card.error = '';
+        card.retryable = false;
+        card.manual_required = false;
+        card.preview = serverCard.preview || card.preview;
+        card.data_url = '';
+        card.autoRetriesUsed = 0;
+        card.exhaustedReported = false;
+        if (inflightId === id) inflightId = null;
+        uploadQueue = uploadQueue.filter(item => item.id !== id);
+      } else if (serverCard.status === 'failed') {
+        if (inflightId === id) {
+          if (card.ackTimer) clearTimeout(card.ackTimer);
+          card.ackTimer = null;
+          inflightId = null;
+        }
+        card.error = serverCard.error || 'Upload failed';
+        card.retryable = !!serverCard.retryable;
+        card.manual_required = !!serverCard.manual_required;
+        if (card.manual_required || !card.retryable || !card.data_url) {
+          clearTimers(card);
+          card.status = 'failed';
+          if (!card.data_url && !card.missingReported) {
+            card.missingReported = true;
+            missingToReport.push(id);
+          }
+        } else {
+          scheduleAutoRetry(card);
+        }
+      }
+    }
+
+    grid.innerHTML = '';
+    const items = [...cards.values()].filter(card => !locallyRemoved.has(card.photo_id));
+    items.forEach(card => {
+      const el = document.createElement('div'); el.className='card'; el.dataset.photoId=card.photo_id;
+      const thumb = document.createElement('div'); thumb.className='thumb';
+      if (card.preview) {
+        const img=document.createElement('img'); img.src=card.preview; img.alt='Selected photo'; thumb.appendChild(img);
+      } else {
+        const spin=document.createElement('div'); spin.className='placeholder'; thumb.appendChild(spin);
+      }
+      const stat=document.createElement('div');
+      stat.className=`status ${card.status==='failed'?'failed':''} ${card.status==='saved'?'saved':''}`;
+      stat.textContent=statusLabel(card.status); stat.title=card.error || '';
+      const detail=document.createElement('div'); detail.className='detail'; detail.textContent=detailLabel(card); detail.title=card.error || '';
+      const actions=document.createElement('div'); actions.className='actions';
+      if (card.status==='failed' && card.retryable && card.manual_required && card.data_url) {
+        const retry=document.createElement('button'); retry.className='retry'; retry.textContent='Retry';
+        retry.onclick=() => manualRetry(card.photo_id); actions.appendChild(retry);
+      }
+      const remove=document.createElement('button'); remove.textContent='Remove';
+      remove.onclick=() => removePhoto(card.photo_id); actions.appendChild(remove);
+      el.append(thumb,stat,detail,actions); grid.appendChild(el);
+    });
+
+    const saved=items.filter(x=>x.status==='saved').length;
+    const failed=items.filter(x=>x.status==='failed').length;
+    const active=items.filter(x=>['preparing','queued','uploading','retrying'].includes(x.status)).length;
+    if (!items.length) summary.textContent='';
+    else if (failed) summary.textContent=`${saved} photo${saved===1?'':'s'} saved. ${failed} photo${failed===1?'':'s'} could not upload.`;
+    else if (active) summary.textContent=`${items.length} photo${items.length===1?'':'s'} added.`;
+    else summary.textContent=`${saved} photo${saved===1?'':'s'} saved`;
+    input.disabled=!!renderArgs.disabled;
+    requestAnimationFrame(setHeight);
+
+    if (missingToReport.length) syncFailures();
+    pumpQueue();
+  }
+
+  async function canvasBlob(canvas, quality) {
+    return await new Promise((resolve,reject)=>canvas.toBlob(
+      blob=>blob?resolve(blob):reject(new Error('The image could not be prepared.')),
+      'image/jpeg', quality
+    ));
+  }
+
+  async function prepareImage(file, photoId) {
+    if ((file.size||0) > MAX_RAW_BYTES()) throw new Error('The image is too large to prepare for upload.');
+    const objectUrl=URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve,reject)=>{
+        const image=new Image();
+        image.onload=()=>resolve(image);
+        image.onerror=()=>reject(new Error('The image could not be read.'));
+        image.src=objectUrl;
+      });
+      const sourceEdge=Math.max(img.naturalWidth,img.naturalHeight);
+      let targetEdge=Math.min(1800, sourceEdge);
+      let lastBlob=null, lastWidth=0, lastHeight=0;
+      const qualities=[0.82,0.78,0.74,0.70,0.66];
+
+      for (let sizePass=0; sizePass<4; sizePass++) {
+        const scale=Math.min(1,targetEdge/sourceEdge);
+        const width=Math.max(1,Math.round(img.naturalWidth*scale));
+        const height=Math.max(1,Math.round(img.naturalHeight*scale));
+        const canvas=document.createElement('canvas'); canvas.width=width; canvas.height=height;
+        const ctx=canvas.getContext('2d',{alpha:false});
+        if (!ctx) throw new Error('The image could not be prepared.');
+        ctx.fillStyle='#fff'; ctx.fillRect(0,0,width,height); ctx.drawImage(img,0,0,width,height);
+        for (const quality of qualities) {
+          const blob=await canvasBlob(canvas,quality);
+          lastBlob=blob; lastWidth=width; lastHeight=height;
+          if (blob.size <= MAX_PREPARED_BYTES()) {
+            const dataUrl=await new Promise((resolve,reject)=>{
+              const reader=new FileReader(); reader.onload=()=>resolve(reader.result);
+              reader.onerror=()=>reject(new Error('The image could not be prepared.'));
+              reader.readAsDataURL(blob);
+            });
+            return {
+              photo_id:photoId, name:file.name||'photo.jpg', original_size:file.size||0,
+              prepared_size:blob.size, width, height, mime:'image/jpeg', data_url:dataUrl,
+              captured_time:new Date().toISOString(),
+            };
+          }
+        }
+        if (targetEdge <= 1200) break;
+        targetEdge=Math.max(1200,Math.round(targetEdge*0.85));
+      }
+      if (!lastBlob || lastBlob.size > MAX_PREPARED_BYTES()) throw new Error('The image is too large to prepare for upload.');
+      throw new Error(`The image could not be prepared (${lastWidth}×${lastHeight}).`);
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  }
+
+  function serialiseCard(card) {
+    return {
+      photo_id:card.photo_id, name:card.name, original_size:card.original_size||0,
+      prepared_size:card.prepared_size||0, width:card.width||0, height:card.height||0,
+      mime:'image/jpeg', data_url:card.data_url, captured_time:card.captured_time,
+      attempt:card.attempt||0,
+    };
+  }
+
+  function enqueue(card, retryKind='initial', front=false) {
+    if (!card || !card.data_url || locallyRemoved.has(card.photo_id) || card.status==='saved') return;
+    uploadQueue=uploadQueue.filter(item=>item.id!==card.photo_id);
+    const item={id:card.photo_id,retryKind};
+    if (front) uploadQueue.unshift(item); else uploadQueue.push(item);
+    card.status=retryKind==='initial'?'queued':'retrying';
+    render();
+  }
+
+  function pumpQueue() {
+    if (inflightId) return;
+    while (uploadQueue.length) {
+      const item=uploadQueue.shift();
+      const card=cards.get(item.id);
+      if (!card || locallyRemoved.has(item.id) || !card.data_url || card.status==='saved') continue;
+      inflightId=item.id;
+      card.attempt=(card.attempt||0)+1;
+      card.status=card.attempt===1?'uploading':'retrying';
+      card.manual_required=false;
+      card.error='';
+      renderWithoutPump();
+      emit({
+        event_id:`${card.attempt===1?'upload':'retry'}-${Date.now()}-${++eventCounter}`,
+        action:card.attempt===1?'upload':'retry', retry_kind:item.retryKind,
+        photo:serialiseCard(card), selections:currentSelections(), client_failures:clientFailuresSnapshot(),
+      });
+      card.ackTimer=setTimeout(()=>handleAckTimeout(card),ACK_TIMEOUT_MS);
+      return;
+    }
+  }
+
+  function renderWithoutPump() {
+    const savedPump = inflightId;
+    // render() ends with pumpQueue(); inflightId is non-null here so it cannot send another item.
+    render();
+    inflightId = savedPump;
+  }
+
+  function handleAckTimeout(card) {
+    if (!card || inflightId!==card.photo_id || card.status==='saved' || locallyRemoved.has(card.photo_id)) return;
+    card.ackTimer=null;
+    inflightId=null;
+    card.retryable=true;
+    scheduleAutoRetry(card);
+    pumpQueue();
+  }
+
+  function scheduleAutoRetry(card) {
+    if (!card || card.status==='saved' || locallyRemoved.has(card.photo_id) || !card.data_url) return;
+    if (card.retryTimer) return;
+    if ((card.autoRetriesUsed||0) >= 3) {
+      card.status='failed'; card.retryable=true; card.manual_required=true; card.failure_code='automatic_retries_exhausted';
+      if (!card.exhaustedReported) {
+        card.exhaustedReported=true;
+        syncFailures();
+      }
+      return;
+    }
+    const delay=retryDelays()[card.autoRetriesUsed||0];
+    card.autoRetriesUsed=(card.autoRetriesUsed||0)+1;
+    card.status='retrying'; card.manual_required=false;
+    card.retryTimer=setTimeout(()=>{
+      card.retryTimer=null;
+      if (card.status==='saved' || locallyRemoved.has(card.photo_id)) return;
+      enqueue(card,'automatic',true);
+    },delay);
+    renderWithoutPump();
+  }
+
+  function manualRetry(id) {
+    const card=cards.get(id); if (!card || !card.data_url || locallyRemoved.has(id)) return;
+    clearTimers(card);
+    if (inflightId===id) inflightId=null;
+    card.autoRetriesUsed=0; card.manual_required=false; card.exhaustedReported=false; card.failure_code=''; card.error='';
+    enqueue(card,'manual',true);
+  }
+
+  function removePhoto(id) {
+    const card=cards.get(id);
+    locallyRemoved.add(id);
+    clearTimers(card);
+    cards.delete(id);
+    uploadQueue=uploadQueue.filter(item=>item.id!==id);
+    if (inflightId===id) inflightId=null;
+    render();
+    emit({event_id:`remove-${Date.now()}-${++eventCounter}`, action:'remove', photo_id:id});
+  }
+
+  async function handleFiles(fileList) {
+    const files=[...fileList]; if (!files.length) return;
+    const selections=[];
+    const work=[];
+    files.forEach(file=>{
+      const id=uid();
+      selections.push({photo_id:id,name:file.name||'photo.jpg'});
+      cards.set(id,{photo_id:id,name:file.name||'photo.jpg',status:'preparing',preview:'',data_url:'',error:'',retryable:false,manual_required:false,autoRetriesUsed:0,attempt:0});
+      work.push({file,id});
+    });
+    render();
+    emit({event_id:`select-${Date.now()}-${++eventCounter}`, action:'selection_started', selections, client_failures:clientFailuresSnapshot()});
+
+    work.forEach(async ({file,id})=>{
+      const card=cards.get(id); if (!card || locallyRemoved.has(id)) return;
+      try {
+        const prepared=await prepareImage(file,id);
+        if (!cards.has(id) || locallyRemoved.has(id)) return;
+        Object.assign(card,prepared,{preview:prepared.data_url,status:'queued',error:'',retryable:true,manual_required:false});
+        enqueue(card,'initial');
+      } catch (err) {
+        if (!cards.has(id) || locallyRemoved.has(id)) return;
+        card.status='failed'; card.retryable=false; card.manual_required=true; card.failure_code='browser_prepare_failed'; card.error=String(err.message||err);
+        render();
+        syncFailures();
+      }
+    });
+    input.value='';
+  }
+
+  input.addEventListener('change', e=>handleFiles(e.target.files));
+  window.addEventListener('message', e=>{
+    if (!e.data || e.data.type!=='streamlit:render') return;
+    renderArgs=e.data.args||{};
+    render();
+  });
+  ready(); setHeight();
+})();
+</script>
+</body>
+</html>

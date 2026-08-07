@@ -18,7 +18,26 @@ import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
 
-APP_TITLE = "R1/M1 Field Trial — v8.7.4 Stabilisation"
+from photo_integrity import (
+    PhotoPermanentError,
+    PhotoTransientError,
+    add_expected_photos,
+    apply_final_copies,
+    build_finalisation_plan,
+    cleanup_stale_transactions,
+    delete_transaction,
+    deterministic_check_id,
+    log_photo_event,
+    mark_retry_started,
+    record_failure,
+    recover_bag_id,
+    remove_photo as remove_pending_photo,
+    rollback_final_copies,
+    store_photo as store_pending_photo,
+    verify_pending as verify_pending_photo_transaction,
+)
+
+APP_TITLE = "R1/M1 Field Trial — v8.7.6.7 Photo Integrity Corrections"
 APP_DIR = Path(__file__).resolve().parent
 DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().resolve()
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
@@ -33,7 +52,9 @@ EVIDENCE_DIR = DATA_ROOT / "evidence"
 BACKUP_DIR = DATA_ROOT / "backups"
 MAX_RAW_PHOTO_BYTES = 20 * 1024 * 1024
 MAX_SAVED_PHOTO_BYTES = 2 * 1024 * 1024
-MAX_PHOTO_DIMENSION = 1600
+MAX_PHOTO_DIMENSION = 1800
+PHOTO_COMPONENT_DIR = APP_DIR / "photo_component"
+PHOTO_COMPONENT = components.declare_component("r1m1_photo_upload", path=str(PHOTO_COMPONENT_DIR))
 
 SHEETS = {
     "Sites": ["Site ID", "Site Name", "Visit Interval Days", "Mobile Coverage Confirmed", "Status", "Notes"],
@@ -821,166 +842,128 @@ def scroll_to_top_once():
     )
 
 
-def photo_session_key(visit_id: str, trap_id: str) -> str:
-    return f"captured_photos_{visit_id}_{trap_id}"
+def pending_check_id_key(visit_id: str, trap_id: str) -> str:
+    return f"pending_check_id_{visit_id}_{trap_id}"
 
 
-def photo_capture_mode_key(visit_id: str, trap_id: str) -> str:
-    return f"photo_capture_mode_{visit_id}_{trap_id}"
+def photo_component_event_key(visit_id: str, trap_id: str) -> str:
+    return f"photo_component_event_{visit_id}_{trap_id}"
 
 
-def photo_widget_nonce_key(visit_id: str, trap_id: str) -> str:
-    return f"photo_widget_nonce_{visit_id}_{trap_id}"
+def ensure_pending_check_id(visit_id: str, trap_id: str) -> str:
+    """Return a deterministic ID so verified uploads survive a browser refresh."""
+    key = pending_check_id_key(visit_id, trap_id)
+    expected = deterministic_check_id(visit_id, trap_id)
+    if st.session_state.get(key) != expected:
+        st.session_state[key] = expected
+    return expected
 
 
-def add_pending_photo(
-    visit_id: str,
-    trap_id: str,
-    raw_bytes: bytes,
-    mime_type: str,
-    photo_type: str,
-    source: str,
-) -> bool:
-    """Add one unique image to the pending trap check."""
-    photo_key = photo_session_key(visit_id, trap_id)
-    st.session_state.setdefault(photo_key, [])
-    token = hashlib.sha256(raw_bytes).hexdigest()
-    existing_tokens = {photo.get("token") for photo in st.session_state[photo_key]}
-    if token in existing_tokens:
-        return False
-    st.session_state[photo_key].append({
-        "bytes": raw_bytes,
-        "mime": mime_type or "image/jpeg",
-        "photo_type": photo_type,
-        "captured_time": dtstr(),
-        "notes": "",
-        "source": source,
-        "token": token,
-    })
-    return True
+def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
+    return {
+        "check_id": ensure_pending_check_id(visit_id, trap_id),
+        "visit_id": str(visit_id),
+        "trap_id": str(trap_id),
+        "site_id": str(site_id),
+        "bag_id": str(bag_id or ""),
+        "window_id": str(window_id),
+    }
 
 
-def render_check_photo_capture(visit_id: str, trap_id: str) -> None:
-    """Upload-only photo queue that stays compact before and after processing."""
-    photo_key = photo_session_key(visit_id, trap_id)
-    nonce_key = photo_widget_nonce_key(visit_id, trap_id)
-    st.session_state.setdefault(photo_key, [])
-    st.session_state.setdefault(nonce_key, 0)
+def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
+    """Prepare photos in-browser and persist each selected image before final check save."""
+    context = photo_transaction_context(visit_id, trap_id, site_id, bag_id, window_id)
+    event_key = photo_component_event_key(visit_id, trap_id)
+    verification = verify_pending_photo_transaction(DATA_ROOT, context, MAX_SAVED_PHOTO_BYTES)
 
-    photos = st.session_state[photo_key]
-    nonce = int(st.session_state.get(nonce_key, 0))
-    uploaded = st.file_uploader(
-        "Add photos",
-        type=["jpg", "jpeg", "png", "webp"],
-        accept_multiple_files=True,
-        key=f"photo_upload_{trap_id}_{visit_id}_{nonce}",
-        help="Choose one or more images from the camera roll.",
+    component_value = PHOTO_COMPONENT(
+        photos=verification.get("photos", []),
+        removed_ids=verification.get("removed_ids", []),
+        disabled=False,
+        retry_delays_ms=[1000, 2000, 4000],
+        max_raw_bytes=MAX_RAW_PHOTO_BYTES,
+        max_prepared_bytes=MAX_SAVED_PHOTO_BYTES,
+        key=f"critical_photo_upload_{visit_id}_{trap_id}",
+        default=None,
     )
-    if uploaded:
-        added_count = 0
-        duplicate_count = 0
-        for uploaded_file in uploaded:
-            if add_pending_photo(
-                visit_id, trap_id, uploaded_file.getvalue(),
-                uploaded_file.type or "image/jpeg", "Check evidence", "Upload"
-            ):
-                added_count += 1
-            else:
-                duplicate_count += 1
-        st.session_state[nonce_key] = nonce + 1
-        message = f"{added_count} photo{'s' if added_count != 1 else ''} added."
-        if duplicate_count:
-            message += f" {duplicate_count} duplicate{'s' if duplicate_count != 1 else ''} skipped."
-        st.session_state[f"photo_feedback_{visit_id}_{trap_id}"] = message
-        st.rerun()
 
-    feedback = st.session_state.pop(f"photo_feedback_{visit_id}_{trap_id}", None)
-    if feedback:
-        st.caption(feedback)
+    if isinstance(component_value, dict):
+        event_id = str(component_value.get("event_id", ""))
+        if event_id and event_id != st.session_state.get(event_key):
+            st.session_state[event_key] = event_id
+            action = str(component_value.get("action", ""))
+            try:
+                if action != "remove" and component_value.get("selections"):
+                    add_expected_photos(DATA_ROOT, context, component_value.get("selections", []))
 
-    if photos:
-        st.caption(f"{len(photos)} photo{'s' if len(photos) != 1 else ''} ready to save")
-        with st.container():
-            st.markdown('<span class="photo-grid-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-            for row_start in range(0, len(photos), 3):
-                row_photos = list(photos)[row_start:row_start + 3]
-                cols = st.columns(3, gap="small")
-                for offset, photo in enumerate(row_photos):
-                    photo_index = row_start + offset
-                    with cols[offset]:
-                        st.image(photo["bytes"], width=72)
-                        if st.button(
-                            "Remove",
-                            key=f"remove_photo_{trap_id}_{visit_id}_{photo_index}",
-                            help="Remove photo",
-                            use_container_width=False,
-                        ):
-                            st.session_state[photo_key].pop(photo_index)
-                            st.rerun()
+                for failure in component_value.get("client_failures", []) or []:
+                    photo_id = str(failure.get("photo_id", ""))
+                    if photo_id:
+                        record_failure(
+                            DATA_ROOT, context, photo_id,
+                            retryable=bool(failure.get("retryable")),
+                            error_code=str(failure.get("error_code") or "browser_failure"),
+                            user_error=str(failure.get("user_error") or "Upload failed"),
+                            manual_required=True,
+                            name=str(failure.get("name") or "photo.jpg"),
+                            attempt=int(failure.get("attempt") or 0),
+                            detail=str(failure.get("detail") or ""),
+                        )
 
+                if action == "selection_started":
+                    pass
 
-def compress_photo_bytes(raw_bytes: bytes) -> bytes:
-    """Normalise phone images to a bounded JPEG suitable for field evidence."""
-    if not raw_bytes:
-        raise ValueError("The captured photo is empty.")
-    if len(raw_bytes) > MAX_RAW_PHOTO_BYTES:
-        raise ValueError("The captured photo is larger than 20 MB. Retake it at a lower resolution.")
-    try:
-        image = Image.open(BytesIO(raw_bytes))
-        image = ImageOps.exif_transpose(image)
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-    except Exception as exc:
-        raise ValueError("The captured file is not a readable image.") from exc
+                elif action in {"upload", "retry"}:
+                    incoming = component_value.get("photo") or {}
+                    photo_id = str(incoming.get("photo_id", ""))
+                    if action == "retry" and photo_id:
+                        mark_retry_started(DATA_ROOT, context, photo_id)
+                    try:
+                        store_pending_photo(DATA_ROOT, context, incoming, MAX_SAVED_PHOTO_BYTES)
+                    except PhotoPermanentError as exc:
+                        record_failure(
+                            DATA_ROOT, context, photo_id, retryable=False,
+                            error_code="invalid_photo",
+                            user_error="This photo could not be prepared. Remove it and select it again.",
+                            manual_required=True, name=str(incoming.get("name") or "photo.jpg"),
+                            attempt=int(incoming.get("attempt") or 0), detail=str(exc),
+                        )
+                    except PhotoTransientError as exc:
+                        record_failure(
+                            DATA_ROOT, context, photo_id, retryable=True,
+                            error_code="temporary_upload_failure",
+                            user_error="Upload failed", manual_required=False,
+                            name=str(incoming.get("name") or "photo.jpg"),
+                            attempt=int(incoming.get("attempt") or 0), detail=str(exc),
+                        )
+                    except Exception as exc:
+                        record_failure(
+                            DATA_ROOT, context, photo_id, retryable=False,
+                            error_code="unexpected_upload_failure",
+                            user_error="This photo could not upload. Remove it and select it again.",
+                            manual_required=True, name=str(incoming.get("name") or "photo.jpg"),
+                            attempt=int(incoming.get("attempt") or 0), detail=str(exc),
+                        )
 
-    image.thumbnail((MAX_PHOTO_DIMENSION, MAX_PHOTO_DIMENSION), Image.Resampling.LANCZOS)
-    qualities = [82, 74, 66, 58]
-    output = b""
-    for quality in qualities:
-        buffer = BytesIO()
-        image.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
-        output = buffer.getvalue()
-        if len(output) <= MAX_SAVED_PHOTO_BYTES:
-            return output
-    if len(output) > MAX_SAVED_PHOTO_BYTES:
-        raise ValueError("The photo could not be reduced below 2 MB. Retake it with less zoom or detail.")
-    return output
+                elif action == "sync_failures":
+                    pass
 
+                elif action == "remove":
+                    remove_pending_photo(DATA_ROOT, context, str(component_value.get("photo_id", "")))
 
-def prepare_check_photos(photos, check_id: str, window_id: str, trap_id: str, site_id: str, bag_id: str):
-    """Compress and save files, returning metadata rows and paths for rollback."""
-    if not photos:
-        return [], []
-    folder = EVIDENCE_DIR / site_id / (bag_id or trap_id)
-    folder.mkdir(parents=True, exist_ok=True)
-    rows, saved_paths = [], []
-    try:
-        for number, photo in enumerate(photos, start=1):
-            photo_id = make_id("PHOTO")
-            compressed = compress_photo_bytes(photo["bytes"])
-            filename = f"{now().strftime('%Y%m%d_%H%M%S')}_{trap_id}_{number:02d}_{photo_id[-4:]}.jpg"
-            path = folder / filename
-            temp_path = folder / f".{filename}.{uuid.uuid4().hex}.pending"
-            temp_path.write_bytes(compressed)
-            os.replace(temp_path, path)
-            relative = str(path.relative_to(DATA_ROOT).as_posix())
-            rows.append([
-                photo_id, check_id, window_id, trap_id, site_id, bag_id,
-                photo.get("captured_time", dtstr()), photo.get("photo_type", "Other"), relative,
-                photo.get("notes", ""),
-            ])
-            saved_paths.append(path)
-        return rows, saved_paths
-    except Exception:
-        for path in saved_paths:
-            path.unlink(missing_ok=True)
-        raise
+                st.rerun()
+            except (PhotoPermanentError, PhotoTransientError) as exc:
+                st.error(f"Photo state could not be updated: {exc}")
 
-
-def rollback_photo_files(paths) -> None:
-    for path in paths:
-        Path(path).unlink(missing_ok=True)
-
+    verification = verify_pending_photo_transaction(DATA_ROOT, context, MAX_SAVED_PHOTO_BYTES)
+    expected = int(verification.get("expected_count", 0))
+    unresolved = max(0, expected - int(verification.get("file_count", 0)))
+    return {
+        **verification,
+        "check_id": context["check_id"],
+        "context": context,
+        "unresolved_count": unresolved,
+    }
 
 
 def workbook_summary(path: Path) -> Dict[str, int]:
@@ -1805,17 +1788,6 @@ hr {border-color: var(--line);}
   --primary-color: #f36c21;
   --st-primary-color: #f36c21;
 }/* App sidebar controls must remain visible on a light header. */
-[data-testid="stSidebarCollapseButton"], button[data-testid="stSidebarCollapseButton"] {
-  color: var(--text) !important;
-  background: #ffffff !important;
-  opacity: 1 !important;
-}
-[data-testid="stSidebarCollapseButton"] svg, button[data-testid="stSidebarCollapseButton"] svg {
-  color: var(--text) !important;
-  fill: var(--text) !important;
-  stroke: var(--text) !important;
-  opacity: 1 !important;
-}
 
 /* Radio controls: white unselected surface, orange selected state. */
 input[type="radio"] {
@@ -1903,14 +1875,14 @@ label[data-baseweb="checkbox"] svg,
   fill: #ffffff !important;
   stroke: #ffffff !important;
 }
-[data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], button[kind="header"], header button[aria-label*="sidebar" i], section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+[data-testid="collapsedControl"], button[kind="header"] {
   background: #ffffff !important;
   color: #202124 !important;
   opacity: 1 !important;
   visibility: visible !important;
   z-index: 1002 !important;
 }
-[data-testid="stSidebarCollapseButton"] *, [data-testid="collapsedControl"] *, button[kind="header"] *, header button[aria-label*="sidebar" i] *, section[data-testid="stSidebar"] button[aria-label*="sidebar" i] * {
+[data-testid="collapsedControl"] *, button[kind="header"] * {
   color: #202124 !important;
   fill: #202124 !important;
   stroke: #202124 !important;
@@ -1918,7 +1890,7 @@ label[data-baseweb="checkbox"] svg,
 }
 
 @media (max-width: 700px) {
-[data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], button[kind="header"], header button[aria-label*="sidebar" i], section[data-testid="stSidebar"] button[aria-label*="sidebar" i] {
+[data-testid="collapsedControl"], button[kind="header"] {
     min-width: 2.75rem !important;
     min-height: 2.75rem !important;
   }
@@ -2008,18 +1980,18 @@ div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > bu
 
 /* v8.6.63 — mobile sidebar control must remain visible on the white header. */
 @media (max-width: 768px) {
-header[data-testid="stHeader"] [data-testid="collapsedControl"], header[data-testid="stHeader"] button[aria-label*="sidebar" i], header[data-testid="stHeader"] button[aria-label*="menu" i] {
+header[data-testid="stHeader"] [data-testid="collapsedControl"], header[data-testid="stHeader"] button[aria-label*="menu" i] {
     color: #444a53 !important;
     background: #ffffff !important;
     opacity: 1 !important;
   }
-header[data-testid="stHeader"] [data-testid="collapsedControl"] svg, header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg, header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
+header[data-testid="stHeader"] [data-testid="collapsedControl"] svg, header[data-testid="stHeader"] button[aria-label*="menu" i] svg {
     color: #444a53 !important;
     fill: none !important;
     stroke: #444a53 !important;
     opacity: 1 !important;
   }
-header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *, header[data-testid="stHeader"] button[aria-label*="sidebar" i] svg *, header[data-testid="stHeader"] button[aria-label*="menu" i] svg * {
+header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *, header[data-testid="stHeader"] button[aria-label*="menu" i] svg * {
     color: #444a53 !important;
     stroke: #444a53 !important;
     opacity: 1 !important;
@@ -2028,19 +2000,19 @@ header[data-testid="stHeader"] [data-testid="collapsedControl"] svg *, header[da
 
 /* v8.6.66 — force all mobile navigation chevron geometry to dark grey. */
 @media (max-width: 768px) {
-header[data-testid="stHeader"] button, [data-testid="stSidebarCollapseButton"], [data-testid="collapsedControl"], [data-testid="stSidebar"] details > summary {
+header[data-testid="stHeader"] button, [data-testid="collapsedControl"], [data-testid="stSidebar"] details > summary {
     color: #444a53 !important;
   }
-header[data-testid="stHeader"] button svg, [data-testid="stSidebarCollapseButton"] svg, [data-testid="collapsedControl"] svg, [data-testid="stSidebar"] details > summary svg {
+header[data-testid="stHeader"] button svg, [data-testid="collapsedControl"] svg, [data-testid="stSidebar"] details > summary svg {
     color: #444a53 !important;
     opacity: 1 !important;
   }
-header[data-testid="stHeader"] button svg path, header[data-testid="stHeader"] button svg polyline, header[data-testid="stHeader"] button svg line, [data-testid="stSidebarCollapseButton"] svg path, [data-testid="stSidebarCollapseButton"] svg polyline, [data-testid="stSidebarCollapseButton"] svg line, [data-testid="collapsedControl"] svg path, [data-testid="collapsedControl"] svg polyline, [data-testid="collapsedControl"] svg line, [data-testid="stSidebar"] details > summary svg path, [data-testid="stSidebar"] details > summary svg polyline, [data-testid="stSidebar"] details > summary svg line {
+header[data-testid="stHeader"] button svg path, header[data-testid="stHeader"] button svg polyline, header[data-testid="stHeader"] button svg line, [data-testid="collapsedControl"] svg path, [data-testid="collapsedControl"] svg polyline, [data-testid="collapsedControl"] svg line, [data-testid="stSidebar"] details > summary svg path, [data-testid="stSidebar"] details > summary svg polyline, [data-testid="stSidebar"] details > summary svg line {
     stroke: #444a53 !important;
     color: #444a53 !important;
     opacity: 1 !important;
   }
-header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-testid="stSidebarCollapseButton"] svg path[fill]:not([fill="none"]), [data-testid="collapsedControl"] svg path[fill]:not([fill="none"]), [data-testid="stSidebar"] details > summary svg path[fill]:not([fill="none"]) {
+header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-testid="collapsedControl"] svg path[fill]:not([fill="none"]), [data-testid="stSidebar"] details > summary svg path[fill]:not([fill="none"]) {
     fill: #444a53 !important;
   }
 }
@@ -2076,30 +2048,7 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
 
 
 /* v8.6.71 — app sidebar controls only. Do not style Streamlit toolbar/settings. */
-@media (max-width: 768px) {/* Collapsed app menu control at the far left of the header. */
-
-  /* Open drawer: keep one native close control only. */
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
-    background: transparent !important;
-    border: 0 !important;
-    box-shadow: none !important;
-    color: #444a53 !important;
-  }
-
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg,
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] svg * {
-    display: initial !important;
-    visibility: visible !important;
-    color: #444a53 !important;
-    fill: none !important;
-    stroke: #444a53 !important;
-    opacity: 1 !important;
-  }
-
-  [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"]::after {
-    content: none !important;
-    display: none !important;
-  }
+@media (max-width: 768px) {/* Collapsed app menu control at the far left of the header. *//* Open drawer: keep one native close control only. */
 
   /* Administration expander: no white icon box, chevron aligned right. */
   [data-testid="stSidebar"] details > summary {
@@ -2325,32 +2274,7 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button {
   min-height:2.7rem !important;
-}
-
-/* Exactly one app-owned drawer-close chevron. Hide every native drawing layer. */
-[data-testid="stSidebarCollapseButton"] svg,
-[data-testid="stSidebarCollapseButton"] svg *,
-[data-testid="stSidebarCollapseButton"]::before,
-[data-testid="stSidebarCollapseButton"] > *::before,
-[data-testid="stSidebarCollapseButton"] > *::after {
-  display:none !important;
-  content:none !important;
-}
-[data-testid="stSidebarCollapseButton"]::after { display:none !important; content:none !important; }
-[data-testid="stSidebarCollapseButton"] button::after {
-  content:"" !important;
-  display:block !important;
-  position:absolute !important;
-  left:50% !important;
-  top:50% !important;
-  width:.68rem !important;
-  height:.68rem !important;
-  border-left:2.5px solid #25262d !important;
-  border-bottom:2.5px solid #25262d !important;
-  transform:translate(-35%,-50%) rotate(45deg) !important;
-  pointer-events:none !important;
-  opacity:1 !important;
-}
+}/* Exactly one app-owned drawer-close chevron. Hide every native drawing layer. */
 
 @media (max-width:700px) {
   [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
@@ -2395,65 +2319,11 @@ input, textarea, select, button,
 [data-testid="stFileUploader"] small, [data-testid="stFileUploader"] span,
 [data-testid="stExpander"] summary, [data-testid="stExpander"] summary * { color:#25262d !important; }
 [data-testid="stTimeInput"] input, [data-testid="stDateInput"] input { background:#fff !important; color:#25262d !important; }/* Keep app navigation controls visible in every state. */
-[data-testid="stSidebarCollapseButton"], [data-testid="stSidebarCollapseButton"] button {
-  opacity:1 !important; visibility:visible !important; color:#25262d !important; background:transparent !important;
-}
-[data-testid="stSidebarCollapseButton"] svg, [data-testid="stSidebarCollapseButton"] svg * {
-  display:initial !important; visibility:visible !important; opacity:1 !important;
-  stroke:#25262d !important; color:#25262d !important;
-}
 [data-testid="stSidebar"] details > summary svg { display:initial !important; visibility:visible !important; opacity:1 !important; color:#25262d !important; }
 [data-testid="stSidebar"] details > summary svg * { stroke:#25262d !important; }
 [data-testid="stSidebar"] details > summary::after { content:none !important; display:none !important; }/* v8.7.5.1 — controlled menu-chevron repair.
    App-owned icons avoid Streamlit SVG colour/shape regressions.
-   Applies on desktop and mobile; never targets generic header buttons. */
-[data-testid="stSidebarCollapseButton"] {
-  position: relative !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-  color: #25262d !important;
-}
-[data-testid="stSidebarCollapseButton"] button {
-  position: relative !important;
-  min-width: 2.5rem !important;
-  min-height: 2.5rem !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  background: transparent !important;
-  border: 0 !important;
-  box-shadow: none !important;
-}/* Hide only the two native sidebar-control SVGs. */
-[data-testid="stSidebarCollapseButton"] svg {
-  display: none !important;
-}/* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. */
-
-/* Open drawer: left-pointing close chevron. */
-[data-testid="stSidebarCollapseButton"]::after,
-[data-testid="stSidebarCollapseButton"] button::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .68rem !important;
-  height: .68rem !important;
-  border-left: 2.5px solid #25262d !important;
-  border-bottom: 2.5px solid #25262d !important;
-  transform: translate(-35%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
-  opacity: 1 !important;
-}
-
-[data-testid="stSidebarCollapseButton"]:has(button)::after {
-  content: none !important;
-  display: none !important;
-}/* Maintain visible controls without hover-dependent colour changes. */
-[data-testid="stSidebarCollapseButton"]:hover, [data-testid="stSidebarCollapseButton"] button:hover {
-  background: #f1f2f3 !important;
-}
+   Applies on desktop and mobile; never targets generic header buttons. *//* Hide only the two native sidebar-control SVGs. *//* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. *//* Open drawer: left-pointing close chevron. *//* Maintain visible controls without hover-dependent colour changes. */
 
 /* Compact field cards. */
 .visit-trap-card { min-height:0 !important; padding:.9rem 1rem !important; display:block !important; margin-bottom:.7rem !important; }
@@ -2473,20 +2343,7 @@ input, textarea, select, button,
 .site-card-status { color:#22683d; font-size:.9rem; font-weight:700; white-space:nowrap; }
 .site-card-meta { color:#737780; font-size:.9rem; }
 
-/* Photo queue stays a real grid on mobile; no full-width remove bars. */
-[data-testid="stVerticalBlock"]:has(.photo-grid-marker) [data-testid="stHorizontalBlock"] {
-  display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important; gap:.55rem !important;
-}
-[data-testid="stVerticalBlock"]:has(.photo-grid-marker) [data-testid="column"] {
-  width:calc(33.333% - .4rem) !important; flex:1 1 0 !important; min-width:0 !important;
-}
-[data-testid="stVerticalBlock"]:has(.photo-grid-marker) img {
-  width:72px !important; height:72px !important; object-fit:cover !important; border-radius:9px !important; margin:0 auto !important;
-}
-[data-testid="stVerticalBlock"]:has(.photo-grid-marker) .stButton button {
-  min-height:2rem !important; height:2rem !important; width:auto !important; padding:0 .55rem !important;
-  font-size:.78rem !important; margin:.3rem auto 0 !important; display:block !important;
-}
+/* v8.7.6.6 photo layout is isolated inside the custom component iframe. */
 
 @media (max-width:700px) {
   .block-container { padding-top:calc(5rem + env(safe-area-inset-top)) !important; }
@@ -2497,27 +2354,6 @@ input, textarea, select, button,
 }/* v8.7.5.3 — controlled single-chevron fix.
    Draw exactly one icon on the actual button only. Container and nested pseudo-elements
    are explicitly suppressed so wrapper differences cannot create a doubled glyph. */
-[data-testid="stSidebarCollapseButton"]::before, [data-testid="stSidebarCollapseButton"]::after, [data-testid="stSidebarCollapseButton"] button::before, [data-testid="stSidebarCollapseButton"] button > *::before, [data-testid="stSidebarCollapseButton"] button > *::after {
-  content: none !important;
-  display: none !important;
-}
-[data-testid="stSidebarCollapseButton"] svg {
-  display: none !important;
-}
-
-[data-testid="stSidebarCollapseButton"] button::after {
-  content: "" !important;
-  display: block !important;
-  position: absolute !important;
-  left: 50% !important;
-  top: 50% !important;
-  width: .62rem !important;
-  height: .62rem !important;
-  border-left: 2.5px solid #25262d !important;
-  border-bottom: 2.5px solid #25262d !important;
-  transform: translate(-38%, -50%) rotate(45deg) !important;
-  pointer-events: none !important;
-}
 
 /* v8.7.5.4 — targeted shared base for the two missed trap-card surfaces only.
    Other card pages are intentionally untouched. */
@@ -2561,42 +2397,7 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
   }
 }/* v8.7.5.6 — final drawer-control isolation.
    Some Streamlit builds render an underlying double-arrow text glyph. Suppress
-   all native button content, then draw one app-owned chevron on the button. */
-[data-testid="stSidebarCollapseButton"]::before, [data-testid="stSidebarCollapseButton"]::after {
-  content:none !important;
-  display:none !important;
-}
-[data-testid="stSidebarCollapseButton"] button {
-  position:relative !important;
-  font-size:0 !important;
-  line-height:0 !important;
-  color:transparent !important;
-  text-shadow:none !important;
-  overflow:visible !important;
-}
-[data-testid="stSidebarCollapseButton"] button > * {
-  display:none !important;
-  visibility:hidden !important;
-  opacity:0 !important;
-}
-[data-testid="stSidebarCollapseButton"] button::before {
-  content:none !important;
-  display:none !important;
-}
-[data-testid="stSidebarCollapseButton"] button::after {
-  content:"" !important;
-  display:block !important;
-  position:absolute !important;
-  left:50% !important;
-  top:50% !important;
-  width:.62rem !important;
-  height:.62rem !important;
-  border-left:2.5px solid #25262d !important;
-  border-bottom:2.5px solid #25262d !important;
-  transform:translate(-38%,-50%) rotate(45deg) !important;
-  pointer-events:none !important;
-  opacity:1 !important;
-}/* v8.7.5.10 — closed-menu control across both Streamlit DOM forms.
+   all native button content, then draw one app-owned chevron on the button. *//* v8.7.5.10 — closed-menu control across both Streamlit DOM forms.
    On some deployments the test-id element is the clickable control itself;
    on others it wraps a nested button. Draw exactly one chevron in either case.
    The working open-drawer control is intentionally untouched. *//* Direct-control form: suppress native content only when there is no nested button. *//* Remove earlier container pseudo-elements, then restore exactly one for
@@ -2703,6 +2504,65 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 }
 </style>
 
+<style>
+/* v8.7.6.4 — one responsive navigation flow */
+.st-key-app_top_navigation {
+  width: 100%;
+}
+
+.st-key-app_top_navigation [data-testid="stHorizontalBlock"] {
+  width: 100%;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  column-gap: .4rem !important;
+  row-gap: .42rem !important;
+}
+
+.st-key-app_top_navigation [data-testid="stPageLink"] a,
+.st-key-app_top_navigation [data-testid="stPopover"] > button {
+  width: auto !important;
+  min-height: 2.55rem !important;
+  padding: .42rem .85rem !important;
+  border: 1px solid #d7d9dd !important;
+  border-radius: 999px !important;
+  background: #ffffff !important;
+  color: #25262d !important;
+  box-shadow: none !important;
+  font-weight: 500 !important;
+  line-height: 1.2 !important;
+  white-space: nowrap !important;
+}
+
+.st-key-app_top_navigation [data-testid="stPageLink"] a:hover,
+.st-key-app_top_navigation [data-testid="stPopover"] > button:hover {
+  border-color: #b8bcc2 !important;
+  background: #f7f7f5 !important;
+}
+
+.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"] {
+  background: #f3f3f0 !important;
+  border-color: #b8bcc2 !important;
+  color: #25262d !important;
+  opacity: 1 !important;
+}
+
+@media (max-width: 700px) {
+  .st-key-app_top_navigation [data-testid="stHorizontalBlock"] {
+    column-gap: .32rem !important;
+    row-gap: .38rem !important;
+  }
+
+  .st-key-app_top_navigation [data-testid="stPageLink"] a,
+  .st-key-app_top_navigation [data-testid="stPopover"] > button {
+    min-height: 2.65rem !important;
+    padding: .43rem .72rem !important;
+  }
+}
+</style>
+
+
+
+
 
 """, unsafe_allow_html=True)
 
@@ -2721,245 +2581,147 @@ components.html("""
 
 require_authentication()
 
-components.html(
-    """
-    <script>
-    (() => {
-      const parentWindow = window.parent;
-      const doc = parentWindow.document;
-      const STYLE_ID = "r1m1-closed-menu-style";
-      const BUTTON_ID = "r1m1-closed-menu-button";
-      const OBSERVER_KEY = "__r1m1ClosedMenuObserver";
-
-      if (!doc.getElementById(STYLE_ID)) {
-        const style = doc.createElement("style");
-        style.id = STYLE_ID;
-        style.textContent = `
-          [data-testid="stSidebarCollapsedControl"] {
-            opacity: 0 !important;
-            visibility: hidden !important;
-            pointer-events: none !important;
-          }
-
-          #${BUTTON_ID} {
-            position: fixed;
-            top: calc(.55rem + env(safe-area-inset-top));
-            left: .65rem;
-            z-index: 1000000;
-            width: 2.75rem;
-            height: 2.75rem;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            padding: 0;
-            margin: 0;
-            border: 0;
-            border-radius: .65rem;
-            background: rgba(255,255,255,.96);
-            color: #25262d;
-            box-shadow: none;
-            font: 700 2rem/1 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            -webkit-appearance: none;
-            appearance: none;
-            cursor: pointer;
-            touch-action: manipulation;
-          }
-
-          #${BUTTON_ID}:focus-visible {
-            outline: 3px solid rgba(243,108,33,.35);
-            outline-offset: 2px;
-          }
-        `;
-        doc.head.appendChild(style);
-      }
-
-      let button = doc.getElementById(BUTTON_ID);
-      if (!button) {
-        button = doc.createElement("button");
-        button.id = BUTTON_ID;
-        button.type = "button";
-        button.setAttribute("aria-label", "Open menu");
-        button.setAttribute("title", "Open menu");
-        button.textContent = "›";
-        doc.body.appendChild(button);
-      }
-
-      const sidebarIsOpen = () => {
-        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-        if (!sidebar) return false;
-        const rect = sidebar.getBoundingClientRect();
-        const style = parentWindow.getComputedStyle(sidebar);
-        return (
-          style.display !== "none" &&
-          style.visibility !== "hidden" &&
-          rect.width > 40 &&
-          rect.right > 8
-        );
-      };
-
-      const nativeOpenControl = () => {
-        const wrapper = doc.querySelector('[data-testid="stSidebarCollapsedControl"]');
-        if (!wrapper) return null;
-        if (wrapper.matches("button")) return wrapper;
-        return wrapper.querySelector("button") || wrapper;
-      };
-
-      const update = () => {
-        const nativeControl = nativeOpenControl();
-        const shouldShow = Boolean(nativeControl) && !sidebarIsOpen();
-        button.style.display = shouldShow ? "flex" : "none";
-      };
-
-      button.onclick = () => {
-        const nativeControl = nativeOpenControl();
-        if (!nativeControl) return;
-        nativeControl.click();
-        requestAnimationFrame(update);
-        [80, 200, 450].forEach((delay) => parentWindow.setTimeout(update, delay));
-      };
-
-      parentWindow.__r1m1UpdateClosedMenu = update;
-
-      if (!parentWindow[OBSERVER_KEY]) {
-        const observer = new MutationObserver(() => {
-          if (parentWindow.__r1m1UpdateClosedMenu) {
-            parentWindow.__r1m1UpdateClosedMenu();
-          }
-        });
-        observer.observe(doc.body, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ["style", "class", "aria-expanded"]
-        });
-        parentWindow.addEventListener("resize", update, { passive: true });
-        parentWindow.addEventListener("orientationchange", update, { passive: true });
-        parentWindow[OBSERVER_KEY] = observer;
-      }
-
-      update();
-      requestAnimationFrame(update);
-      [100, 300, 800].forEach((delay) => parentWindow.setTimeout(update, delay));
-    })();
-    </script>
-    """,
-    height=0,
-    width=0,
-)
-
 data = load_data()
+if not st.session_state.get("photo_cleanup_done"):
+    cleanup_stale_transactions(DATA_ROOT, data["Checks"]["Check ID"].astype(str).tolist())
+    st.session_state.photo_cleanup_done = True
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
-PRIMARY_NAV = {"Trap sites": "sites", "Traps": "network", "Follow-ups": "followups", "Trial performance": "results"}
-SECONDARY_NAV = {"Trial setup": "setup", "Data & records": "data_management"}
-WORKFLOW_PAGES = {"site", "visit", "check", "check_confirm"}
-
-# Goodnature wordmark appears once in persistent app chrome.
-logo_path = Path(__file__).parent / "goodnature_logo.png"
-if logo_path.exists():
-    st.sidebar.image(str(logo_path), width=170)
-
-# Primary work stays prominent. Secondary tools sit under More.
-if st.session_state.page in WORKFLOW_PAGES:
-    if st.session_state.page in {"visit", "check", "check_confirm"}:
-        sid = st.session_state.get("site_id", "")
-        if sid:
-            st.sidebar.write(f"**{site_name(data, sid)}**")
-    if st.sidebar.button("Exit to Trap sites"):
-        nav_go("sites")
-else:
-    for label, target in PRIMARY_NAV.items():
-        is_active = (
-            st.session_state.page == target
-            or (target == "network" and st.session_state.page == "trap_detail")
-        )
-        if st.sidebar.button(
-            label,
-            use_container_width=True,
-            type="primary" if is_active else "secondary",
-        ):
-            nav_go(target)
-    with st.sidebar.expander("Administration", expanded=st.session_state.page in SECONDARY_NAV.values()):
-        for label, target in SECONDARY_NAV.items():
-            if st.button(label, key=f"nav_{target}", use_container_width=True, type="primary" if st.session_state.page == target else "secondary"):
-                nav_go(target)
+WORKFLOW_PAGES = {"site", "start_visit", "visit", "check", "check_confirm"}
 
 
-# Close the mobile menu from the same tap that selects a destination.
-components.html(
-    """
-    <script>
-    (() => {
-      const parent = window.parent;
-      const doc = parent.document;
-      const listenerKey = '__r1m1MobileNavCloseInstalled';
+def select_top_navigation(target: str, allowed_pages: set[str]) -> None:
+    """Sync framework top navigation with the app's existing workflow router."""
+    current = st.session_state.get("page", "sites")
+    if current not in allowed_pages:
+        st.session_state.page = target
+        st.session_state.scroll_to_top_once = True
+        st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
 
-      if (parent[listenerKey]) return;
-      parent[listenerKey] = true;
 
-      const destinationLabels = new Set([
-        'Trap sites',
-        'Traps',
-        'Follow-ups',
-        'Trial performance',
-        'Trial setup',
-        'Data & records'
-      ]);
+def top_nav_trap_sites() -> None:
+    select_top_navigation("sites", {"sites", "site", "start_visit", "visit", "check", "check_confirm"})
 
-      const sidebarIsOpen = () => {
-        const sidebar = doc.querySelector('[data-testid="stSidebar"]');
-        if (!sidebar) return false;
-        const rect = sidebar.getBoundingClientRect();
-        const style = parent.getComputedStyle(sidebar);
-        return (
-          sidebar.getAttribute('aria-hidden') !== 'true' &&
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          rect.width > 20 &&
-          rect.left < parent.innerWidth &&
-          rect.right > 0
-        );
-      };
 
-      const collapseControl = () => {
-        const selectors = [
-          '[data-testid="stSidebarCollapseButton"] button',
-          '[data-testid="stSidebarCollapseButton"]',
-          'button[aria-label="Close sidebar"]',
-          'button[aria-label="Collapse sidebar"]',
-          'button[aria-label*="close" i][aria-label*="sidebar" i]',
-          'button[aria-label*="collapse" i][aria-label*="sidebar" i]'
-        ];
-        for (const selector of selectors) {
-          const node = doc.querySelector(selector);
-          if (!node) continue;
-          return node.matches('button, [role="button"]')
-            ? node
-            : node.querySelector('button, [role="button"]') || node;
-        }
-        return null;
-      };
+def top_nav_traps() -> None:
+    select_top_navigation("network", {"network", "trap_detail"})
 
-      doc.addEventListener(
-        'click',
-        (event) => {
-          if (parent.innerWidth > 768 || !sidebarIsOpen()) return;
-          const button = event.target.closest('[data-testid="stSidebar"] button');
-          if (!button) return;
-          const label = (button.innerText || button.textContent || '').trim();
-          if (!destinationLabels.has(label)) return;
-          const control = collapseControl();
-          if (control && control !== button) control.click();
-        },
-        true
-      );
-    })();
-    </script>
-    """,
-    height=0,
-    width=0,
+
+def top_nav_followups() -> None:
+    select_top_navigation("followups", {"followups"})
+
+
+def top_nav_performance() -> None:
+    select_top_navigation("results", {"results"})
+
+
+def top_nav_trial_setup() -> None:
+    select_top_navigation("setup", {"setup", "trap_edit"})
+
+
+def top_nav_data_records() -> None:
+    select_top_navigation("data_management", {"data_management", "windows"})
+
+
+def top_nav_sign_out() -> None:
+    st.session_state.clear()
+    st.rerun()
+
+
+PAGE_TRAP_SITES = st.Page(
+    top_nav_trap_sites, title="Trap sites", url_path="trap-sites", default=True
 )
+PAGE_TRAPS = st.Page(top_nav_traps, title="Traps", url_path="traps")
+PAGE_FOLLOWUPS = st.Page(top_nav_followups, title="Follow-ups", url_path="follow-ups")
+PAGE_PERFORMANCE = st.Page(
+    top_nav_performance, title="Trial performance", url_path="trial-performance"
+)
+PAGE_TRIAL_SETUP = st.Page(
+    top_nav_trial_setup, title="Trial setup", url_path="trial-setup"
+)
+PAGE_DATA_RECORDS = st.Page(
+    top_nav_data_records, title="Data & records", url_path="data-records"
+)
+PAGE_SIGN_OUT = st.Page(top_nav_sign_out, title="Sign out", url_path="sign-out")
+
+NAVIGATION_PAGES = {
+    "": [PAGE_TRAP_SITES, PAGE_TRAPS, PAGE_FOLLOWUPS, PAGE_PERFORMANCE],
+    "Administration": [PAGE_TRIAL_SETUP, PAGE_DATA_RECORDS, PAGE_SIGN_OUT],
+}
+
+# Keep Streamlit's supported page router, but do not render its responsive
+# navigation shell. The app-owned controls below use st.switch_page, so
+# routing, URLs and browser history remain framework-owned.
+selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
+selected_navigation_page.run()
+
+PRIMARY_SECTION_BY_APP_PAGE = {
+    "sites": "Trap sites",
+    "site": "Trap sites",
+    "start_visit": "Trap sites",
+    "visit": "Trap sites",
+    "check": "Trap sites",
+    "check_confirm": "Trap sites",
+    "network": "Traps",
+    "trap_detail": "Traps",
+    "followups": "Follow-ups",
+    "results": "Trial performance",
+}
+
+current_primary_section = PRIMARY_SECTION_BY_APP_PAGE.get(
+    st.session_state.get("page", "sites")
+)
+
+# Native Streamlit page links and Administration share one wrapping container.
+# No selection state is stored, so a tap routes immediately.
+with st.container(
+    horizontal=True,
+    horizontal_alignment="left",
+    gap="small",
+    width="stretch",
+    key="app_top_navigation",
+):
+    st.page_link(
+        PAGE_TRAP_SITES,
+        label="Trap sites",
+        disabled=current_primary_section == "Trap sites",
+        width="content",
+    )
+    st.page_link(
+        PAGE_TRAPS,
+        label="Traps",
+        disabled=current_primary_section == "Traps",
+        width="content",
+    )
+    st.page_link(
+        PAGE_FOLLOWUPS,
+        label="Follow-ups",
+        disabled=current_primary_section == "Follow-ups",
+        width="content",
+    )
+    st.page_link(
+        PAGE_PERFORMANCE,
+        label="Trial performance",
+        disabled=current_primary_section == "Trial performance",
+        width="content",
+    )
+    with st.popover("Administration"):
+        st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
+        st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
+        st.divider()
+        if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
+            st.session_state.clear()
+            st.rerun()
+
+# Workflow pages retain one explicit escape route while the top navigation
+# remains on the parent Trap sites section.
+if st.session_state.page in WORKFLOW_PAGES:
+    site_id = st.session_state.get("site_id", "")
+    if site_id:
+        st.caption(site_name(data, site_id))
+    if st.button("Exit to Trap sites", key="exit_workflow_to_sites"):
+        go("sites")
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
 page = st.session_state.page
@@ -3175,16 +2937,19 @@ elif page == "check":
     rat_type = ""
     condition = ""
     bag_labelled = False
+    photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
 
     if has_animal:
         bag_key = f"bag_id_{vid}_{trap_id}"
+        pending_check_id = ensure_pending_check_id(vid, trap_id)
         if bag_key not in st.session_state:
-            st.session_state[bag_key] = next_bag_id(data, sid)
+            recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
+            st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
         bag_id = st.session_state[bag_key]
         message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
         st.markdown("### Photos")
         st.caption("Choose the photos already taken from the camera roll.")
-        render_check_photo_capture(vid, trap_id)
+        photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
         species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
         if species == "Rat":
             rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
@@ -3264,7 +3029,18 @@ elif page == "check":
     else:
         d = tm = None
 
-    if st.button("Save check", type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True):
+    photo_blocked = bool(has_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+    if has_animal and photo_gate.get("expected_count", 0):
+        if photo_gate.get("manual_failure_count", 0):
+            count = int(photo_gate["manual_failure_count"])
+            st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
+        elif photo_gate.get("ready"):
+            st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
+        else:
+            remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+            st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+    save_label = "Please wait" if photo_blocked else "Save check"
+    if st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked):
         saving_feedback = st.empty()
         saving_feedback.info("Saving check… Do not tap again.")
         errors = []
@@ -3291,7 +3067,17 @@ elif page == "check":
             st.stop()
 
         check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
-        photos = st.session_state.get(photo_session_key(vid, trap_id), []) if has_animal else []
+        if has_animal and photo_gate.get("expected_count", 0):
+            photo_gate = {
+                **photo_gate,
+                **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+            }
+            if not (
+                photo_gate.get("ready")
+                and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+            ):
+                st.error("One or more selected photos are not safely stored yet.")
+                st.stop()
         active = open_window(data, trap_id)
         if active is None:
             message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
@@ -3310,7 +3096,8 @@ elif page == "check":
             staged["Windows"].at[idxs[0], "Species"] = species
             staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
 
-        check_id = make_id("CHK")
+        expected_photo_count = int(photo_gate.get("expected_count", 0)) if has_animal else 0
+        check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
         trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
         trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
         row = [
@@ -3339,48 +3126,131 @@ elif page == "check":
                          "Camera issue", "Resolve camera condition and record the evidence gap", "High")
 
         refresh_review_status(staged, old_id)
-        photos_before = staged["Photos"].copy()
         saved_photo_files = []
+        final_copies = []
+        rollback_copy = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.photo-rollback.xlsx"
+        workbook_save_attempted = False
+        workbook_restored = False
+        files_restored = False
+        rollback_checksum = ""
         try:
-            prepared_rows, saved_photo_files = prepare_check_photos(
-                photos, check_id, old_id, trap_id, sid, bag_id
-            )
-            expected_photo_count = len(photos)
-            if len(prepared_rows) != expected_photo_count or len(saved_photo_files) != expected_photo_count:
-                raise RuntimeError(
-                    f"Photo save incomplete: expected {expected_photo_count}, prepared {len(prepared_rows)}, stored {len(saved_photo_files)}."
-                )
-            missing_files = [str(path) for path in saved_photo_files if not Path(path).exists()]
-            if missing_files:
-                raise RuntimeError("One or more photo files were not present after saving.")
-            if prepared_rows:
+            if expected_photo_count:
+                # Verify again at the final commit boundary using the durable pending manifest.
+                photo_gate = {
+                    **photo_gate,
+                    **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+                }
+                if not (
+                    photo_gate.get("ready")
+                    and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+                ):
+                    raise RuntimeError(
+                        f"Photo integrity check failed: expected {photo_gate.get('expected_count', 0)}, "
+                        f"files {photo_gate.get('file_count', 0)}, rows {photo_gate.get('row_count', 0)}."
+                    )
+
+                final_plan = build_finalisation_plan(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)
+                final_copies = apply_final_copies(final_plan)
+                prepared_rows = [
+                    [row.get(column, "") for column in SHEETS["Photos"]]
+                    for row in final_plan.get("rows", [])
+                ]
+                saved_photo_files = [destination for _, destination, _ in final_copies]
+                if len(prepared_rows) != expected_photo_count or len(saved_photo_files) != expected_photo_count:
+                    raise RuntimeError(
+                        f"Photo finalisation mismatch: expected {expected_photo_count}, rows {len(prepared_rows)}, files {len(saved_photo_files)}."
+                    )
+                if any(not path.exists() or path.stat().st_size <= 0 for path in saved_photo_files):
+                    raise RuntimeError("One or more selected photo files were missing before final save.")
                 staged["Photos"] = pd.concat(
-                    [data["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
+                    [staged["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
                     ignore_index=True,
                 )
-            committed_photo_rows = len(
-                staged["Photos"][staged["Photos"]["Check ID"].astype(str) == str(check_id)]
-            )
-            if committed_photo_rows != expected_photo_count:
+
+            committed_rows = staged["Photos"][
+                staged["Photos"]["Check ID"].astype(str) == str(check_id)
+            ]
+            if len(committed_rows) != expected_photo_count or committed_rows["Photo ID"].astype(str).nunique() != expected_photo_count:
                 raise RuntimeError(
-                    f"Photo record mismatch: expected {expected_photo_count}, recorded {committed_photo_rows}."
+                    f"Photo record mismatch: expected {expected_photo_count}, recorded {len(committed_rows)}, "
+                    f"distinct {committed_rows['Photo ID'].astype(str).nunique()}."
                 )
+
+            if DATA_FILE.exists():
+                shutil.copy2(DATA_FILE, rollback_copy)
+                rollback_checksum = hashlib.sha256(rollback_copy.read_bytes()).hexdigest()
+            workbook_save_attempted = True
             save_data(staged)
+
+            reloaded = load_data()
+            persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
+            persisted_photos = reloaded["Photos"][reloaded["Photos"]["Check ID"].astype(str) == str(check_id)]
+            persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
+            if len(persisted_check) != 1:
+                raise RuntimeError("The saved workbook did not contain exactly one completed check.")
+            if len(persisted_photos) != expected_photo_count or persisted_photos["Photo ID"].astype(str).nunique() != expected_photo_count:
+                raise RuntimeError("The saved workbook did not contain the complete verified photo set.")
+            for _, persisted_photo in persisted_photos.iterrows():
+                rel = _safe_relative_photo_path(persisted_photo["File Path"])
+                path = DATA_ROOT / rel if rel else None
+                if path is None or not path.exists() or path.stat().st_size <= 0:
+                    raise RuntimeError("A saved Photos row did not point to a valid stored file.")
+
+            log_photo_event(
+                DATA_ROOT, "check_commit_verified", check_id=check_id, trap_id=trap_id,
+                expected_count=expected_photo_count, photo_row_count=len(persisted_photos),
+                followup_count=len(persisted_followups),
+            )
             for name in data:
-                data[name] = staged[name]
+                data[name] = reloaded[name]
+
         except Exception as exc:
-            rollback_photo_files(saved_photo_files)
+            rollback_errors = []
+            if workbook_save_attempted and rollback_copy.exists():
+                try:
+                    restore_temp = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.restore.xlsx"
+                    shutil.copy2(rollback_copy, restore_temp)
+                    os.replace(restore_temp, DATA_FILE)
+                    if rollback_checksum and hashlib.sha256(DATA_FILE.read_bytes()).hexdigest() != rollback_checksum:
+                        raise RuntimeError("restored workbook did not match the pre-save workbook")
+                    workbook_restored = True
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"workbook rollback: {rollback_exc}")
+            else:
+                workbook_restored = True
+
+            if final_copies:
+                try:
+                    rollback_final_copies(final_copies)
+                    files_restored = True
+                except Exception as rollback_exc:
+                    rollback_errors.append(f"photo rollback: {rollback_exc}")
+            else:
+                files_restored = True
+
             for name in data:
                 data[name] = original_data[name]
-            st.error(f"Save failed. No check, window, follow-up or photo record was committed: {exc}")
+            log_photo_event(
+                DATA_ROOT, "check_commit_failed", check_id=check_id, trap_id=trap_id,
+                error=str(exc)[:500], workbook_restored=workbook_restored, files_restored=files_restored,
+                rollback_errors=rollback_errors,
+            )
+            rollback_copy.unlink(missing_ok=True)
+            if rollback_errors or not (workbook_restored and files_restored):
+                st.error("Save failed and automatic rollback could not be confirmed. Do not continue this check; contact the trial lead.")
+            else:
+                st.error("Save failed. No check, follow-up or photo record was committed. Your selected photos remain available to retry.")
             st.stop()
+        finally:
+            rollback_copy.unlink(missing_ok=True)
+
+        if expected_photo_count:
+            delete_transaction(DATA_ROOT, check_id)
 
         for key in [
             f"bag_id_{vid}_{trap_id}",
-            photo_session_key(vid, trap_id),
-            photo_capture_mode_key(vid, trap_id),
-            photo_widget_nonce_key(vid, trap_id),
-            f"photo_feedback_{vid}_{trap_id}",
+            pending_check_id_key(vid, trap_id),
+            photo_component_event_key(vid, trap_id),
         ]:
             st.session_state.pop(key, None)
         st.session_state.saved_check = {
@@ -4847,13 +4717,6 @@ elif page == "data_management":
                             st.rerun()
                         except Exception as exc:
                             st.error(str(exc))
-
-st.sidebar.divider()
-st.sidebar.caption("v8.7.5.14 · Safari menu and site status")
-if st.sidebar.button("Sign out", key="sign_out"):
-    st.session_state.clear()
-    st.rerun()
-
 
 
 # Navigation scroll reset runs last so the destination DOM is already mounted.

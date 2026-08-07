@@ -19,6 +19,9 @@ def check(name: str, passed: bool, detail: str = "") -> None:
     results.append({"check": name, "passed": bool(passed), "detail": detail})
 
 source = APP.read_text(encoding="utf-8")
+component_source = (ROOT / "photo_component" / "index.html").read_text(encoding="utf-8")
+photo_integrity_source = (ROOT / "photo_integrity.py").read_text(encoding="utf-8")
+combined_source = source + "\n" + component_source + "\n" + photo_integrity_source
 
 try:
     ast.parse(source)
@@ -39,8 +42,14 @@ for name, token in banned.items():
     check(name, token not in source, f"Forbidden token: {token}")
 
 required = {
-    "Upload-only photo picker": "st.file_uploader(",
-    "Multiple image upload": "accept_multiple_files=True",
+    "Browser photo component": "PHOTO_COMPONENT = components.declare_component",
+    "Multiple image upload": "multiple />",
+    "Browser-side resize": "Math.min(1800, sourceEdge)",
+    "Browser-side JPEG quality": "qualities=[0.82",
+    "Automatic retry backoff": "retry_delays_ms=[1000, 2000, 4000]",
+    "Stable pending Check ID": "def ensure_pending_check_id(",
+    "Idempotent photo path": "def _pending_image_path(",
+    "Final photo verification": "def verify_pending(",
     "Central navigation controller": "def navigate(page: str, rerun: bool = True, **kwargs):",
     "Top-reset navigation": "st.session_state.scroll_to_top_once = True",
     "App-owned top anchor": "r1m1-page-top",
@@ -57,10 +66,12 @@ required = {
     "Radio selected orange outline": 'border-color: var(--brand-orange) !important;',
     "Radio selected orange centre": 'background: var(--brand-orange) !important;',
     "Checkbox styling": 'label[data-baseweb="checkbox"]',
-    "Sidebar chevron styling": 'aria-label*="sidebar" i',
-    "Approved primary navigation": 'PRIMARY_NAV = {"Trap sites": "sites", "Traps": "network", "Follow-ups": "followups", "Trial performance": "results"}',
-    "Approved secondary navigation": 'SECONDARY_NAV = {"Trial setup": "setup", "Data & records": "data_management"}',
-    "Administration group label": 'st.sidebar.expander("Administration"',
+    "Hidden framework navigation router": 'selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")',
+    "Wrapping primary navigation": 'with st.container(',
+    "Native page links": "st.page_link(",
+    "Administration popover": 'with st.popover("Administration"):',
+    "Top navigation administration group": '"Administration": [',
+    "Top navigation sign out": 'st.Page(top_nav_sign_out, title="Sign out"',
     "Traps page title": 'header("Traps",',
     "Follow-ups page title": 'header("Follow-ups",',
     "Trial performance page title": 'header("Trial performance",',
@@ -72,7 +83,7 @@ required = {
     "Trap editor close control": 'key="close_trap_setup_panel_top"',
 }
 for name, token in required.items():
-    check(name, token in source, f"Required token: {token}")
+    check(name, token in combined_source, f"Required token: {token}")
 
 wb = load_workbook(CLEAN, data_only=False, read_only=True)
 sheets = ["Sites","Builds","Traps","Visits","Checks","Windows","Followups","Audit Log","Photos"]
