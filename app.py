@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
@@ -77,8 +78,26 @@ ANIMAL_WEIGHT_RANGES = ["0–50 g", "51–100 g", "101–150 g", "151–200 g", 
 RAT_TYPES = ["Norway rat", "Ship rat", "Unclear"]
 
 
+NZ_TZ = ZoneInfo("Pacific/Auckland")
+
+
 def now() -> datetime:
-    return datetime.now().replace(microsecond=0)
+    """Current New Zealand local time, as a naive datetime.
+
+    datetime.now() with no tz argument returns the *server's* system clock —
+    UTC on Render, 12 hours behind NZST (confirmed field bug, 7 Aug 2026).
+    datetime.now(NZ_TZ) fixes that and handles the NZDT/NZST daylight-saving
+    transition automatically (a hardcoded +12 offset would silently break
+    again at the next transition). tzinfo is stripped before returning
+    rather than kept aware: every stored timestamp in the workbook is a
+    naive string (dtstr/parse_dt never touch tzinfo), and this function is
+    compared against and combined with those naive values at 15+ call sites
+    throughout the app. Returning a naive datetime with already-correct NZ
+    wall-clock values means every one of those existing comparisons keeps
+    working unchanged, rather than needing every call site individually
+    audited and patched for a naive-vs-aware TypeError.
+    """
+    return datetime.now(NZ_TZ).replace(microsecond=0, tzinfo=None)
 
 
 def dtstr(value: Optional[datetime] = None) -> str:
@@ -657,6 +676,322 @@ def audit_change(data, record_type, record_id, field, previous, new, reason):
             str(previous), str(new), reason
         ]], columns=SHEETS["Audit Log"])
     ], ignore_index=True)
+
+
+TIMEZONE_CORRECTIONS = [
+    ('Checks', 'Check ID', 'CHK-20260803-031507-1297', 'Check Time', '2026-08-03 03:14:59', '2026-08-03 15:14:59'),
+    ('Checks', 'Check ID', 'CHK-20260803-053023-FEFC', 'Check Time', '2026-08-03 05:30:15', '2026-08-03 17:30:15'),
+    ('Checks', 'Check ID', 'CHK-20260805-030030-5DA4', 'Check Time', '2026-08-05 03:00:27', '2026-08-05 15:00:27'),
+    ('Checks', 'Check ID', 'CHK-20260806-012619-95D8', 'Check Time', '2026-08-06 01:26:16', '2026-08-06 13:26:16'),
+    ('Checks', 'Check ID', 'CHK-20260806-025308-C3A4', 'Check Time', '2026-08-06 02:52:55', '2026-08-06 14:52:55'),
+    ('Checks', 'Check ID', 'CHK-20260806-030022-84FF', 'Check Time', '2026-08-06 03:00:18', '2026-08-06 15:00:18'),
+    ('Checks', 'Check ID', 'CHK-20260806-031157-3E7C', 'Check Time', '2026-08-06 03:11:55', '2026-08-06 15:11:55'),
+    ('Checks', 'Check ID', 'CHK-20260806-031702-20AF', 'Check Time', '2026-08-06 03:16:57', '2026-08-06 15:16:57'),
+    ('Checks', 'Check ID', 'CHK-20260806-032231-68A2', 'Check Time', '2026-08-06 03:22:27', '2026-08-06 15:22:27'),
+    ('Checks', 'Check ID', 'CHK-20260806-033030-EEE6', 'Check Time', '2026-08-06 03:30:24', '2026-08-06 15:30:24'),
+    ('Checks', 'Check ID', 'CHK-20260806-033635-BAD3', 'Check Time', '2026-08-06 03:36:28', '2026-08-06 15:36:28'),
+    ('Checks', 'Check ID', 'CHK-20260806-040331-180D', 'Check Time', '2026-08-06 04:03:29', '2026-08-06 16:03:29'),
+    ('Checks', 'Check ID', 'CHK-20260806-040618-66D8', 'Check Time', '2026-08-06 04:06:15', '2026-08-06 16:06:15'),
+    ('Checks', 'Check ID', 'CHK-20260806-040826-9FFC', 'Check Time', '2026-08-06 04:08:17', '2026-08-06 16:08:17'),
+    ('Checks', 'Check ID', 'CHK-20260806-040950-1608', 'Check Time', '2026-08-06 04:09:47', '2026-08-06 16:09:47'),
+    ('Checks', 'Check ID', 'CHK-20260806-041629-6228', 'Check Time', '2026-08-06 04:16:21', '2026-08-06 16:16:21'),
+    ('Checks', 'Check ID', 'CHK-20260806-041848-998C', 'Check Time', '2026-08-06 04:18:46', '2026-08-06 16:18:46'),
+    ('Checks', 'Check ID', 'CHK-20260806-042332-D813', 'Check Time', '2026-08-06 04:23:29', '2026-08-06 16:23:29'),
+    ('Checks', 'Check ID', 'CHK-20260806-042840-6F2F', 'Check Time', '2026-08-06 04:28:38', '2026-08-06 16:28:38'),
+    ('Checks', 'Check ID', 'CHK-20260806-043056-A192', 'Check Time', '2026-08-06 04:30:54', '2026-08-06 16:30:54'),
+    ('Checks', 'Check ID', 'CHK-20260806-043222-D7DA', 'Check Time', '2026-08-06 04:32:18', '2026-08-06 16:32:18'),
+    ('Checks', 'Check ID', 'CHK-20260806-080152-D55B', 'Check Time', '2026-08-06 08:01:52', '2026-08-06 20:01:52'),
+    ('Checks', 'Check ID', 'CHK-20260806-080203-C619', 'Check Time', '2026-08-06 08:02:03', '2026-08-06 20:02:03'),
+    ('Checks', 'Check ID', 'CHK-20260806-083030-3411', 'Check Time', '2026-08-06 08:30:30', '2026-08-06 20:30:30'),
+    ('Checks', 'Check ID', 'CHK-20260806-083339-C29E', 'Check Time', '2026-08-06 08:33:39', '2026-08-06 20:33:39'),
+    ('Checks', 'Check ID', 'CHK-20260806-192616-953F', 'Check Time', '2026-08-06 19:26:16', '2026-08-07 07:26:16'),
+    ('Checks', 'Check ID', 'CHK-20260806-192627-085A', 'Check Time', '2026-08-06 19:26:27', '2026-08-07 07:26:27'),
+    ('Checks', 'Check ID', 'CHK-20260806-192634-D363', 'Check Time', '2026-08-06 19:26:34', '2026-08-07 07:26:34'),
+    ('Checks', 'Check ID', 'CHK-20260806-192642-7E9D', 'Check Time', '2026-08-06 19:26:42', '2026-08-07 07:26:42'),
+    ('Checks', 'Check ID', 'CHK-20260806-192649-A3E2', 'Check Time', '2026-08-06 19:26:49', '2026-08-07 07:26:49'),
+    ('Checks', 'Check ID', 'CHK-20260806-192656-EAF6', 'Check Time', '2026-08-06 19:26:56', '2026-08-07 07:26:56'),
+    ('Checks', 'Check ID', 'CHK-20260806-192703-FEC0', 'Check Time', '2026-08-06 19:27:03', '2026-08-07 07:27:03'),
+    ('Checks', 'Check ID', 'CHK-20260806-192711-2E98', 'Check Time', '2026-08-06 19:27:11', '2026-08-07 07:27:11'),
+    ('Checks', 'Check ID', 'CHK-20260806-233518-2DC8', 'Check Time', '2026-08-06 23:35:18', '2026-08-07 11:35:18'),
+    ('Checks', 'Check ID', 'CHK-20260806-233656-E60C', 'Check Time', '2026-08-06 23:36:56', '2026-08-07 11:36:56'),
+    ('Checks', 'Check ID', 'CHK-20260806-233808-E0DA', 'Check Time', '2026-08-06 23:38:08', '2026-08-07 11:38:08'),
+    ('Checks', 'Check ID', 'CHK-20260806-233852-8D44', 'Check Time', '2026-08-06 23:38:52', '2026-08-07 11:38:52'),
+    ('Checks', 'Check ID', 'CHK-20260806-233945-694A', 'Check Time', '2026-08-06 23:39:45', '2026-08-07 11:39:45'),
+    ('Checks', 'Check ID', 'CHK-20260806-234218-8D35', 'Check Time', '2026-08-06 23:42:18', '2026-08-07 11:42:18'),
+    ('Checks', 'Check ID', 'CHK-20260806-234518-33DA', 'Check Time', '2026-08-06 23:45:18', '2026-08-07 11:45:18'),
+    ('Checks', 'Check ID', 'CHK-20260806-235826-E6F8', 'Check Time', '2026-08-06 23:58:26', '2026-08-07 11:58:26'),
+    ('Checks', 'Check ID', 'CHK-20260807-000143-ED1F', 'Check Time', '2026-08-07 00:01:43', '2026-08-07 12:01:43'),
+    ('Checks', 'Check ID', 'CHK-20260807-000325-0259', 'Check Time', '2026-08-07 00:03:25', '2026-08-07 12:03:25'),
+    ('Visits', 'Visit ID', 'VIS-HUT-20260803-025834-FD33', 'Start Time', '2026-08-03 02:58:34', '2026-08-03 14:58:34'),
+    ('Visits', 'Visit ID', 'VIS-NAE-20260803-050537-887D', 'Start Time', '2026-08-03 05:05:37', '2026-08-03 17:05:37'),
+    ('Visits', 'Visit ID', 'VIS-TAW-20260803-052717-642D', 'Start Time', '2026-08-03 05:27:17', '2026-08-03 17:27:17'),
+    ('Visits', 'Visit ID', 'VIS-TR-20260806-023919-64C7', 'Start Time', '2026-08-06 02:39:19', '2026-08-06 14:39:19'),
+    ('Visits', 'Visit ID', 'VIS-TR-20260806-023919-64C7', 'End Time', '2026-08-06 08:04:11', '2026-08-06 20:04:11'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-081624-8D24', 'Start Time', '2026-08-06 08:16:24', '2026-08-06 20:16:24'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-081624-8D24', 'End Time', '2026-08-06 08:16:29', '2026-08-06 20:16:29'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-081810-1FC1', 'Start Time', '2026-08-06 08:18:10', '2026-08-06 20:18:10'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-081810-1FC1', 'End Time', '2026-08-06 08:20:47', '2026-08-06 20:20:47'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-082947-DABC', 'Start Time', '2026-08-06 08:29:47', '2026-08-06 20:29:47'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-082947-DABC', 'End Time', '2026-08-06 19:27:15', '2026-08-07 07:27:15'),
+    ('Visits', 'Visit ID', 'VIS-TR-20260806-224548-9542', 'Start Time', '2026-08-06 22:45:48', '2026-08-07 10:45:48'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-233135-1F3F', 'Start Time', '2026-08-06 23:31:35', '2026-08-07 11:31:35'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260806-233135-1F3F', 'End Time', '2026-08-07 00:12:55', '2026-08-07 12:12:55'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260807-074808-40F8', 'Start Time', '2026-08-07 07:48:08', '2026-08-07 19:48:08'),
+    ('Visits', 'Visit ID', 'VIS-MOA-20260807-074808-40F8', 'End Time', '2026-08-07 19:27:39', '2026-08-08 07:27:39'),
+    ('Windows', 'Window ID', 'R1-HUT-001-W-LAUNCH-01', 'End Time', '2026-08-03 03:14:59', '2026-08-03 15:14:59'),
+    ('Windows', 'Window ID', 'R1-HUT-002-W-LAUNCH-01', 'End Time', '2026-08-03 05:30:15', '2026-08-03 17:30:15'),
+    ('Windows', 'Window ID', 'R1-HUT-003-W-LAUNCH-01', 'End Time', '2026-08-05 03:00:27', '2026-08-05 15:00:27'),
+    ('Windows', 'Window ID', 'R1-HUT-004-W-LAUNCH-01', 'End Time', '2026-08-06 01:26:16', '2026-08-06 13:26:16'),
+    ('Windows', 'Window ID', 'R1-HUT-001-W-20260803-031507-B85D', 'Start Time', '2026-08-03 03:14:59', '2026-08-03 15:14:59'),
+    ('Windows', 'Window ID', 'R1-HUT-002-W-20260803-053023-9B96', 'Start Time', '2026-08-03 05:30:15', '2026-08-03 17:30:15'),
+    ('Windows', 'Window ID', 'R1-HUT-003-W-20260805-030030-23F4', 'Start Time', '2026-08-05 03:00:27', '2026-08-05 15:00:27'),
+    ('Windows', 'Window ID', 'R1-HUT-004-W-20260806-012619-C4BF', 'Start Time', '2026-08-06 01:26:16', '2026-08-06 13:26:16'),
+    ('Windows', 'Window ID', 'R15-3-W-20260806-015048-BF13', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'R15-3-W-20260806-015048-BF13', 'End Time', '2026-08-06 03:36:28', '2026-08-06 15:36:28'),
+    ('Windows', 'Window ID', 'R15-4-W-20260806-015108-E088', 'Start Time', '2026-08-06 01:51:00', '2026-08-06 13:51:00'),
+    ('Windows', 'Window ID', 'R15-4-W-20260806-015108-E088', 'End Time', '2026-08-06 03:00:18', '2026-08-06 15:00:18'),
+    ('Windows', 'Window ID', 'R15-5-W-20260806-015130-A21C', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'R15-5-W-20260806-015130-A21C', 'End Time', '2026-08-06 03:22:27', '2026-08-06 15:22:27'),
+    ('Windows', 'Window ID', 'R15-6-W-20260806-015204-508A', 'Start Time', '2026-08-06 01:52:00', '2026-08-06 13:52:00'),
+    ('Windows', 'Window ID', 'R15-6-W-20260806-015204-508A', 'End Time', '2026-08-06 03:16:57', '2026-08-06 15:16:57'),
+    ('Windows', 'Window ID', 'R15-7-W-20260806-015239-50F4', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'R15-7-W-20260806-015239-50F4', 'End Time', '2026-08-06 03:30:24', '2026-08-06 15:30:24'),
+    ('Windows', 'Window ID', 'R15-8-W-20260806-015258-9241', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'R15-8-W-20260806-015258-9241', 'End Time', '2026-08-06 03:11:55', '2026-08-06 15:11:55'),
+    ('Windows', 'Window ID', 'R15-9-W-20260806-015314-59FA', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'R15-9-W-20260806-015314-59FA', 'End Time', '2026-08-06 02:52:55', '2026-08-06 14:52:55'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-020620-99AD', 'Start Time', '2026-08-06 02:06:00', '2026-08-06 14:06:00'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-020620-99AD', 'End Time', '2026-08-06 04:18:46', '2026-08-06 16:18:46'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-020639-99C5', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-020639-99C5', 'End Time', '2026-08-06 04:16:21', '2026-08-06 16:16:21'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-020654-BC9A', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-020654-BC9A', 'End Time', '2026-08-06 04:03:29', '2026-08-06 16:03:29'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-020709-E03F', 'Start Time', '2026-08-06 02:07:00', '2026-08-06 14:07:00'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-020709-E03F', 'End Time', '2026-08-06 04:32:18', '2026-08-06 16:32:18'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-020723-F1CE', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-020723-F1CE', 'End Time', '2026-08-06 04:06:15', '2026-08-06 16:06:15'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-020741-9ECB', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-020741-9ECB', 'End Time', '2026-08-06 04:08:17', '2026-08-06 16:08:17'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-020755-C58E', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-020755-C58E', 'End Time', '2026-08-06 04:28:38', '2026-08-06 16:28:38'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-020811-234D', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-020811-234D', 'End Time', '2026-08-06 04:23:29', '2026-08-06 16:23:29'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-020826-23E3', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-020826-23E3', 'End Time', '2026-08-06 04:30:54', '2026-08-06 16:30:54'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-020841-1687', 'Start Time', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-020841-1687', 'End Time', '2026-08-06 04:09:47', '2026-08-06 16:09:47'),
+    ('Windows', 'Window ID', 'R15-9-W-20260806-025308-E100', 'Start Time', '2026-08-06 02:52:55', '2026-08-06 14:52:55'),
+    ('Windows', 'Window ID', 'R15-4-W-20260806-030022-5D2A', 'Start Time', '2026-08-06 03:00:18', '2026-08-06 15:00:18'),
+    ('Windows', 'Window ID', 'R15-8-W-20260806-031157-3216', 'Start Time', '2026-08-06 03:11:55', '2026-08-06 15:11:55'),
+    ('Windows', 'Window ID', 'R15-6-W-20260806-031702-486D', 'Start Time', '2026-08-06 03:16:57', '2026-08-06 15:16:57'),
+    ('Windows', 'Window ID', 'R15-5-W-20260806-032231-9EFB', 'Start Time', '2026-08-06 03:22:27', '2026-08-06 15:22:27'),
+    ('Windows', 'Window ID', 'R15-7-W-20260806-033030-3EA7', 'Start Time', '2026-08-06 03:30:24', '2026-08-06 15:30:24'),
+    ('Windows', 'Window ID', 'R15-3-W-20260806-033635-4C8F', 'Start Time', '2026-08-06 03:36:28', '2026-08-06 15:36:28'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-040331-76B7', 'Start Time', '2026-08-06 04:03:29', '2026-08-06 16:03:29'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-040331-76B7', 'End Time', '2026-08-06 08:22:00', '2026-08-06 20:22:00'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-040618-1DDF', 'Start Time', '2026-08-06 04:06:15', '2026-08-06 16:06:15'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-040618-1DDF', 'End Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-040826-229B', 'Start Time', '2026-08-06 04:08:17', '2026-08-06 16:08:17'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-040826-229B', 'End Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-040950-BFC2', 'Start Time', '2026-08-06 04:09:47', '2026-08-06 16:09:47'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-040950-BFC2', 'End Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-041629-5E2F', 'Start Time', '2026-08-06 04:16:21', '2026-08-06 16:16:21'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-041629-5E2F', 'End Time', '2026-08-06 08:21:00', '2026-08-06 20:21:00'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-041848-5311', 'Start Time', '2026-08-06 04:18:46', '2026-08-06 16:18:46'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-041848-5311', 'End Time', '2026-08-06 08:21:00', '2026-08-06 20:21:00'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-042332-D71F', 'Start Time', '2026-08-06 04:23:29', '2026-08-06 16:23:29'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-042332-D71F', 'End Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-042840-E469', 'Start Time', '2026-08-06 04:28:38', '2026-08-06 16:28:38'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-042840-E469', 'End Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-043056-C2DC', 'Start Time', '2026-08-06 04:30:54', '2026-08-06 16:30:54'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-043056-C2DC', 'End Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-043222-08C7', 'Start Time', '2026-08-06 04:32:18', '2026-08-06 16:32:18'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-043222-08C7', 'End Time', '2026-08-06 08:22:00', '2026-08-06 20:22:00'),
+    ('Windows', 'Window ID', 'R15-1-W-20260806-080144-3AA7', 'Start Time', '2026-07-31 04:00:00', '2026-07-31 16:00:00'),
+    ('Windows', 'Window ID', 'R15-1-W-20260806-080144-3AA7', 'End Time', '2026-08-06 08:01:52', '2026-08-06 20:01:52'),
+    ('Windows', 'Window ID', 'R15-1-W-20260806-080152-C25D', 'Start Time', '2026-08-06 08:01:52', '2026-08-06 20:01:52'),
+    ('Windows', 'Window ID', 'R15-2-W-20260806-080156-C0AF', 'Start Time', '2026-07-31 03:00:00', '2026-07-31 15:00:00'),
+    ('Windows', 'Window ID', 'R15-2-W-20260806-080156-C0AF', 'End Time', '2026-08-06 08:02:03', '2026-08-06 20:02:03'),
+    ('Windows', 'Window ID', 'R15-2-W-20260806-080203-9D3A', 'Start Time', '2026-08-06 08:02:03', '2026-08-06 20:02:03'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-082109-699D', 'Start Time', '2026-08-06 08:21:00', '2026-08-06 20:21:00'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-082109-699D', 'End Time', '2026-08-06 08:30:30', '2026-08-06 20:30:30'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-082152-B472', 'Start Time', '2026-08-06 08:21:00', '2026-08-06 20:21:00'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-082152-B472', 'End Time', '2026-08-06 19:26:27', '2026-08-07 07:26:27'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-082230-AD60', 'Start Time', '2026-08-06 08:22:00', '2026-08-06 20:22:00'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-082230-AD60', 'End Time', '2026-08-06 19:26:34', '2026-08-07 07:26:34'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-082256-7270', 'Start Time', '2026-08-06 08:22:00', '2026-08-06 20:22:00'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-082256-7270', 'End Time', '2026-08-06 19:26:42', '2026-08-07 07:26:42'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-082322-10F4', 'Start Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-082322-10F4', 'End Time', '2026-08-06 19:26:49', '2026-08-07 07:26:49'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-082339-8347', 'Start Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-082339-8347', 'End Time', '2026-08-06 19:26:56', '2026-08-07 07:26:56'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-082354-A58E', 'Start Time', '2026-08-06 08:23:00', '2026-08-06 20:23:00'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-082354-A58E', 'End Time', '2026-08-06 19:27:03', '2026-08-07 07:27:03'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-082410-9C04', 'Start Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-082410-9C04', 'End Time', '2026-08-06 19:27:11', '2026-08-07 07:27:11'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-082425-5AD3', 'Start Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-082425-5AD3', 'End Time', '2026-08-06 19:26:16', '2026-08-07 07:26:16'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-082441-C215', 'Start Time', '2026-08-06 08:24:00', '2026-08-06 20:24:00'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-082441-C215', 'End Time', '2026-08-06 08:33:39', '2026-08-06 20:33:39'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-083030-8136', 'Start Time', '2026-08-06 08:30:30', '2026-08-06 20:30:30'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-083030-8136', 'End Time', '2026-08-06 23:42:18', '2026-08-07 11:42:18'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-083339-A18E', 'Start Time', '2026-08-06 08:33:39', '2026-08-06 20:33:39'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-083339-A18E', 'End Time', '2026-08-06 23:38:52', '2026-08-07 11:38:52'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-192616-A004', 'Start Time', '2026-08-06 19:26:16', '2026-08-07 07:26:16'),
+    ('Windows', 'Window ID', 'M15-9-W-20260806-192616-A004', 'End Time', '2026-08-07 00:01:43', '2026-08-07 12:01:43'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-192627-2499', 'Start Time', '2026-08-06 19:26:27', '2026-08-07 07:26:27'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-192627-2499', 'End Time', '2026-08-06 23:39:45', '2026-08-07 11:39:45'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-192634-B4CF', 'Start Time', '2026-08-06 19:26:34', '2026-08-07 07:26:34'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-192634-B4CF', 'End Time', '2026-08-06 23:35:18', '2026-08-07 11:35:18'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-192642-F280', 'Start Time', '2026-08-06 19:26:42', '2026-08-07 07:26:42'),
+    ('Windows', 'Window ID', 'M15-4-W-20260806-192642-F280', 'End Time', '2026-08-07 00:03:25', '2026-08-07 12:03:25'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-192649-8CA7', 'Start Time', '2026-08-06 19:26:49', '2026-08-07 07:26:49'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-192649-8CA7', 'End Time', '2026-08-06 23:36:56', '2026-08-07 11:36:56'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-192656-D300', 'Start Time', '2026-08-06 19:26:56', '2026-08-07 07:26:56'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-192656-D300', 'End Time', '2026-08-06 23:38:08', '2026-08-07 11:38:08'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-192703-1CFA', 'Start Time', '2026-08-06 19:27:03', '2026-08-07 07:27:03'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-192703-1CFA', 'End Time', '2026-08-06 23:58:26', '2026-08-07 11:58:26'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-192711-0793', 'Start Time', '2026-08-06 19:27:11', '2026-08-07 07:27:11'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-192711-0793', 'End Time', '2026-08-06 23:45:18', '2026-08-07 11:45:18'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-233518-6D74', 'Start Time', '2026-08-06 23:35:18', '2026-08-07 11:35:18'),
+    ('Windows', 'Window ID', 'M15-3-W-20260806-233518-6D74', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-233656-3D3E', 'Start Time', '2026-08-06 23:36:56', '2026-08-07 11:36:56'),
+    ('Windows', 'Window ID', 'M15-5-W-20260806-233656-3D3E', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-233808-B546', 'Start Time', '2026-08-06 23:38:08', '2026-08-07 11:38:08'),
+    ('Windows', 'Window ID', 'M15-6-W-20260806-233808-B546', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-233852-3224', 'Start Time', '2026-08-06 23:38:52', '2026-08-07 11:38:52'),
+    ('Windows', 'Window ID', 'M15-10-W-20260806-233852-3224', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-233945-64ED', 'Start Time', '2026-08-06 23:39:45', '2026-08-07 11:39:45'),
+    ('Windows', 'Window ID', 'M15-2-W-20260806-233945-64ED', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-234218-B4BA', 'Start Time', '2026-08-06 23:42:18', '2026-08-07 11:42:18'),
+    ('Windows', 'Window ID', 'M15-1-W-20260806-234218-B4BA', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-234518-F9AF', 'Start Time', '2026-08-06 23:45:18', '2026-08-07 11:45:18'),
+    ('Windows', 'Window ID', 'M15-8-W-20260806-234518-F9AF', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-235826-D495', 'Start Time', '2026-08-06 23:58:26', '2026-08-07 11:58:26'),
+    ('Windows', 'Window ID', 'M15-7-W-20260806-235826-D495', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-9-W-20260807-000143-5EEC', 'Start Time', '2026-08-07 00:01:43', '2026-08-07 12:01:43'),
+    ('Windows', 'Window ID', 'M15-9-W-20260807-000143-5EEC', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-4-W-20260807-000325-2E42', 'Start Time', '2026-08-07 00:03:25', '2026-08-07 12:03:25'),
+    ('Windows', 'Window ID', 'M15-4-W-20260807-000325-2E42', 'End Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-3-W-20260807-190623-49D7', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-5-W-20260807-190731-A15E', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-1-W-20260807-191038-6F02', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-8-W-20260807-191244-D1C3', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-7-W-20260807-191514-9A14', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-9-W-20260807-191905-2C99', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-4-W-20260807-192017-A09A', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-2-W-20260807-192446-BCB3', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-10-W-20260807-192540-1B9E', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Windows', 'Window ID', 'M15-6-W-20260807-192728-DB60', 'Start Time', '2026-08-08 07:00:00', '2026-08-08 19:00:00'),
+    ('Traps', 'Trap ID', 'R15-1', 'Deployment Start', '2026-07-31 04:00:00', '2026-07-31 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-2', 'Deployment Start', '2026-07-31 03:00:00', '2026-07-31 15:00:00'),
+    ('Traps', 'Trap ID', 'R15-3', 'Deployment Start', '2026-07-31 04:00:00', '2026-07-31 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-4', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-5', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-6', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-7', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-8', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'R15-9', 'Deployment Start', '2026-08-05 04:00:00', '2026-08-05 16:00:00'),
+    ('Traps', 'Trap ID', 'M15-1', 'Deployment Start', '2026-08-06 02:06:00', '2026-08-06 14:06:00'),
+    ('Traps', 'Trap ID', 'M15-2', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-3', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-4', 'Deployment Start', '2026-08-06 02:07:00', '2026-08-06 14:07:00'),
+    ('Traps', 'Trap ID', 'M15-5', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-6', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-7', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-8', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-9', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Traps', 'Trap ID', 'M15-10', 'Deployment Start', '2026-08-06 02:30:00', '2026-08-06 14:30:00'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-025308-BC6B', 'Created Time', '2026-08-06 02:53:08', '2026-08-06 14:53:08'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-025308-394E', 'Created Time', '2026-08-06 02:53:08', '2026-08-06 14:53:08'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-030022-39C9', 'Created Time', '2026-08-06 03:00:22', '2026-08-06 15:00:22'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-030022-5360', 'Created Time', '2026-08-06 03:00:22', '2026-08-06 15:00:22'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-031157-F1B5', 'Created Time', '2026-08-06 03:11:57', '2026-08-06 15:11:57'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-031702-D6B5', 'Created Time', '2026-08-06 03:17:02', '2026-08-06 15:17:02'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-032231-D853', 'Created Time', '2026-08-06 03:22:31', '2026-08-06 15:22:31'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-033030-DB3A', 'Created Time', '2026-08-06 03:30:30', '2026-08-06 15:30:30'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-033635-B4B9', 'Created Time', '2026-08-06 03:36:35', '2026-08-06 15:36:35'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-080152-A023', 'Created Time', '2026-08-06 08:01:52', '2026-08-06 20:01:52'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-080203-C3FA', 'Created Time', '2026-08-06 08:02:03', '2026-08-06 20:02:03'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-234518-5060', 'Created Time', '2026-08-06 23:45:18', '2026-08-07 11:45:18'),
+    ('Followups', 'Follow-up ID', 'FU-20260806-235826-7FF3', 'Created Time', '2026-08-06 23:58:26', '2026-08-07 11:58:26'),
+    ('Followups', 'Follow-up ID', 'FU-20260807-000143-67F8', 'Created Time', '2026-08-07 00:01:43', '2026-08-07 12:01:43'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-025309-F243', 'Capture Time', '2026-08-06 02:52:10', '2026-08-06 14:52:10'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-025310-13CE', 'Capture Time', '2026-08-06 02:52:10', '2026-08-06 14:52:10'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-025311-1422', 'Capture Time', '2026-08-06 02:52:10', '2026-08-06 14:52:10'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-025313-9B8F', 'Capture Time', '2026-08-06 02:52:10', '2026-08-06 14:52:10'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-083339-50DB', 'Capture Time', '2026-08-06 08:33:13', '2026-08-06 20:33:13'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-083340-F6FE', 'Capture Time', '2026-08-06 08:33:13', '2026-08-06 20:33:13'),
+    ('Photos', 'Photo ID', 'PHOTO-20260806-083341-9209', 'Capture Time', '2026-08-06 08:33:13', '2026-08-06 20:33:13'),
+]
+
+
+TIMEZONE_CORRECTION_REASON = (
+    "One-time correction: server clock was UTC treated as NZ local "
+    "(DATA_INTEGRITY_BRIEF_timezone.md, 8 Aug 2026). Uniform +12h shift to "
+    "every historical timestamp recorded before the now() fix, excluding "
+    "already-corrected Check Time entries and static seed-baseline values."
+)
+
+TIMEZONE_CORRECTION_RECORD_TYPE = {
+    "Checks": "Check",
+    "Visits": "Visit",
+    "Windows": "Window",
+    "Traps": "Trap",
+    "Followups": "Follow-up",
+    "Photos": "Photo",
+}
+
+
+def apply_timezone_correction_migration(data) -> bool:
+    """One-time historical data correction for the NZ-timezone now() bug.
+
+    Idempotent: checks the Audit Log for its own marker reason before doing
+    anything, so this safely no-ops on every run after the first, across
+    restarts and redeploys alike. Left in the codebase permanently as a
+    record of what happened, even though it will only ever fire once — the
+    Audit Log itself is the durable "has this run" flag, not session state
+    or a separate sentinel file.
+
+    Matches rows by ID, but deliberately will NOT touch a field unless its
+    CURRENT value exactly equals the recorded old_val first. This ID-only
+    matching is not on its own enough to be safe: these IDs are
+    deterministic (e.g. "...-W-LAUNCH-01"), so a fresh clean-seed
+    deployment has rows with the *same* IDs but unrelated content (in
+    testing, a clean-seed run without this guard silently overwrote empty
+    seed End Time fields with this correction's hardcoded values, just
+    because the Window ID happened to match). The value check is what
+    makes this safe to run against any environment, not just the one real
+    dataset it was built from — and it also protects the real data itself
+    if anything changed between when this list was generated and when it
+    deploys.
+    """
+    if (data["Audit Log"]["Reason"].astype(str) == TIMEZONE_CORRECTION_REASON).any():
+        return False
+    applied = 0
+    for sheet, id_col, id_val, field, old_val, new_val in TIMEZONE_CORRECTIONS:
+        idx = data[sheet].index[data[sheet][id_col].astype(str) == str(id_val)]
+        if len(idx) == 0:
+            continue
+        i = idx[0]
+        current = data[sheet].at[i, field]
+        current_str = "" if pd.isna(current) else str(current).strip()
+        if current_str and current_str != old_val:
+            try:
+                current_str = pd.to_datetime(current).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+        if current_str != old_val:
+            continue
+        data[sheet].at[i, field] = new_val
+        audit_change(
+            data, TIMEZONE_CORRECTION_RECORD_TYPE[sheet], id_val, field,
+            old_val, new_val, TIMEZONE_CORRECTION_REASON,
+        )
+        applied += 1
+    if applied:
+        save_data(data)
+    return applied > 0
 
 
 def repair_missing_window(data, trap_id, effective_time=None, reason="Missing test window repaired"):
@@ -2846,6 +3181,7 @@ components.html("""
 require_authentication()
 
 data = load_data()
+apply_timezone_correction_migration(data)
 if not st.session_state.get("photo_cleanup_done"):
     cleanup_stale_transactions(DATA_ROOT, data["Checks"]["Check ID"].astype(str).tolist())
     st.session_state.photo_cleanup_done = True
