@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local Streamlit secrets
+.streamlit/secrets.toml
+
+# Local runtime data
+backups/
+evidence/*
+!evidence/.gitkeep
+*.tmp.xlsx
+.r1m1_write_test
+
+# Operating system/editor files
+.DS_Store
+.vscode/
+.idea/
