@@ -116,6 +116,21 @@ def load_manifest(data_root: Path, check_id: str) -> Optional[dict]:
     return value
 
 
+def _check_and_followup_ids(context: dict) -> tuple[str, str]:
+    """Route context["check_id"] to the Check ID or Follow-up ID column.
+
+    Necropsy transactions reuse the check_id slot to namespace their pending
+    directory (see photo_transaction_context callers), but the value they
+    carry is a Follow-up ID, not a Check ID — it belongs in a different
+    Photos column. Both store_photo's row-builder and verify_pending's
+    mismatch check call this so they can't drift apart.
+    """
+    follow_up_id = str(context.get("follow_up_id", "") or "")
+    if follow_up_id:
+        return "", follow_up_id
+    return str(context["check_id"]), ""
+
+
 def _new_manifest(context: dict) -> dict:
     return {
         "schema_version": PHOTO_SCHEMA_VERSION,
@@ -295,7 +310,7 @@ def mark_retry_started(data_root: Path, context: dict, photo_id: str) -> None:
         save_manifest(data_root, manifest)
 
 
-def store_photo(data_root: Path, context: dict, payload: dict, max_saved_bytes: int) -> dict:
+def store_photo(data_root: Path, context: dict, payload: dict, max_saved_bytes: int, photo_kind: str = "Check evidence") -> dict:
     photo_id = str(payload.get("photo_id", "")).strip()
     if not PHOTO_ID_RE.fullmatch(photo_id):
         raise PhotoPermanentError("Photo ID is invalid.")
@@ -330,15 +345,17 @@ def store_photo(data_root: Path, context: dict, payload: dict, max_saved_bytes: 
 
     _write_file_once(path, raw_bytes)
     relative = path.relative_to(Path(data_root)).as_posix()
+    check_id, follow_up_id = _check_and_followup_ids(context)
     row = {
         "Photo ID": photo_id,
-        "Check ID": context["check_id"],
+        "Check ID": check_id,
+        "Follow-up ID": follow_up_id,
         "Window ID": context["window_id"],
         "Trap ID": context["trap_id"],
         "Site ID": context["site_id"],
         "Bag ID": context.get("bag_id", ""),
         "Capture Time": str(payload.get("captured_time") or utc_now_text()),
-        "Photo Type": "Check evidence",
+        "Photo Type": photo_kind,
         "File Path": relative,
         "Notes": "",
     }
@@ -401,9 +418,11 @@ def verify_pending(data_root: Path, context: dict, max_saved_bytes: int) -> dict
         if not item:
             continue
         row = item.get("row", {})
+        check_id, follow_up_id = _check_and_followup_ids(context)
         required_values = {
             "Photo ID": photo_id,
-            "Check ID": context["check_id"],
+            "Check ID": check_id,
+            "Follow-up ID": follow_up_id,
             "Window ID": context["window_id"],
             "Trap ID": context["trap_id"],
             "Site ID": context["site_id"],

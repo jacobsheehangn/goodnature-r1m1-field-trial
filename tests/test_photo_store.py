@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import pytest
 from PIL import Image
 
 from photo_integrity import (
@@ -62,8 +63,30 @@ def context() -> dict:
     }
 
 
-def test_durable_expected_file_and_row_counts(tmp_path: Path) -> None:
-    ctx = context()
+def followup_context() -> dict:
+    """A necropsy follow-up transaction — reuses the check_id slot with the
+    follow-up's own already-stable ID, per photo_transaction_context callers
+    in app.py. follow_up_id being set is what routes rows to the Follow-up ID
+    column instead of Check ID; see _check_and_followup_ids.
+    """
+    follow_up_id = "FU-20260807-120000-AB12"
+    return {
+        "check_id": follow_up_id,
+        "follow_up_id": follow_up_id,
+        "visit_id": "VIS-MOA-20260807-ABC1",
+        "trap_id": "M15-8",
+        "site_id": "MOA",
+        "bag_id": "MOA-002",
+        "window_id": "WIN-M15-8-001",
+    }
+
+
+CONTEXT_BUILDERS = pytest.mark.parametrize("build_context", [context, followup_context], ids=["check", "followup"])
+
+
+@CONTEXT_BUILDERS
+def test_durable_expected_file_and_row_counts(tmp_path: Path, build_context) -> None:
+    ctx = build_context()
     ids = ["PHOTO-AAAABBBB", "PHOTO-CCCCDDDD", "PHOTO-EEEEFFFF"]
     add_expected_photos(tmp_path, ctx, [{"photo_id": x, "name": f"{i}.jpg"} for i, x in enumerate(ids)])
 
@@ -104,8 +127,9 @@ def test_remove_tombstone_blocks_late_upload(tmp_path: Path) -> None:
     assert photo_id in gate["removed_ids"]
 
 
-def test_finalise_and_rollback_copies_keep_pending_recovery_files(tmp_path: Path) -> None:
-    ctx = context()
+@CONTEXT_BUILDERS
+def test_finalise_and_rollback_copies_keep_pending_recovery_files(tmp_path: Path, build_context) -> None:
+    ctx = build_context()
     ids = ["PHOTO-AAAABBBB", "PHOTO-CCCCDDDD"]
     add_expected_photos(tmp_path, ctx, [{"photo_id": x, "name": f"{x}.jpg"} for x in ids])
     for i, photo_id in enumerate(ids):
@@ -120,6 +144,58 @@ def test_finalise_and_rollback_copies_keep_pending_recovery_files(tmp_path: Path
     rollback_final_copies(completed)
     assert all(source.exists() for source, _, _ in completed)
     assert all(not destination.exists() for _, destination, created in completed if created)
+
+
+def test_check_context_row_populates_check_id_only(tmp_path: Path) -> None:
+    ctx = context()
+    photo_id = "PHOTO-AAAABBBB"
+    add_expected_photos(tmp_path, ctx, [{"photo_id": photo_id, "name": "one.jpg"}])
+    store_photo(tmp_path, ctx, jpeg_payload(photo_id, "one.jpg"), MAX_BYTES)
+    manifest = load_manifest(tmp_path, ctx["check_id"])
+    row = manifest["photos"][photo_id]["row"]
+    assert row["Check ID"] == ctx["check_id"]
+    assert row["Follow-up ID"] == ""
+    assert row["Photo Type"] == "Check evidence"
+
+
+def test_followup_context_row_populates_follow_up_id_only(tmp_path: Path) -> None:
+    ctx = followup_context()
+    photo_id = "PHOTO-AAAABBBB"
+    add_expected_photos(tmp_path, ctx, [{"photo_id": photo_id, "name": "one.jpg"}])
+    store_photo(tmp_path, ctx, jpeg_payload(photo_id, "one.jpg"), MAX_BYTES, photo_kind="Necropsy evidence")
+    manifest = load_manifest(tmp_path, ctx["check_id"])
+    row = manifest["photos"][photo_id]["row"]
+    assert row["Check ID"] == ""
+    assert row["Follow-up ID"] == ctx["follow_up_id"]
+    assert row["Photo Type"] == "Necropsy evidence"
+
+    # verify_pending must accept its own rows rather than flagging a mismatch.
+    gate = verify_pending(tmp_path, ctx, MAX_BYTES)
+    assert gate["ready"] is True
+    assert gate["errors"] == []
+
+
+def test_stale_cleanup_keeps_committed_followup_photo(tmp_path: Path) -> None:
+    """A completed necropsy Follow-up ID passed into completed_check_ids must
+    protect its committed final photo from stale-transaction cleanup, the
+    same way a completed Check ID already does."""
+    ctx = followup_context()
+    photo_id = "PHOTO-AAAABBBB"
+    add_expected_photos(tmp_path, ctx, [{"photo_id": photo_id, "name": "one.jpg"}])
+    store_photo(tmp_path, ctx, jpeg_payload(photo_id, "one.jpg"), MAX_BYTES, photo_kind="Necropsy evidence")
+    plan = build_finalisation_plan(tmp_path, ctx, MAX_BYTES)
+    completed = apply_final_copies(plan)
+    final_path = completed[0][1]
+    assert final_path.exists()
+
+    manifest_file = tmp_path / ".pending_photos" / ctx["check_id"] / "manifest.json"
+    manifest = json.loads(manifest_file.read_text())
+    manifest["updated_at"] = (datetime.utcnow() - timedelta(hours=80)).replace(microsecond=0).isoformat() + "Z"
+    manifest_file.write_text(json.dumps(manifest))
+
+    result = cleanup_stale_transactions(tmp_path, completed_check_ids=[ctx["follow_up_id"]], ttl_hours=72)
+    assert result["removed"] == 1  # the pending transaction dir is still cleared…
+    assert final_path.exists()  # …but the committed final photo is not touched
 
 
 def test_manual_failure_state_is_durable(tmp_path: Path) -> None:

@@ -66,7 +66,7 @@ SHEETS = {
     "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes"],
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
-    "Photos": ["Photo ID", "Check ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
+    "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
 }
 
 FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no animal", "Trap disturbed", "Trap missing", "Unable to check"]
@@ -1212,10 +1212,35 @@ def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id:
     }
 
 
-def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
-    """Prepare photos in-browser and persist each selected image before final check save."""
-    context = photo_transaction_context(visit_id, trap_id, site_id, bag_id, window_id)
-    event_key = photo_component_event_key(visit_id, trap_id)
+def followup_photo_transaction_context(item) -> dict:
+    """Necropsy photo transaction context, keyed by the follow-up's own stable ID.
+
+    A Follow-up ID is already unique and stable the moment the task is
+    created (unlike a check, where Visit+Trap isn't unique per attempt —
+    that's what deterministic_check_id is for). So the necropsy version can
+    reuse the check_id slot directly with the Follow-up ID, no separate
+    ID-generation step needed.
+    """
+    follow_up_id = str(item["Follow-up ID"])
+    return {
+        "check_id": follow_up_id,
+        "follow_up_id": follow_up_id,
+        "visit_id": str(item["Visit ID"]),
+        "trap_id": str(item["Trap ID"]),
+        "site_id": str(item["Site ID"]),
+        "bag_id": str(item.get("Bag ID", "") or ""),
+        "window_id": str(item["Window ID"]),
+    }
+
+
+def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: str, photo_kind: str = "Check evidence") -> dict:
+    """Prepare photos in-browser and persist each selected image before a final save.
+
+    Shared by the check flow and the necropsy follow-up flow: same component,
+    same event handling, same manifest calls. Only the context, widget/event
+    keys and Photo Type differ between callers — do not fork this into a
+    second, simpler photo-upload path for a new caller.
+    """
     verification = verify_pending_photo_transaction(DATA_ROOT, context, MAX_SAVED_PHOTO_BYTES)
 
     component_value = PHOTO_COMPONENT(
@@ -1225,7 +1250,7 @@ def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id
         retry_delays_ms=[1000, 2000, 4000],
         max_raw_bytes=MAX_RAW_PHOTO_BYTES,
         max_prepared_bytes=MAX_SAVED_PHOTO_BYTES,
-        key=f"critical_photo_upload_{visit_id}_{trap_id}",
+        key=widget_key,
         default=None,
     )
 
@@ -1261,7 +1286,7 @@ def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id
                     if action == "retry" and photo_id:
                         mark_retry_started(DATA_ROOT, context, photo_id)
                     try:
-                        store_pending_photo(DATA_ROOT, context, incoming, MAX_SAVED_PHOTO_BYTES)
+                        store_pending_photo(DATA_ROOT, context, incoming, MAX_SAVED_PHOTO_BYTES, photo_kind=photo_kind)
                     except PhotoPermanentError as exc:
                         record_failure(
                             DATA_ROOT, context, photo_id, retryable=False,
@@ -1302,10 +1327,186 @@ def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id
     unresolved = max(0, expected - int(verification.get("file_count", 0)))
     return {
         **verification,
-        "check_id": context["check_id"],
         "context": context,
         "unresolved_count": unresolved,
     }
+
+
+def render_check_photo_capture(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
+    """Prepare photos in-browser and persist each selected image before final check save."""
+    context = photo_transaction_context(visit_id, trap_id, site_id, bag_id, window_id)
+    result = render_photo_capture_widget(
+        context,
+        widget_key=f"critical_photo_upload_{visit_id}_{trap_id}",
+        event_key=photo_component_event_key(visit_id, trap_id),
+        photo_kind="Check evidence",
+    )
+    return {**result, "check_id": context["check_id"]}
+
+
+def render_followup_photo_capture(item) -> dict:
+    """Prepare photos in-browser and persist each selected image before a necropsy save."""
+    context = followup_photo_transaction_context(item)
+    fid = context["follow_up_id"]
+    result = render_photo_capture_widget(
+        context,
+        widget_key=f"critical_photo_upload_followup_{fid}",
+        event_key=f"photo_component_event_followup_{fid}",
+        photo_kind="Necropsy evidence",
+    )
+    return {**result, "follow_up_id": fid}
+
+
+def commit_staged_records_with_photos(
+    *,
+    data: dict,
+    staged: dict,
+    original_data: dict,
+    photo_gate: dict,
+    expected_photo_count: int,
+    record_id: str,
+    photos_id_column: str,
+    verify_persisted,
+    log_prefix: str,
+    log_fields: dict,
+    record_noun: str,
+    record_description: str,
+) -> int:
+    """Finalise photos, append Photos rows, and commit staged sheets with full rollback safety.
+
+    Shared by the check-save and necropsy-save flows so both get the exact
+    same checksummed-backup / finalise-then-write / reload-and-verify /
+    roll-back-both-or-report-honestly sequence — this is the single place
+    that pattern lives, not a copy per flow.
+
+    On success, `data` is updated in place from the reloaded workbook and any
+    pending photo transaction is deleted. On failure this calls st.error and
+    st.stop() and never returns, matching the pre-extraction check-save flow.
+
+    verify_persisted(reloaded) is called only after the generic Photos checks
+    pass; it must raise RuntimeError with a user-facing reason on failure, or
+    return a dict of extra fields to log alongside the commit-verified event.
+    """
+    saved_photo_files = []
+    final_copies = []
+    rollback_copy = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.photo-rollback.xlsx"
+    workbook_save_attempted = False
+    workbook_restored = False
+    files_restored = False
+    rollback_checksum = ""
+    try:
+        if expected_photo_count:
+            # Verify again at the final commit boundary using the durable pending manifest.
+            photo_gate = {
+                **photo_gate,
+                **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+            }
+            if not (
+                photo_gate.get("ready")
+                and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+            ):
+                raise RuntimeError(
+                    f"Photo integrity check failed: expected {photo_gate.get('expected_count', 0)}, "
+                    f"files {photo_gate.get('file_count', 0)}, rows {photo_gate.get('row_count', 0)}."
+                )
+
+            final_plan = build_finalisation_plan(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)
+            final_copies = apply_final_copies(final_plan)
+            prepared_rows = [
+                [row.get(column, "") for column in SHEETS["Photos"]]
+                for row in final_plan.get("rows", [])
+            ]
+            saved_photo_files = [destination for _, destination, _ in final_copies]
+            if len(prepared_rows) != expected_photo_count or len(saved_photo_files) != expected_photo_count:
+                raise RuntimeError(
+                    f"Photo finalisation mismatch: expected {expected_photo_count}, rows {len(prepared_rows)}, files {len(saved_photo_files)}."
+                )
+            if any(not path.exists() or path.stat().st_size <= 0 for path in saved_photo_files):
+                raise RuntimeError("One or more selected photo files were missing before final save.")
+            staged["Photos"] = pd.concat(
+                [staged["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
+                ignore_index=True,
+            )
+
+        committed_rows = staged["Photos"][
+            staged["Photos"][photos_id_column].astype(str) == str(record_id)
+        ]
+        if len(committed_rows) != expected_photo_count or committed_rows["Photo ID"].astype(str).nunique() != expected_photo_count:
+            raise RuntimeError(
+                f"Photo record mismatch: expected {expected_photo_count}, recorded {len(committed_rows)}, "
+                f"distinct {committed_rows['Photo ID'].astype(str).nunique()}."
+            )
+
+        if DATA_FILE.exists():
+            shutil.copy2(DATA_FILE, rollback_copy)
+            rollback_checksum = hashlib.sha256(rollback_copy.read_bytes()).hexdigest()
+        workbook_save_attempted = True
+        save_data(staged)
+
+        reloaded = load_data()
+        persisted_photos = reloaded["Photos"][reloaded["Photos"][photos_id_column].astype(str) == str(record_id)]
+        if len(persisted_photos) != expected_photo_count or persisted_photos["Photo ID"].astype(str).nunique() != expected_photo_count:
+            raise RuntimeError("The saved workbook did not contain the complete verified photo set.")
+        for _, persisted_photo in persisted_photos.iterrows():
+            rel = _safe_relative_photo_path(persisted_photo["File Path"])
+            path = DATA_ROOT / rel if rel else None
+            if path is None or not path.exists() or path.stat().st_size <= 0:
+                raise RuntimeError("A saved Photos row did not point to a valid stored file.")
+
+        extra_log_fields = verify_persisted(reloaded) or {}
+
+        log_photo_event(
+            DATA_ROOT, f"{log_prefix}_commit_verified",
+            expected_count=expected_photo_count, photo_row_count=len(persisted_photos),
+            **log_fields, **extra_log_fields,
+        )
+        for name in data:
+            data[name] = reloaded[name]
+
+    except Exception as exc:
+        rollback_errors = []
+        if workbook_save_attempted and rollback_copy.exists():
+            try:
+                restore_temp = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.restore.xlsx"
+                shutil.copy2(rollback_copy, restore_temp)
+                os.replace(restore_temp, DATA_FILE)
+                if rollback_checksum and hashlib.sha256(DATA_FILE.read_bytes()).hexdigest() != rollback_checksum:
+                    raise RuntimeError("restored workbook did not match the pre-save workbook")
+                workbook_restored = True
+            except Exception as rollback_exc:
+                rollback_errors.append(f"workbook rollback: {rollback_exc}")
+        else:
+            workbook_restored = True
+
+        if final_copies:
+            try:
+                rollback_final_copies(final_copies)
+                files_restored = True
+            except Exception as rollback_exc:
+                rollback_errors.append(f"photo rollback: {rollback_exc}")
+        else:
+            files_restored = True
+
+        for name in data:
+            data[name] = original_data[name]
+        log_photo_event(
+            DATA_ROOT, f"{log_prefix}_commit_failed",
+            error=str(exc)[:500], workbook_restored=workbook_restored, files_restored=files_restored,
+            rollback_errors=rollback_errors, **log_fields,
+        )
+        rollback_copy.unlink(missing_ok=True)
+        if rollback_errors or not (workbook_restored and files_restored):
+            st.error(f"Save failed and automatic rollback could not be confirmed. Do not continue this {record_noun}; contact the trial lead.")
+        else:
+            st.error(f"Save failed. No {record_description} was committed. Your selected photos remain available to retry.")
+        st.stop()
+    finally:
+        rollback_copy.unlink(missing_ok=True)
+
+    if expected_photo_count:
+        delete_transaction(DATA_ROOT, record_id)
+
+    return len(saved_photo_files)
 
 
 def workbook_summary(path: Path) -> Dict[str, int]:
@@ -3183,7 +3384,13 @@ require_authentication()
 data = load_data()
 apply_timezone_correction_migration(data)
 if not st.session_state.get("photo_cleanup_done"):
-    cleanup_stale_transactions(DATA_ROOT, data["Checks"]["Check ID"].astype(str).tolist())
+    _completed_necropsy_ids = data["Followups"][
+        (data["Followups"]["Follow-up Type"] == "Necropsy review") & (data["Followups"]["Status"] == "Complete")
+    ]["Follow-up ID"].astype(str).tolist()
+    cleanup_stale_transactions(
+        DATA_ROOT,
+        data["Checks"]["Check ID"].astype(str).tolist() + _completed_necropsy_ids,
+    )
     st.session_state.photo_cleanup_done = True
 if "page" not in st.session_state: st.session_state.page = "sites"
 if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
@@ -3726,126 +3933,28 @@ elif page == "check":
                          "Camera issue", "Resolve camera condition and record the evidence gap", "High")
 
         refresh_review_status(staged, old_id)
-        saved_photo_files = []
-        final_copies = []
-        rollback_copy = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.photo-rollback.xlsx"
-        workbook_save_attempted = False
-        workbook_restored = False
-        files_restored = False
-        rollback_checksum = ""
-        try:
-            if expected_photo_count:
-                # Verify again at the final commit boundary using the durable pending manifest.
-                photo_gate = {
-                    **photo_gate,
-                    **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
-                }
-                if not (
-                    photo_gate.get("ready")
-                    and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
-                ):
-                    raise RuntimeError(
-                        f"Photo integrity check failed: expected {photo_gate.get('expected_count', 0)}, "
-                        f"files {photo_gate.get('file_count', 0)}, rows {photo_gate.get('row_count', 0)}."
-                    )
 
-                final_plan = build_finalisation_plan(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)
-                final_copies = apply_final_copies(final_plan)
-                prepared_rows = [
-                    [row.get(column, "") for column in SHEETS["Photos"]]
-                    for row in final_plan.get("rows", [])
-                ]
-                saved_photo_files = [destination for _, destination, _ in final_copies]
-                if len(prepared_rows) != expected_photo_count or len(saved_photo_files) != expected_photo_count:
-                    raise RuntimeError(
-                        f"Photo finalisation mismatch: expected {expected_photo_count}, rows {len(prepared_rows)}, files {len(saved_photo_files)}."
-                    )
-                if any(not path.exists() or path.stat().st_size <= 0 for path in saved_photo_files):
-                    raise RuntimeError("One or more selected photo files were missing before final save.")
-                staged["Photos"] = pd.concat(
-                    [staged["Photos"], pd.DataFrame(prepared_rows, columns=SHEETS["Photos"])],
-                    ignore_index=True,
-                )
-
-            committed_rows = staged["Photos"][
-                staged["Photos"]["Check ID"].astype(str) == str(check_id)
-            ]
-            if len(committed_rows) != expected_photo_count or committed_rows["Photo ID"].astype(str).nunique() != expected_photo_count:
-                raise RuntimeError(
-                    f"Photo record mismatch: expected {expected_photo_count}, recorded {len(committed_rows)}, "
-                    f"distinct {committed_rows['Photo ID'].astype(str).nunique()}."
-                )
-
-            if DATA_FILE.exists():
-                shutil.copy2(DATA_FILE, rollback_copy)
-                rollback_checksum = hashlib.sha256(rollback_copy.read_bytes()).hexdigest()
-            workbook_save_attempted = True
-            save_data(staged)
-
-            reloaded = load_data()
+        def _verify_check_persisted(reloaded):
             persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
-            persisted_photos = reloaded["Photos"][reloaded["Photos"]["Check ID"].astype(str) == str(check_id)]
             persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
             if len(persisted_check) != 1:
                 raise RuntimeError("The saved workbook did not contain exactly one completed check.")
-            if len(persisted_photos) != expected_photo_count or persisted_photos["Photo ID"].astype(str).nunique() != expected_photo_count:
-                raise RuntimeError("The saved workbook did not contain the complete verified photo set.")
-            for _, persisted_photo in persisted_photos.iterrows():
-                rel = _safe_relative_photo_path(persisted_photo["File Path"])
-                path = DATA_ROOT / rel if rel else None
-                if path is None or not path.exists() or path.stat().st_size <= 0:
-                    raise RuntimeError("A saved Photos row did not point to a valid stored file.")
+            return {"followup_count": len(persisted_followups)}
 
-            log_photo_event(
-                DATA_ROOT, "check_commit_verified", check_id=check_id, trap_id=trap_id,
-                expected_count=expected_photo_count, photo_row_count=len(persisted_photos),
-                followup_count=len(persisted_followups),
-            )
-            for name in data:
-                data[name] = reloaded[name]
-
-        except Exception as exc:
-            rollback_errors = []
-            if workbook_save_attempted and rollback_copy.exists():
-                try:
-                    restore_temp = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.restore.xlsx"
-                    shutil.copy2(rollback_copy, restore_temp)
-                    os.replace(restore_temp, DATA_FILE)
-                    if rollback_checksum and hashlib.sha256(DATA_FILE.read_bytes()).hexdigest() != rollback_checksum:
-                        raise RuntimeError("restored workbook did not match the pre-save workbook")
-                    workbook_restored = True
-                except Exception as rollback_exc:
-                    rollback_errors.append(f"workbook rollback: {rollback_exc}")
-            else:
-                workbook_restored = True
-
-            if final_copies:
-                try:
-                    rollback_final_copies(final_copies)
-                    files_restored = True
-                except Exception as rollback_exc:
-                    rollback_errors.append(f"photo rollback: {rollback_exc}")
-            else:
-                files_restored = True
-
-            for name in data:
-                data[name] = original_data[name]
-            log_photo_event(
-                DATA_ROOT, "check_commit_failed", check_id=check_id, trap_id=trap_id,
-                error=str(exc)[:500], workbook_restored=workbook_restored, files_restored=files_restored,
-                rollback_errors=rollback_errors,
-            )
-            rollback_copy.unlink(missing_ok=True)
-            if rollback_errors or not (workbook_restored and files_restored):
-                st.error("Save failed and automatic rollback could not be confirmed. Do not continue this check; contact the trial lead.")
-            else:
-                st.error("Save failed. No check, follow-up or photo record was committed. Your selected photos remain available to retry.")
-            st.stop()
-        finally:
-            rollback_copy.unlink(missing_ok=True)
-
-        if expected_photo_count:
-            delete_transaction(DATA_ROOT, check_id)
+        photo_count = commit_staged_records_with_photos(
+            data=data,
+            staged=staged,
+            original_data=original_data,
+            photo_gate=photo_gate,
+            expected_photo_count=expected_photo_count,
+            record_id=check_id,
+            photos_id_column="Check ID",
+            verify_persisted=_verify_check_persisted,
+            log_prefix="check",
+            log_fields={"check_id": check_id, "trap_id": trap_id},
+            record_noun="check",
+            record_description="check, follow-up or photo record",
+        )
 
         for key in [
             f"bag_id_{vid}_{trap_id}",
@@ -3855,7 +3964,7 @@ elif page == "check":
             st.session_state.pop(key, None)
         st.session_state.saved_check = {
             "trap_id": trap_id,
-            "photo_count": len(saved_photo_files),
+            "photo_count": photo_count,
         }
         go("visit", site_id=sid, visit_id=vid)
 
@@ -4236,15 +4345,26 @@ elif page == "followups":
 
             elif item["Follow-up Type"]=="Necropsy review":
                 prefix=f"nec_{fid}"
+                st.markdown("### Photos")
+                st.caption("Attach photos of the animal for the trial record. Same upload behaviour as trap-check photos — select multiple, each uploads independently.")
+                photo_gate=render_followup_photo_capture(item)
                 status=st.selectbox("Necropsy status",["Select…","Complete","Not completed","Unable to assess"],index=0,key=f"{prefix}_status")
                 assessment=st.selectbox("Necropsy assessment",["Select…","Supports humane kill","Does not support humane kill","Unclear","Not assessable"],index=0,key=f"{prefix}_assessment")
                 weight_range=st.selectbox("Animal weight range",["Select…"]+ANIMAL_WEIGHT_RANGES,index=0,key=f"{prefix}_weight")
                 final=st.selectbox("Final humane-kill result",["Select…","Yes","No","Unclear","Not assessable"],index=0,key=f"{prefix}_final")
-                measurements=st.text_area("Measurements / findings",height=120,key=f"{prefix}_measurements")
-                evidence=st.text_input("Evidence link",key=f"{prefix}_evidence")
-                notes=st.text_area("Notes",key=f"{prefix}_notes")
-                saving_update("The linked kill result, humane-kill KPI and test-window review status.")
-                submit=st.button("Save necropsy review",type="primary",key=f"{prefix}_save")
+                saving_update("The linked kill result, humane-kill KPI, test-window review status and the attached photos.")
+                photo_blocked=bool(photo_gate.get("expected_count",0) and not photo_gate.get("ready"))
+                if photo_gate.get("expected_count",0):
+                    if photo_gate.get("manual_failure_count",0):
+                        count=int(photo_gate["manual_failure_count"])
+                        st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
+                    elif photo_gate.get("ready"):
+                        st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
+                    else:
+                        remaining=max(1,photo_gate.get("expected_count",0)-photo_gate.get("file_count",0))
+                        st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+                save_label="Please wait" if photo_blocked else "Save necropsy review"
+                submit=st.button(save_label,type="primary",key=f"{prefix}_save",disabled=photo_blocked)
                 if submit:
                     errors=[]
                     if "Select…" in [status,assessment,weight_range,final]: errors.append("Complete all required necropsy fields.")
@@ -4257,11 +4377,49 @@ elif page == "followups":
                     if errors:
                         st.error("Please correct the necropsy review:\n\n" + "\n".join(f"- {err}" for err in errors))
                     else:
+                        expected_photo_count=int(photo_gate.get("expected_count",0))
+                        if expected_photo_count:
+                            # Verify again at the final commit boundary using the durable pending manifest.
+                            photo_gate={
+                                **photo_gate,
+                                **verify_pending_photo_transaction(DATA_ROOT,photo_gate["context"],MAX_SAVED_PHOTO_BYTES),
+                            }
+                            if not (
+                                photo_gate.get("ready")
+                                and photo_gate.get("expected_count")==photo_gate.get("file_count")==photo_gate.get("row_count")
+                            ):
+                                st.error("One or more selected photos are not safely stored yet.")
+                                st.stop()
+
+                        original_data={name: frame.copy(deep=True) for name, frame in data.items()}
+                        staged={name: frame.copy(deep=True) for name, frame in data.items()}
                         idx=idxs[0]
-                        for k,v in {"Necropsy Status":status,"Necropsy Assessment":assessment,"Animal Weight Range":weight_range,"Necropsy Data Link":evidence,"Necropsy Measurements":measurements,"Final Humane Kill":final}.items(): data["Windows"].at[idx,k]=v
-                        fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                        data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
-                        refresh_review_status(data,item["Window ID"]); save_data(data)
+                        for k,v in {"Necropsy Status":status,"Necropsy Assessment":assessment,"Animal Weight Range":weight_range,"Final Humane Kill":final}.items(): staged["Windows"].at[idx,k]=v
+                        fidx=staged["Followups"].index[staged["Followups"]["Follow-up ID"]==fid][0]
+                        staged["Followups"].at[fidx,"Status"]="Complete"; staged["Followups"].at[fidx,"Completed Time"]=dtstr()
+                        refresh_review_status(staged,item["Window ID"])
+
+                        def _verify_necropsy_persisted(reloaded):
+                            persisted_followup=reloaded["Followups"][reloaded["Followups"]["Follow-up ID"].astype(str)==str(fid)]
+                            if len(persisted_followup)!=1 or str(persisted_followup.iloc[0]["Status"])!="Complete":
+                                raise RuntimeError("The saved workbook did not show this necropsy review as complete.")
+                            return {}
+
+                        commit_staged_records_with_photos(
+                            data=data,
+                            staged=staged,
+                            original_data=original_data,
+                            photo_gate=photo_gate,
+                            expected_photo_count=expected_photo_count,
+                            record_id=fid,
+                            photos_id_column="Follow-up ID",
+                            verify_persisted=_verify_necropsy_persisted,
+                            log_prefix="necropsy",
+                            log_fields={"follow_up_id": fid, "trap_id": item["Trap ID"]},
+                            record_noun="necropsy review",
+                            record_description="necropsy review or photo record",
+                        )
+
                         set_flash("success","Necropsy review saved",[f"Final humane-kill result: {final}.","The linked kill result and Performance metrics were updated.","Next: review the next open task."])
                         st.session_state.pop("followup_panel",None); st.rerun()
             else:
