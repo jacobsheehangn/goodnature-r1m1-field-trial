@@ -2284,11 +2284,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
   overflow: hidden;
 }
 
-.site-card-title {
-  margin-top: 0 !important;
-  margin-bottom: .75rem !important;
-}
-
 .message-panel {
   border-radius: 12px;
   padding: 1.15rem 1.35rem;
@@ -2310,8 +2305,6 @@ hr {border-color: var(--line);}
   border-left: 5px solid var(--brand-orange);
   border-radius: 12px;
 }
-.route-card-current {border-left: 5px solid var(--brand-orange) !important;}
-
 @media (prefers-color-scheme: dark) {
   html,
   body,
@@ -2432,11 +2425,6 @@ li[role="option"][aria-selected="true"] {
   color: var(--text) !important;
 }
 
-/* The field CTA follows normal document flow. */
-.mobile-save-anchor {
-  display: none !important;
-}
-
 /* v8.6.43 — final mobile control and navigation visibility */
 input[type="checkbox"],
 input[type="radio"] {
@@ -2495,22 +2483,6 @@ button[kind="secondary"]:hover,
 [data-testid="stBaseButton-secondary"]:hover {
   background: #ececea !important;
   border-color: transparent !important;
-}
-
-/* Tertiary actions may use orange text without a filled surface. */
-.tertiary-action button,
-button[data-variant="tertiary"] {
-  background: transparent !important;
-  color: var(--brand-orange) !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
-}
-
-/* Destructive actions are distinct from the normal orange primary action. */
-.destructive-action button {
-  background: #fff0ea !important;
-  color: #9b3b29 !important;
-  border-color: #efc9bc !important;
 }
 
 /* Section cards: one clear boundary, no heavy nesting. */
@@ -2699,11 +2671,8 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
   background: #eef8f1;
   border-color: #b9ddc5;
 }
-.visit-trap-id,
-.visit-trap-location { color: var(--text); font-weight: 700; }
 .visit-trap-meta { color: var(--muted); margin-top: .35rem; }
 .visit-trap-status { color: #22683d; font-weight: 700; margin-top: .35rem; }
-.visit-trap-checkmark { color: #22683d; font-size: 1.35rem; font-weight: 800; text-align: center; }
 @media (max-width: 700px) {
   .visit-trap-card {
     grid-template-columns: minmax(7.5rem, 1fr) minmax(8rem, 1.35fr) 2.5rem;
@@ -2712,13 +2681,6 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
     padding: .9rem;
   }
 }
-.photo-tile img {
-  width: 64px !important;
-  height: 64px !important;
-  object-fit: cover !important;
-  border-radius: 8px !important;
-}
-
 /* v8.7.3 — force one complete light visual system */
 html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"],
 [data-testid="stMain"], [data-testid="stHeader"], [data-testid="stSidebar"],
@@ -2835,10 +2797,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 .shared-card-main { color:var(--text); font-size:.95rem; }
 .shared-card-meta { color:var(--muted); font-size:.86rem; line-height:1.4; }
 .shared-card-label { color:var(--text); font-size:.88rem; text-align:right; }
-.shared-card-status { font-size:.88rem; font-weight:700; text-align:right; white-space:nowrap; }
-.shared-card-status.is-complete { color:#22683d; }
-.shared-card-status.is-progress { color:#2f5f8f; }
-.shared-card-status.is-warning { color:#75530b; }
 
 /* Field cards use the same neutral base and identical geometry between states. */
 .visit-trap-card,
@@ -2868,7 +2826,7 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
   .shared-card-heading { gap:.5rem; }
   .shared-card-heading strong { font-size:.96rem; }
   .shared-card-main { font-size:.9rem; }
-  .shared-card-meta, .shared-card-label, .shared-card-status { font-size:.82rem; }
+  .shared-card-meta, .shared-card-label { font-size:.82rem; }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -2925,7 +2883,6 @@ input, textarea, select, button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 .site-card-compact { display:grid; gap:.35rem; }
 .site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:1.05rem; }
-.site-card-status { color:#22683d; font-size:.9rem; font-weight:700; white-space:nowrap; }
 .site-card-meta { color:#737780; font-size:.9rem; }
 
 /* v8.7.6.6 photo layout is isolated inside the custom component iframe. */
