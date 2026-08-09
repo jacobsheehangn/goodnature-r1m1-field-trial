@@ -524,20 +524,36 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
         temp_file.unlink(missing_ok=True)
 
 
+def _data_file_mtime() -> float:
+    try:
+        return DATA_FILE.stat().st_mtime
+    except FileNotFoundError:
+        return 0.0
+
+
+@st.cache_data(show_spinner=False)
+def _load_data_cached(mtime: float) -> Dict[str, pd.DataFrame]:
+    xl = pd.ExcelFile(DATA_FILE)
+    out = {}
+    for name, cols in SHEETS.items():
+        try:
+            df = xl.parse(sheet_name=name, dtype=str).fillna("")
+        except Exception:
+            df = blank(name)
+        for c in cols:
+            if c not in df.columns:
+                df[c] = ""
+        out[name] = df[cols]
+    return out
+
+
 def load_data() -> Dict[str, pd.DataFrame]:
     ensure_storage_ready()
     if not DATA_FILE.exists() and SEED_DATA_FILE.exists() and SEED_DATA_FILE != DATA_FILE:
         shutil.copy2(SEED_DATA_FILE, DATA_FILE)
     if not DATA_FILE.exists():
         data = create_sample_data(); save_data(data); return data
-    out = {}
-    for name, cols in SHEETS.items():
-        try: df = pd.read_excel(DATA_FILE, sheet_name=name, dtype=str).fillna("")
-        except Exception: df = blank(name)
-        for c in cols:
-            if c not in df.columns: df[c] = ""
-        out[name] = df[cols]
-    return out
+    return _load_data_cached(_data_file_mtime())
 
 
 def site_name(data, site_id):
@@ -2032,9 +2048,16 @@ def show_flash():
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
+st.markdown(
+    """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+""",
+    unsafe_allow_html=True,
+)
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
 
 :root {
   color-scheme: light !important;
