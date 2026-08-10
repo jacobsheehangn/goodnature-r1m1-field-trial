@@ -385,6 +385,21 @@ def create_sample_data() -> Dict[str, pd.DataFrame]:
 AUTH_QUERY_KEY = "access"
 AUTH_TOKEN_PURPOSE = "r1m1-staging-access-v1"
 
+# Workflow context mirrored to the URL so a dropped/reconnected session (the
+# patchy-field-signal failure mode) has something to restore from. Key names
+# are distinct from AUTH_QUERY_KEY and from each other on purpose, so a
+# single-key `st.query_params[key] = value` assignment (as require_authentication
+# already does) can never collide with these.
+WORKFLOW_QUERY_KEY_PAGE = "wf_page"
+WORKFLOW_QUERY_KEY_SITE = "wf_site"
+WORKFLOW_QUERY_KEY_VISIT = "wf_visit"
+WORKFLOW_QUERY_KEY_TRAP = "wf_trap"
+WORKFLOW_CONTEXT_QUERY_KEYS = {
+    "site_id": WORKFLOW_QUERY_KEY_SITE,
+    "visit_id": WORKFLOW_QUERY_KEY_VISIT,
+    "trap_id": WORKFLOW_QUERY_KEY_TRAP,
+}
+
 
 def expected_access_token() -> str:
     """Return a stable signed token derived from the configured shared password."""
@@ -1113,6 +1128,25 @@ def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag
     data["Followups"] = pd.concat([data["Followups"], pd.DataFrame([row], columns=SHEETS["Followups"])], ignore_index=True)
 
 
+def sync_workflow_query_params(page: str) -> None:
+    """Mirror in-flight workflow context (site/visit/trap) to the URL.
+
+    Additive only: writes these keys while `page` is one of WORKFLOW_PAGES,
+    clears them the moment navigation leaves that set. Nothing reads these
+    back yet (Phase 2b) — this only keeps the URL in sync so a dropped and
+    reconnected session has something to restore from.
+    """
+    if page in WORKFLOW_PAGES:
+        st.query_params[WORKFLOW_QUERY_KEY_PAGE] = page
+        for session_key, query_key in WORKFLOW_CONTEXT_QUERY_KEYS.items():
+            value = st.session_state.get(session_key)
+            if value:
+                st.query_params[query_key] = str(value)
+    else:
+        for query_key in [WORKFLOW_QUERY_KEY_PAGE, *WORKFLOW_CONTEXT_QUERY_KEYS.values()]:
+            st.query_params.pop(query_key, None)
+
+
 def navigate(page: str, rerun: bool = True, **kwargs):
     """One navigation controller for deliberate page/workflow changes."""
     current_page = st.session_state.get("page")
@@ -1124,8 +1158,39 @@ def navigate(page: str, rerun: bool = True, **kwargs):
     if destination_changed:
         st.session_state.scroll_to_top_once = True
         st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
+    sync_workflow_query_params(page)
     if rerun:
         st.rerun()
+
+
+def clear_workflow_query_params() -> None:
+    for query_key in [WORKFLOW_QUERY_KEY_PAGE, *WORKFLOW_CONTEXT_QUERY_KEYS.values()]:
+        st.query_params.pop(query_key, None)
+
+
+def validate_workflow_resume(data, site_id: str, visit_id: str, trap_id: str):
+    """Validate a resume candidate read from the URL after a fresh session.
+
+    Every one of these must hold, not a subset: the visit still exists and is
+    still open, the trap still exists and its window is still open, and the
+    site matches the visit's actual site (guards against a stale or
+    manually-edited URL). Returns the visit row on success, None on failure.
+    """
+    if not (site_id and visit_id and trap_id):
+        return None
+    visit_rows = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
+    if visit_rows.empty:
+        return None
+    visit_row = visit_rows.iloc[0]
+    if visit_row["Status"] != "In progress":
+        return None
+    if str(visit_row["Site ID"]) != str(site_id):
+        return None
+    if data["Traps"][data["Traps"]["Trap ID"] == trap_id].empty:
+        return None
+    if open_window(data, trap_id) is None:
+        return None
+    return visit_row
 
 
 def go(page: str, **kwargs):
@@ -1192,6 +1257,67 @@ def scroll_to_top_once():
           reset();
           requestAnimationFrame(reset);
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def connection_status_watcher():
+    """Surface Streamlit's own WebSocket connection state as a banner.
+
+    Read-only: observes `data-test-connection-state` and toggles a banner's
+    visibility. Never triggers a rerun or touches session_state — Streamlit
+    already owns reconnection, this only makes that state visible. Uses a
+    distinct element id/flag from scroll_to_top_once (r1m1-page-top /
+    scroll_to_top_once key) so the two components can't collide.
+    """
+    components.html(
+        """
+        <script>
+        (() => {
+          const parent = window.parent;
+          const doc = parent.document;
+          const BANNER_ID = 'r1m1-connection-banner';
+          const INSTALL_FLAG = '__r1m1ConnectionWatcherInstalled';
+
+          let banner = doc.getElementById(BANNER_ID);
+          if (!banner) {
+            banner = doc.createElement('div');
+            banner.id = BANNER_ID;
+            banner.textContent = 'Connection lost — reconnecting…';
+            banner.style.cssText = [
+              'position:fixed', 'top:0', 'left:0', 'right:0',
+              'z-index:2147483647', 'background:#b91c1c', 'color:#fff',
+              'text-align:center', 'padding:8px 12px', 'font-size:14px',
+              'font-weight:600', 'display:none'
+            ].join(';');
+            doc.body.appendChild(banner);
+          }
+
+          const sync = () => {
+            const stateEl = doc.querySelector('[data-test-connection-state]');
+            const state = stateEl ? stateEl.getAttribute('data-test-connection-state') : null;
+            banner.style.display = (state && state !== 'CONNECTED') ? 'block' : 'none';
+          };
+
+          sync();
+
+          // Only one observer/poll loop should ever run, no matter how many
+          // times this component remounts across reruns.
+          if (parent[INSTALL_FLAG]) return;
+          parent[INSTALL_FLAG] = true;
+
+          const target = doc.querySelector('[data-test-connection-state]');
+          if (target) {
+            new MutationObserver(sync).observe(target, {
+              attributes: true,
+              attributeFilter: ['data-test-connection-state'],
+            });
+          }
+          parent.setInterval(sync, 1000);
         })();
         </script>
         """,
@@ -3421,6 +3547,31 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 .st-key-back_followup_list button:hover {
   background: rgba(0,0,0,.09) !important;
 }
+
+/* Card-system brief — Tertiary tier, second confirmed use (trap-journey-
+   scroll brief): the workflow "Exit to Trap sites" button. Same treatment
+   as the necropsy back button above, scoped by its own key rather than a
+   shared class, same reasoning — this button is load-bearing (the only way
+   out of a workflow page while the top-nav "Trap sites" pill is routing-
+   guarded there), so only the paint changes, not the click handler. */
+.st-key-exit_workflow_to_sites button {
+  background: rgba(0,0,0,.05) !important;
+  border: none !important;
+  border-radius: 999px !important;
+  color: #F36C21 !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  min-height: 44px !important;
+  min-width: 44px !important;
+  padding: 10px !important;
+  box-shadow: none !important;
+}
+.st-key-exit_workflow_to_sites button * {
+  color: #F36C21 !important;
+}
+.st-key-exit_workflow_to_sites button:hover {
+  background: rgba(0,0,0,.09) !important;
+}
 </style>
 
 
@@ -3442,6 +3593,8 @@ components.html("""
 </script>
 """, height=0, width=0)
 
+connection_status_watcher()
+
 require_authentication()
 
 data = load_data()
@@ -3455,10 +3608,37 @@ if not st.session_state.get("photo_cleanup_done"):
         data["Checks"]["Check ID"].astype(str).tolist() + _completed_necropsy_ids,
     )
     st.session_state.photo_cleanup_done = True
-if "page" not in st.session_state: st.session_state.page = "sites"
-if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
 WORKFLOW_PAGES = {"site", "start_visit", "visit", "check", "check_confirm"}
+
+if "page" not in st.session_state:
+    _resume_site_id = st.query_params.get(WORKFLOW_QUERY_KEY_SITE, "")
+    _resume_visit_id = st.query_params.get(WORKFLOW_QUERY_KEY_VISIT, "")
+    _resume_trap_id = st.query_params.get(WORKFLOW_QUERY_KEY_TRAP, "")
+    _resume_visit_row = validate_workflow_resume(data, _resume_site_id, _resume_visit_id, _resume_trap_id)
+    if _resume_visit_row is None:
+        # No candidate, or a stale/invalid one: discard silently and land
+        # exactly where a normal fresh visit always has.
+        clear_workflow_query_params()
+        st.session_state.page = "sites"
+    else:
+        # Validated, but never auto-resume: a stale bookmark reopened hours
+        # later can validate as "technically still open" (single
+        # active-editor constraint), so ask before jumping back in.
+        st.title("Resume checking?")
+        message_panel(
+            "guidance",
+            f"Resume checking {_resume_trap_id} at {site_name(data, _resume_site_id)}?",
+            ["A dropped connection left this check in progress."],
+        )
+        resume_col, start_over_col = st.columns(2)
+        if resume_col.button("Resume", type="primary", use_container_width=True, key="workflow_resume_confirm"):
+            navigate("check", site_id=_resume_site_id, visit_id=_resume_visit_id, trap_id=_resume_trap_id)
+        if start_over_col.button("Start over", use_container_width=True, key="workflow_resume_start_over"):
+            clear_workflow_query_params()
+            navigate("sites")
+        st.stop()
+if "field_operator" not in st.session_state: st.session_state.field_operator = "Jake"
 
 
 def select_top_navigation(target: str, allowed_pages: set[str]) -> None:
@@ -3495,6 +3675,7 @@ def top_nav_data_records() -> None:
 
 
 def top_nav_sign_out() -> None:
+    clear_workflow_query_params()
     st.session_state.clear()
     st.rerun()
 
@@ -3581,16 +3762,17 @@ with st.container(
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
         st.divider()
         if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
+            clear_workflow_query_params()
             st.session_state.clear()
             st.rerun()
 
 # Workflow pages retain one explicit escape route while the top navigation
-# remains on the parent Trap sites section.
+# remains on the parent Trap sites section. No separate site-name caption
+# here any more (trap-journey-scroll brief) — every workflow page's own H1
+# already carries that context, so a line above this button was showing the
+# same name twice.
 if st.session_state.page in WORKFLOW_PAGES:
-    site_id = st.session_state.get("site_id", "")
-    if site_id:
-        st.caption(site_name(data, site_id))
-    if st.button("Exit to Trap sites", key="exit_workflow_to_sites"):
+    if st.button("← Exit to Trap sites", key="exit_workflow_to_sites"):
         go("sites")
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
@@ -3711,38 +3893,54 @@ elif page == "visit":
     done = set(checks["Trap ID"].astype(str))
 
     header(site_name(data, sid), "Select the trap you are standing at.")
-    # Card-system brief Phase 2: the site card no longer shows an absolute
-    # Last/Next date — it moved here, the page reached the moment someone
-    # actually starts or resumes checking, where the schedule context is
-    # still useful but no longer needs to compete for space on the list.
-    site_row_for_schedule = data["Sites"][data["Sites"]["Site ID"] == sid]
-    if not site_row_for_schedule.empty:
-        schedule_interval = int(float(site_row_for_schedule.iloc[0]["Visit Interval Days"] or 3))
-        schedule_last = latest_completed_visit(data, sid)
-        schedule_last_dt = parse_dt(schedule_last["End Time"]) if schedule_last is not None else None
-        schedule_next_dt = schedule_last_dt + timedelta(days=schedule_interval) if schedule_last_dt else now()
-        st.caption(
-            f"Last {schedule_last_dt.strftime('%d %b %Y') if schedule_last_dt else 'not completed'} · "
-            f"Next {'due now' if schedule_next_dt.date() <= now().date() else schedule_next_dt.strftime('%d %b %Y')}"
-        )
     saved = st.session_state.pop("saved_check", None)
     if saved:
         photo_count = int(saved.get("photo_count", 0))
         details = [f"{photo_count} photo{'s' if photo_count != 1 else ''} stored"] if photo_count else []
         message_panel("success", f"{saved['trap_id']} saved", details)
 
-    filter_col, search_col = st.columns([1, 1.6])
-    product_filter = filter_col.radio(
-        "Trap type",
-        ["All", "R1", "M1"],
-        horizontal=True,
-        key=f"visit_product_filter_{vid}",
-    )
-    search_text = search_col.text_input(
-        "Find trap",
-        placeholder="Trap ID or location",
-        key=f"visit_trap_search_{vid}",
-    ).strip().lower()
+    # Trap-journey-scroll brief: someone standing at one physical trap is not
+    # usually filtering or searching, so both fields live behind one toggle,
+    # default closed. Read prior widget state directly from session_state
+    # rather than only from the (possibly unrendered) widgets themselves —
+    # Streamlit keeps a widget's value in session_state after it stops being
+    # drawn, so an active filter still applies to the list even while its
+    # controls are hidden, and the toggle label surfaces what's active so it
+    # isn't silently discarded from view.
+    product_filter_key = f"visit_product_filter_{vid}"
+    search_key = f"visit_trap_search_{vid}"
+    prior_product_filter = st.session_state.get(product_filter_key, "All")
+    prior_search_text = st.session_state.get(search_key, "").strip()
+    filter_active = prior_product_filter != "All" or bool(prior_search_text)
+
+    toggle_label = "Filter or search traps"
+    if filter_active:
+        active_bits = []
+        if prior_product_filter != "All":
+            active_bits.append(prior_product_filter)
+        if prior_search_text:
+            active_bits.append(f'"{prior_search_text}"')
+        toggle_label += " · " + " · ".join(active_bits)
+
+    # Keyed by vid, not persisted anywhere else, so a new visit always starts
+    # closed — no remembered state across visits or page loads.
+    filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
+    if filter_expanded:
+        filter_col, search_col = st.columns([1, 1.6])
+        product_filter = filter_col.radio(
+            "Trap type",
+            ["All", "R1", "M1"],
+            horizontal=True,
+            key=product_filter_key,
+        )
+        search_text = search_col.text_input(
+            "Find trap",
+            placeholder="Trap ID or location",
+            key=search_key,
+        ).strip().lower()
+    else:
+        product_filter = prior_product_filter
+        search_text = prior_search_text.lower()
 
     if product_filter != "All":
         traps = traps[traps["Product"] == product_filter]
@@ -3773,6 +3971,22 @@ elif page == "visit":
             trap_id = str(tr["Trap ID"])
             checked = trap_id in done
             render_visit_trap_card(tr, checked, vid, sid)
+
+    # Trap-journey-scroll brief: this is the card-system brief's Phase 2
+    # schedule line, relocated to the bottom of the trap list rather than
+    # between the H1 and the cards where it previously sat — read-only
+    # reference for someone already inside a visit, not something that
+    # needs to compete with the cards for the first-viewport scroll budget.
+    site_row_for_schedule = data["Sites"][data["Sites"]["Site ID"] == sid]
+    if not site_row_for_schedule.empty:
+        schedule_interval = int(float(site_row_for_schedule.iloc[0]["Visit Interval Days"] or 3))
+        schedule_last = latest_completed_visit(data, sid)
+        schedule_last_dt = parse_dt(schedule_last["End Time"]) if schedule_last is not None else None
+        schedule_next_dt = schedule_last_dt + timedelta(days=schedule_interval) if schedule_last_dt else now()
+        st.caption(
+            f"Last {schedule_last_dt.strftime('%d %b %Y') if schedule_last_dt else 'not completed'} · "
+            f"Next {'due now' if schedule_next_dt.date() <= now().date() else schedule_next_dt.strftime('%d %b %Y')}"
+        )
 
     st.markdown("### Site check actions")
     with st.container(border=True):
