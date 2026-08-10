@@ -3654,6 +3654,8 @@ def select_top_navigation(target: str, allowed_pages: set[str]) -> None:
     """Sync framework top navigation with the app's existing workflow router."""
     current = st.session_state.get("page", "sites")
     if current not in allowed_pages:
+        if current in WORKFLOW_PAGES and target not in WORKFLOW_PAGES:
+            clear_workflow_query_params()
         st.session_state.page = target
         st.session_state.scroll_to_top_once = True
         st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
