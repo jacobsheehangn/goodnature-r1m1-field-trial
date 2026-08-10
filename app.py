@@ -2417,6 +2417,15 @@ input::placeholder, textarea::placeholder {
 
 /* App-owned marked cards plus Streamlit wrapper fallback. */
 .app-card-marker {display: none !important;}
+/* The marker span above is hidden, but its own stElementContainer div isn't
+   - that div still counts as a flex sibling in the card's column layout, so
+   the card's inter-element gap (16px, Streamlit's own default) still opens
+   up around it even though it renders at 0 height. That reads as ~30px of
+   unexplained dead space above every card's title (padding + a phantom
+   gap), on every card regardless of content - confirmed via
+   getComputedStyle showing a 0-height first child still consuming a gap.
+   Hiding the whole container removes it from the flex layout entirely. */
+[data-testid="stElementContainer"]:has(.app-card-marker) {display: none !important;}
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
