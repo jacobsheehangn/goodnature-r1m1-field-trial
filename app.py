@@ -2213,7 +2213,6 @@ div.stDownloadButton button {
   font-family: 'Inter', sans-serif;
   font-weight: 700;
   min-height: 2.75rem;
-  width: auto;
   padding-left: 1.15rem;
   padding-right: 1.15rem;
 }
