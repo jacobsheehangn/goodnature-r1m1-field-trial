@@ -2980,7 +2980,9 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
   padding: 15px !important;
 }
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) {
+[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
+div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) {
   background: var(--card-success-bg) !important;
   border-color: var(--card-success-border) !important;
 }
@@ -3073,7 +3075,9 @@ input, textarea, select, button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
 
 /* Completed site state and compact site metadata. */
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
+div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 .site-card-compact { display:grid; gap:.35rem; }
 .site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:22px; }
 .site-card-meta { color:#737780; font-size:.9rem; }
