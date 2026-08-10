@@ -69,7 +69,7 @@ required = {
     "Hidden framework navigation router": 'selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")',
     "Wrapping primary navigation": 'with st.container(',
     "Native page links": "st.page_link(",
-    "Administration popover": 'with st.popover("Administration"):',
+    "Administration popover": 'with st.popover("Administration", key=f"app_top_navigation_admin_popover_',
     "Top navigation administration group": '"Administration": [',
     "Top navigation sign out": 'st.Page(top_nav_sign_out, title="Sign out"',
     "Traps page title": 'header("Traps",',

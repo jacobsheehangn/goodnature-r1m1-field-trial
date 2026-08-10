@@ -3836,7 +3836,14 @@ with st.container(
         disabled=current_primary_section == "Trial performance",
         width="content",
     )
-    with st.popover("Administration"):
+    # Streamlit doesn't unmount/remount this popover across a rerun triggered
+    # from inside it (its own open/closed state is local, uncontrolled React
+    # state, not tied to session_state) - so a page_link click that navigates
+    # away leaves it sitting open over the new page's content. Keying it to
+    # the current page forces a fresh component identity (and therefore a
+    # fresh, closed popover) on every real navigation, without needing to
+    # track open/closed state ourselves.
+    with st.popover("Administration", key=f"app_top_navigation_admin_popover_{st.session_state.get('page', 'sites')}"):
         st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
         st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")

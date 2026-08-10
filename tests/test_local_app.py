@@ -99,13 +99,10 @@ def test_data_section_survives_table_change(page: Page, local_app: str) -> None:
     page.get_by_role("button", name="Administration", exact=True).click()
     page.get_by_role("dialog", name="Administration").get_by_role("link", name="Data & records", exact=True).click()
     expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=20_000)
-    # The Administration popover doesn't auto-close on a page_link click - a
-    # pre-existing quirk (confirmed on main before the Traps-into-Administration
-    # move too), just one a taller popover makes easier to actually collide
-    # with page content below it. Dismiss it explicitly, same as a real user
-    # clicking elsewhere would, rather than relying on it happening not to
-    # overlap whatever's being interacted with next.
-    page.keyboard.press("Escape")
+    # The popover is keyed to the current page, so a real navigation gives it
+    # a fresh (closed) identity instead of staying open over the new page's
+    # content - confirm that directly rather than just assuming it worked.
+    expect(page.get_by_role("dialog", name="Administration")).not_to_be_visible()
     page.get_by_role("radio", name="Export and backup").check(force=True)
     select=page.get_by_label("Inspect data table")
     select.select_option(label="Checks") if select.evaluate("el => el.tagName") == "SELECT" else None
