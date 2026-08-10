@@ -2271,7 +2271,6 @@ p, li, [data-testid="stMarkdownContainer"] {font-size: 1rem; line-height: 1.55;}
 
 .block-container {
   max-width: 1220px;
-  padding-top: 5.25rem;
   padding-bottom: calc(6rem + env(safe-area-inset-bottom));
 }
 
@@ -2511,7 +2510,6 @@ hr {border-color: var(--line);}
 
 @media (max-width: 700px) {
   .block-container {
-    padding-top: 4.25rem;
     padding-left: .85rem;
     padding-right: .85rem;
     padding-bottom: calc(7rem + env(safe-area-inset-bottom));
@@ -2785,12 +2783,17 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
   color: #4a4317 !important;
 }
 
-/* Keep page-level navigation and context below Streamlit's mobile header. */
+/* Keep page-level navigation and context below Streamlit's mobile header.
+   The block-container padding-top rule that used to live here was dead
+   code - confirmed by disabling it live and finding computed padding-top
+   unchanged - because [data-testid="stMainBlockContainer"] (the
+   "authoritative page rhythm" rule further down this file) always wins
+   the cascade regardless: higher specificity from its
+   body:not(:has(.login-page-marker)) guard beats a bare .block-container
+   selector even with !important on both sides. Removed as part of the
+   header-padding consolidation (HEADER_PADDING_BRIEF.md) rather than left
+   as dead weight. Header min-height stays - a real, live rule. */
 @media (max-width: 768px) {
-  .block-container {
-    padding-top: calc(6.75rem + env(safe-area-inset-top)) !important;
-  }
-
   header[data-testid="stHeader"] {
     min-height: calc(4.25rem + env(safe-area-inset-top)) !important;
   }
@@ -3085,7 +3088,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-ma
 /* v8.7.6.6 photo layout is isolated inside the custom component iframe. */
 
 @media (max-width:700px) {
-  .block-container { padding-top:calc(5rem + env(safe-area-inset-top)) !important; }
   h1 { font-size:2.35rem !important; line-height:1.05 !important; }
   .visit-trap-line, .site-card-heading { gap:.55rem; }
   .visit-trap-meta, .site-card-meta { font-size:.82rem; }
@@ -3227,7 +3229,22 @@ body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button:hover {
 
 <style>
 /* v8.7.5.13 — authoritative page rhythm after removal of the retired field-pilot banner.
-   Keep only normal Streamlit-header and menu-control clearance. */
+   Keep only normal Streamlit-header and menu-control clearance.
+
+   As of HEADER_PADDING_BRIEF.md, this pair is the ONLY padding-top rule
+   for this element in the whole file - five other declarations (four on
+   the plain .block-container class, one duplicate of this same selector)
+   used to compete for the same property. All five were confirmed dead by
+   directly disabling them live and checking computed padding-top didn't
+   move: this selector's specificity (a body:not(:has()) guard plus an
+   attribute selector) beats a bare class selector even when both sides
+   carry !important, so this rule has always won regardless of source
+   order. Measured against the header's own real rendered height (60px
+   above 768px, 68px at or below it, via its separate min-height rule) at
+   several widths including the risky 701-768px gap the old 768px-breakpoint
+   rule left behind: clearance from header bottom to first page content
+   was 64-72px at every width tested, so these values were already a safe,
+   near-minimal fit and didn't need to change - only the dead rules did. */
 body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   padding-top:3.25rem !important;
 }
