@@ -2226,6 +2226,17 @@ button[kind="primary"],
 }
 button[kind="primary"] *,
 [data-testid="stBaseButton-primary"] * {color: #ffffff !important;}
+/* Disabled primary buttons must look disabled — without this, the
+   unconditional !important above painted a disabled button in the exact
+   same full-strength orange as an active one, with only cursor:not-allowed
+   (meaningless on a touchscreen) distinguishing them. Confirmed via
+   getComputedStyle on a real disabled "Finish site check" button:
+   background/opacity/color all read identical to enabled. */
+button[kind="primary"]:disabled,
+[data-testid="stBaseButton-primary"]:disabled {
+  opacity: .45 !important;
+  cursor: not-allowed !important;
+}
 button[kind="primary"]:hover,
 [data-testid="stBaseButton-primary"]:hover {
   background: var(--brand-orange-hover) !important;
@@ -3786,10 +3797,10 @@ elif page == "visit":
             # Only offered while nothing has been recorded under this visit
             # yet — the moment a single trap is checked, there's real field
             # data attached to it and this option disappears entirely, so
-            # it can never be used to discard actual work.
-            st.divider()
-            confirm_cancel_visit = st.checkbox("Cancel this check", key=f"confirm_cancel_visit_{vid}")
-            if st.button("Cancel check", key=f"cancel_visit_{vid}", disabled=not confirm_cancel_visit, use_container_width=True):
+            # it can never be used to discard actual work. No separate
+            # confirm step: at 0 checks there's nothing to lose, and the
+            # worst case of a stray tap is just re-tapping "Start checking".
+            if st.button("Cancel check", key=f"cancel_visit_{vid}", use_container_width=True):
                 audit_change(data, "Visit", vid, "Status", "In progress", "Cancelled (no traps checked)", "Cancelled from Site check actions")
                 data["Visits"] = data["Visits"][data["Visits"]["Visit ID"] != vid]
                 save_data(data)
