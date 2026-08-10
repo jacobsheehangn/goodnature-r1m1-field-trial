@@ -99,6 +99,13 @@ def test_data_section_survives_table_change(page: Page, local_app: str) -> None:
     page.get_by_role("button", name="Administration", exact=True).click()
     page.get_by_role("dialog", name="Administration").get_by_role("link", name="Data & records", exact=True).click()
     expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=20_000)
+    # The Administration popover doesn't auto-close on a page_link click - a
+    # pre-existing quirk (confirmed on main before the Traps-into-Administration
+    # move too), just one a taller popover makes easier to actually collide
+    # with page content below it. Dismiss it explicitly, same as a real user
+    # clicking elsewhere would, rather than relying on it happening not to
+    # overlap whatever's being interacted with next.
+    page.keyboard.press("Escape")
     page.get_by_role("radio", name="Export and backup").check(force=True)
     select=page.get_by_label("Inspect data table")
     select.select_option(label="Checks") if select.evaluate("el => el.tagName") == "SELECT" else None
@@ -110,9 +117,11 @@ def test_data_section_survives_table_change(page: Page, local_app: str) -> None:
 
 def test_navigation_labels_and_trap_detail(page: Page, local_app: str) -> None:
     open_home(page, local_app, {"width": 1440, "height": 1000})
-    for label in ["Trap sites", "Traps", "Follow-ups", "Trial performance"]:
+    for label in ["Trap sites", "Follow-ups", "Trial performance"]:
         expect(page.get_by_role("link", name=label, exact=True)).to_be_visible(timeout=10_000)
-    page.get_by_role("link", name="Traps", exact=True).click()
+    # Traps lives inside Administration now, not as its own top-level pill.
+    page.get_by_role("button", name="Administration", exact=True).click()
+    page.get_by_role("dialog", name="Administration").get_by_role("link", name="Traps", exact=True).click()
     expect(page.get_by_text("Traps", exact=True).last).to_be_visible(timeout=20_000)
     page.get_by_role("button", name="View").first.click()
     expect(page.get_by_role("button", name=re.compile("Back to traps", re.I))).to_be_visible(timeout=20_000)

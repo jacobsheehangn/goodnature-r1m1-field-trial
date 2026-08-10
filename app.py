@@ -3782,8 +3782,8 @@ PAGE_DATA_RECORDS = st.Page(
 PAGE_SIGN_OUT = st.Page(top_nav_sign_out, title="Sign out", url_path="sign-out")
 
 NAVIGATION_PAGES = {
-    "": [PAGE_TRAP_SITES, PAGE_TRAPS, PAGE_FOLLOWUPS, PAGE_PERFORMANCE],
-    "Administration": [PAGE_TRIAL_SETUP, PAGE_DATA_RECORDS, PAGE_SIGN_OUT],
+    "": [PAGE_TRAP_SITES, PAGE_FOLLOWUPS, PAGE_PERFORMANCE],
+    "Administration": [PAGE_TRAPS, PAGE_TRIAL_SETUP, PAGE_DATA_RECORDS, PAGE_SIGN_OUT],
 }
 
 # Keep Streamlit's supported page router, but do not render its responsive
@@ -3825,12 +3825,6 @@ with st.container(
         width="content",
     )
     st.page_link(
-        PAGE_TRAPS,
-        label="Traps",
-        disabled=current_primary_section == "Traps",
-        width="content",
-    )
-    st.page_link(
         PAGE_FOLLOWUPS,
         label="Follow-ups",
         disabled=current_primary_section == "Follow-ups",
@@ -3843,6 +3837,7 @@ with st.container(
         width="content",
     )
     with st.popover("Administration"):
+        st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
         st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
         st.divider()
