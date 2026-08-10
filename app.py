@@ -1923,6 +1923,29 @@ def status_pill(label: str, kind: str = "none") -> str:
     return f'<span class="status-pill status-pill-{html.escape(str(kind))}">{html.escape(str(label))}</span>'
 
 
+def site_urgency_pill(next_due_date, today_date) -> tuple[str, str]:
+    """Relative-urgency pill for a site not yet visited this cycle.
+
+    Takes plain date objects (not datetime) so the boundary math is exact
+    calendar-day comparison, not a 24-hour window — "Due today" means the
+    next-due date is today's calendar date, regardless of what time it is
+    right now.
+
+    Returns (status_text, status_kind) for status_pill(). ("", "none")
+    means show no pill — the site isn't due soon enough to flag; card-system
+    brief Phase 2 deliberately doesn't define a lookahead window, so
+    anything due in the future (even tomorrow) is quiet, matching the
+    existing "Inactive" restraint principle elsewhere in the pill system.
+    """
+    days_until_due = (next_due_date - today_date).days
+    if days_until_due < 0:
+        overdue_days = -days_until_due
+        return f"Overdue by {overdue_days} day{'s' if overdue_days != 1 else ''}", "error"
+    if days_until_due == 0:
+        return "Due today", "warning"
+    return "", "none"
+
+
 def render_compact_card_content(
     *,
     title: str,
@@ -3342,6 +3365,10 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 .status-pill-success { background: #eaf7ef; color: #22683d; }
 .status-pill-guidance { background: #edf4fb; color: #235f93; }
 .status-pill-warning { background: #fff3d9; color: #775900; }
+/* Fourth semantic colour, added for the urgency pill (overdue) — reuses
+   the existing --red-bg/--red-text tokens already used for error message
+   panels elsewhere, rather than introducing a new red. */
+.status-pill-error { background: #fff0ea; color: #9b3b29; }
 /* Category tag, not a status: same pill shape as the semantic states above,
    but deliberately grey/low-contrast so a task TYPE (e.g. "Camera review")
    never reads as a state the four real colours are reserved for. */
@@ -3581,12 +3608,15 @@ if page == "sites":
         if active is not None:
             status_text = "Ready to finish" if active_complete else "In progress"
             status_kind = "warning" if active_complete else "guidance"
-        elif completed_today:
-            status_text = "Last checked today"
-            status_kind = "success"
         else:
-            status_text = ""
-            status_kind = "none"
+            # Card-system brief Phase 2: an absolute Last/Next date line no
+            # longer appears on this card (moved to the visit page) — this
+            # is its replacement, and it's the only pill a not-yet-started
+            # site shows. A freshly-completed site (completed_today) is
+            # simply not due soon, so it now shows no pill here, same as
+            # any other site with time before its next check — the pale
+            # green card background below is still its own, separate signal.
+            status_text, status_kind = site_urgency_pill(next_dt.date(), now().date())
         with app_card():
             if completed_today and active is None:
                 st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
@@ -3603,7 +3633,6 @@ if page == "sites":
                 '<div class="shared-card-copy site-card-compact">'
                 f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
                 f'<div class="shared-card-meta">{trap_count_text} · Every {interval} days</div>'
-                f'<div class="shared-card-meta">Last {last_dt.strftime("%d %b %Y") if last_dt else "not completed"} · Next {"due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -3672,6 +3701,20 @@ elif page == "visit":
     done = set(checks["Trap ID"].astype(str))
 
     header(site_name(data, sid), "Select the trap you are standing at.")
+    # Card-system brief Phase 2: the site card no longer shows an absolute
+    # Last/Next date — it moved here, the page reached the moment someone
+    # actually starts or resumes checking, where the schedule context is
+    # still useful but no longer needs to compete for space on the list.
+    site_row_for_schedule = data["Sites"][data["Sites"]["Site ID"] == sid]
+    if not site_row_for_schedule.empty:
+        schedule_interval = int(float(site_row_for_schedule.iloc[0]["Visit Interval Days"] or 3))
+        schedule_last = latest_completed_visit(data, sid)
+        schedule_last_dt = parse_dt(schedule_last["End Time"]) if schedule_last is not None else None
+        schedule_next_dt = schedule_last_dt + timedelta(days=schedule_interval) if schedule_last_dt else now()
+        st.caption(
+            f"Last {schedule_last_dt.strftime('%d %b %Y') if schedule_last_dt else 'not completed'} · "
+            f"Next {'due now' if schedule_next_dt.date() <= now().date() else schedule_next_dt.strftime('%d %b %Y')}"
+        )
     saved = st.session_state.pop("saved_check", None)
     if saved:
         photo_count = int(saved.get("photo_count", 0))

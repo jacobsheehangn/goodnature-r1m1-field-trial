@@ -63,6 +63,17 @@ than the native consumer app.
 - Warning/waiting: pale yellow `#FFF3D9`
 - Error/fault: pale peach `#FFF0EA`
 
+All four are implemented as `status_pill()` variants (`status-pill-guidance`/
+`-success`/`-warning`/`-error`) plus a fifth, deliberately outside this set:
+`status-pill-neutral` (grey) for a category/type tag, e.g. a follow-up's
+"Camera review" — never one of the four, since those are reserved for
+actual states. Until the card system's schedule/urgency work, nothing had
+used the `error` variant; the site card's urgency pill is now its first
+use: `Overdue by N days` (error/red), `Due today` (warning/amber), no pill
+at all when it isn't due soon. A site with a visit already in progress
+shows its existing `In progress`/`Ready to finish` pill in that same slot
+instead — the two are mutually exclusive, a card never shows both.
+
 ## Typography
 
 - Inter is the standard family.
