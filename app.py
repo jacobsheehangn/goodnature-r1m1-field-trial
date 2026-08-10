@@ -74,8 +74,16 @@ LURE = ["Fresh", "Present/good", "Partly eaten", "Gone", "Dry", "Mouldy", "Conta
 CAMERA = ["Working", "Offline", "Battery low", "Poor view", "Blocked view", "Missing", "Unsure"]
 SPECIES = ["Rat", "Mouse", "Non-target", "Unknown"]
 ANIMAL_CONDITION = ["Dead and apparently normal", "Dead with obvious injury concern", "Alive and trapped", "Alive and maimed", "Unable to assess"]
-ANIMAL_WEIGHT_RANGES = ["0–50 g", "51–100 g", "101–150 g", "151–200 g", "201–250 g", "251–300 g", "301–350 g", "351–400 g", "400+ g"]
+RAT_WEIGHT_RANGES = ["0–50 g", "51–100 g", "101–150 g", "151–200 g", "201–250 g", "251–300 g", "301–350 g", "351–400 g", "400+ g"]
+MOUSE_WEIGHT_RANGES = ["0–10 g", "11–20 g", "21–30 g", "31+ g"]
 RAT_TYPES = ["Norway rat", "Ship rat", "Unclear"]
+
+
+def weight_ranges_for_species(species) -> list:
+    """Mice get their own, much smaller scale; every other species (Rat,
+    Non-target, Unknown, or missing) keeps today's rat scale — additive
+    for mice only, not a behaviour change for anything else."""
+    return MOUSE_WEIGHT_RANGES if species == "Mouse" else RAT_WEIGHT_RANGES
 
 
 NZ_TZ = ZoneInfo("Pacific/Auckland")
@@ -1023,6 +1031,40 @@ def apply_timezone_correction_migration(data) -> bool:
     if applied:
         save_data(data)
     return applied > 0
+
+
+MOUSE_WEIGHT_RECLASSIFICATION_REASON = "Reclassified to the new mouse weight scale"
+
+
+def apply_mouse_weight_reclassification_migration(data) -> bool:
+    """One-time historical data correction for mice recorded before mouse
+    and rat weights had separate scales: any Mouse-species window whose
+    recorded weight is still one of the old shared rat-scale bands (e.g.
+    "51–100 g") gets moved to the lowest mouse band, "0–10 g", per the
+    reclassification decision made alongside splitting the two scales.
+
+    Naturally idempotent, unlike apply_timezone_correction_migration above
+    - no separate "have I run" marker needed. The match condition itself
+    (Species is Mouse AND the weight is still a RAT_WEIGHT_RANGES value)
+    can only ever be true for pre-existing data: once this ships, the
+    necropsy form and the Corrections form both pick the option list from
+    the window's Species, so a Mouse window can never organically be
+    assigned a rat-scale value again - the condition resolves itself to
+    empty after the first run and stays that way.
+    """
+    mice = data["Windows"][
+        (data["Windows"]["Species"] == "Mouse")
+        & (data["Windows"]["Animal Weight Range"].isin(RAT_WEIGHT_RANGES))
+    ]
+    if mice.empty:
+        return False
+    new_val = MOUSE_WEIGHT_RANGES[0]
+    for idx, row in mice.iterrows():
+        old_val = str(row["Animal Weight Range"])
+        data["Windows"].at[idx, "Animal Weight Range"] = new_val
+        audit_change(data, "Necropsy evidence", row["Window ID"], "Animal Weight Range", old_val, new_val, MOUSE_WEIGHT_RECLASSIFICATION_REASON)
+    save_data(data)
+    return True
 
 
 def repair_missing_window(data, trap_id, effective_time=None, reason="Missing test window repaired"):
@@ -3682,6 +3724,7 @@ require_authentication()
 
 data = load_data()
 apply_timezone_correction_migration(data)
+apply_mouse_weight_reclassification_migration(data)
 if not st.session_state.get("photo_cleanup_done"):
     _completed_necropsy_ids = data["Followups"][
         (data["Followups"]["Follow-up Type"] == "Necropsy review") & (data["Followups"]["Status"] == "Complete")
@@ -4760,7 +4803,7 @@ elif page == "followups":
                 photo_gate=render_followup_photo_capture(item)
                 status=st.selectbox("Necropsy status",["Select…","Complete","Not completed","Unable to assess"],index=0,key=f"{prefix}_status")
                 assessment=st.selectbox("Necropsy assessment",["Select…","Supports humane kill","Does not support humane kill","Unclear","Not assessable"],index=0,key=f"{prefix}_assessment")
-                weight_range=st.selectbox("Animal weight range",["Select…"]+ANIMAL_WEIGHT_RANGES,index=0,key=f"{prefix}_weight")
+                weight_range=st.selectbox("Animal weight range",["Select…"]+weight_ranges_for_species(linked_window["Species"] if linked_window is not None else None),index=0,key=f"{prefix}_weight")
                 final=st.selectbox("Final humane-kill result",["Select…","Yes","No","Unclear","Not assessable"],index=0,key=f"{prefix}_final")
                 saving_update("The linked kill result, humane-kill KPI, test-window review status and the attached photos.")
                 photo_blocked=bool(photo_gate.get("expected_count",0) and not photo_gate.get("ready"))
@@ -5073,8 +5116,17 @@ elif page == "results":
             })
         breakdown_df=pd.DataFrame(rows)
         if breakdown=="Rodent weight":
-            order={band:i for i,band in enumerate(ANIMAL_WEIGHT_RANGES)}; order["Unknown"]=99
-            breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(99)
+            # Rat and mouse bands are two different scales sharing one column
+            # (a mouse's "0–10 g" isn't the same band as a rat's "0–50 g"),
+            # so they can't be merged into one ascending-by-gram order without
+            # inventing a meaningless cross-species ranking. Keep them as two
+            # internally-ordered groups instead - rat bands first (unchanged
+            # from before mice had their own scale), then mouse bands, then
+            # Unknown last - rather than letting every mouse band collapse
+            # into the same "not found" bucket as genuinely unknown weights.
+            all_bands=RAT_WEIGHT_RANGES+MOUSE_WEIGHT_RANGES
+            order={band:i for i,band in enumerate(all_bands)}; order["Unknown"]=len(all_bands)
+            breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(len(all_bands))
             breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
         else:
             breakdown_df=breakdown_df.sort_values(breakdown)
@@ -5789,7 +5841,7 @@ elif page == "data_management":
                     editable = {
                         "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started"],
                         "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending"],
-                        "Animal Weight Range": ANIMAL_WEIGHT_RANGES + [""],
+                        "Animal Weight Range": weight_ranges_for_species(row["Species"]) + [""],
                         "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending"],
                     }
                     changed = {}
