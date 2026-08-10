@@ -2435,6 +2435,32 @@ input::placeholder, textarea::placeholder {
    container removes each one from the flex layout entirely. */
 [data-testid="stElementContainer"]:has(.app-card-marker),
 [data-testid="stElementContainer"]:has(.site-complete-marker) {display: none !important;}
+
+/* Same bug, page-chrome scale: HEADER_PADDING_BRIEF.md was written against
+   a screenshot of a large empty region above the top nav, and traced that
+   to six competing padding-top rules. Real measurement found the padding
+   rules were a minor factor - the actual dominant cause was five separate
+   invisible elements at the very top of the page (Google-Fonts preconnect
+   links, two pure-CSS <style> blocks, and two components.html() scripts -
+   the light-theme-forcing script and the connectivity banner) each still
+   counting as a flex sibling in the page's own top-level column layout and
+   each still eating a full 16px gap despite rendering at 0 height. Five of
+   them stacked to 80px of pure phantom space before the nav pills even
+   start - confirmed live by disabling them one at a time and watching the
+   nav's rendered top position drop by exactly 16px each time.
+   Scoped to only the page's own outermost stVerticalBlock's direct
+   children (not a bare [data-testid="stElementContainer"] selector) so
+   this can never reach into a card or a page's own content further down
+   the tree - verified a <style> tag's rules still apply and an iframe's
+   script still runs with its container hidden this way (this is standard
+   platform behaviour: neither depends on an ancestor's CSS display), by
+   toggling this rule on a live page and confirming fonts/brand colours/
+   color-scheme were byte-identical before and after. */
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> .stMarkdown [data-testid="stMarkdownContainer"] > link),
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> .stMarkdown [data-testid="stMarkdownContainer"] > style),
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> iframe[data-testid="stIFrame"]) {
+  display: none !important;
+}
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
@@ -2792,8 +2818,13 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
    body:not(:has(.login-page-marker)) guard beats a bare .block-container
    selector even with !important on both sides. Removed as part of the
    header-padding consolidation (HEADER_PADDING_BRIEF.md) rather than left
-   as dead weight. Header min-height stays - a real, live rule. */
-@media (max-width: 768px) {
+   as dead weight. Header min-height stays - a real, live rule - but moved
+   from 768px to 700px in that same pass: once the phantom flex-gap fix
+   below removes the "accidental cushion" that used to quietly absorb the
+   701-768px mismatch between this rule's old breakpoint and every other
+   mobile rule's 700px, that mismatch becomes a real 8px header/content
+   overlap in that range (confirmed live) instead of an invisible one. */
+@media (max-width: 700px) {
   header[data-testid="stHeader"] {
     min-height: calc(4.25rem + env(safe-area-inset-top)) !important;
   }
@@ -3239,19 +3270,31 @@ body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button:hover {
    move: this selector's specificity (a body:not(:has()) guard plus an
    attribute selector) beats a bare class selector even when both sides
    carry !important, so this rule has always won regardless of source
-   order. Measured against the header's own real rendered height (60px
-   above 768px, 68px at or below it, via its separate min-height rule) at
-   several widths including the risky 701-768px gap the old 768px-breakpoint
-   rule left behind: clearance from header bottom to first page content
-   was 64-72px at every width tested, so these values were already a safe,
-   near-minimal fit and didn't need to change - only the dead rules did. */
+   order.
+
+   Values recalibrated in the same pass, not left at their old numbers:
+   the real driver of the large gap the brief was written to fix wasn't
+   these two rules at all, it was five separate invisible top-of-page
+   elements (font-preconnect links, two big <style> blocks, and two
+   components.html() scripts) each still eating a full 16px flex-gap
+   despite rendering at 0 height - 80px of pure phantom space, fixed
+   below by hiding their containers outright. But that phantom space had
+   been accidentally covering for these two values being too small to
+   clear the header on their own (52px/60px padding against a 60px/68px
+   header) - removing it without raising these would have clipped content
+   under the header by 8px, confirmed live before adjusting. New values:
+   header height (60px above 700px, 68px at or below, both now on the
+   same 700px breakpoint as the header's own min-height rule instead of
+   the old mismatched 768px) plus a flat 12px margin. Total clearance
+   confirmed at 72px (>700px) and 80px (<=700px) live, at every width
+   tested including the former 701-768px mismatch zone. */
 body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
-  padding-top:3.25rem !important;
+  padding-top:4.5rem !important;
 }
 
 @media (max-width:700px) {
   body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
-    padding-top:calc(3.75rem + env(safe-area-inset-top)) !important;
+    padding-top:calc(5rem + env(safe-area-inset-top)) !important;
   }
 }
 </style>
