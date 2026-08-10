@@ -3782,6 +3782,19 @@ elif page == "visit":
             go("sites")
         if st.button("Pause and return to Trap sites", use_container_width=True):
             go("sites")
+        if checked_count == 0:
+            # Only offered while nothing has been recorded under this visit
+            # yet — the moment a single trap is checked, there's real field
+            # data attached to it and this option disappears entirely, so
+            # it can never be used to discard actual work.
+            st.divider()
+            confirm_cancel_visit = st.checkbox("Cancel this check", key=f"confirm_cancel_visit_{vid}")
+            if st.button("Cancel check", key=f"cancel_visit_{vid}", disabled=not confirm_cancel_visit, use_container_width=True):
+                audit_change(data, "Visit", vid, "Status", "In progress", "Cancelled (no traps checked)", "Cancelled from Site check actions")
+                data["Visits"] = data["Visits"][data["Visits"]["Visit ID"] != vid]
+                save_data(data)
+                set_flash("success", f"{site_name(data, sid)} check cancelled", ["No traps had been recorded, so nothing was lost."])
+                go("sites")
 
 elif page == "check":
     sid, vid, trap_id = st.session_state.site_id, st.session_state.visit_id, st.session_state.trap_id
