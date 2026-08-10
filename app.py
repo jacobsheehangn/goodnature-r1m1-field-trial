@@ -1930,6 +1930,7 @@ def render_compact_card_content(
     right_label_kind: Optional[str] = None,
     main_line: str = "",
     meta_line: str = "",
+    meta_line_2: str = "",
 ) -> None:
     """Render the shared compact card hierarchy without relying on Streamlit wrappers."""
     if right_label_kind is not None:
@@ -1947,12 +1948,16 @@ def render_compact_card_content(
         f'<div class="shared-card-meta">{html.escape(str(meta_line))}</div>'
         if meta_line else ""
     )
+    meta_html_2 = (
+        f'<div class="shared-card-meta">{html.escape(str(meta_line_2))}</div>'
+        if meta_line_2 else ""
+    )
     st.markdown(
         '<div class="shared-card-copy">'
         '<div class="shared-card-heading">'
         f'<strong>{html.escape(str(title))}</strong>{right_html}'
         '</div>'
-        f'{main_html}{meta_html}'
+        f'{main_html}{meta_html}{meta_html_2}'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1961,7 +1966,10 @@ def render_compact_card_content(
 def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> None:
     """Compact field card with one checked-state indicator."""
     trap_id = str(tr["Trap ID"])
-    product_build = f"{tr['Product']} · {tr['Build Version']}"
+    build_prefix = f"{tr['Product']} Build "
+    build_raw = str(tr["Build Version"] or "—")
+    build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
+    product_build = f"Build: {build_text}"
     location = trap_location_label(tr)
     route = str(tr["Route Order"] or "—")
 
@@ -2168,11 +2176,17 @@ header[data-testid="stHeader"] svg {
   color: #ffffff !important;
 }
 
-/* Buttons. */
-div.stButton > button,
-div.stFormSubmitButton > button,
-div.stDownloadButton > button {
-  border-radius: 9px;
+/* Buttons. Descendant (not direct-child) selectors deliberately: a button
+   with a help= tooltip gets wrapped by Streamlit in extra
+   stTooltipHoverTarget/stTooltipIcon spans between div.stButton and the
+   actual <button>, which silently broke "div.stButton > button" for any
+   button with a tooltip (confirmed via devtools on "Finish site check" —
+   it kept the radius from a separate, non-child-restricted rule, but fell
+   back to Streamlit's raw 4px/12px padding and 40px min-height here). */
+div.stButton button,
+div.stFormSubmitButton button,
+div.stDownloadButton button {
+  border-radius: 999px;
   font-family: 'Inter', sans-serif;
   font-weight: 700;
   min-height: 2.75rem;
@@ -2185,6 +2199,7 @@ button[kind="primary"],
   background: var(--brand-orange) !important;
   border-color: var(--brand-orange) !important;
   color: #ffffff !important;
+  border-radius: 999px !important;
 }
 button[kind="primary"] *,
 [data-testid="stBaseButton-primary"] * {color: #ffffff !important;}
@@ -2237,7 +2252,7 @@ input::placeholder, textarea::placeholder {
   border-radius: 12px !important;
 }
 [data-testid="stForm"] div.stFormSubmitButton {margin-top: .35rem;}
-[data-testid="stForm"] div.stFormSubmitButton > button {width: auto;}
+[data-testid="stForm"] div.stFormSubmitButton button {width: auto;}
 .element-container:has(div.stButton),
 .element-container:has(div.stFormSubmitButton) {margin-top: .35rem;}
 
@@ -2248,8 +2263,8 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
-  box-shadow: none !important;
-  border-radius: 14px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
+  border-radius: 20px !important;
 }
 
 [data-testid="stVerticalBlockBorderWrapper"],
@@ -2338,9 +2353,9 @@ hr {border-color: var(--line);}
 
   .message-panel {padding: .9rem 1rem; margin-bottom: 1rem;}
 
-  div.stButton > button,
-  div.stFormSubmitButton > button,
-  div.stDownloadButton > button {
+  div.stButton button,
+  div.stFormSubmitButton button,
+  div.stDownloadButton button {
     width: 100%;
     min-height: 3.1rem;
   }
@@ -2491,8 +2506,8 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
   background: var(--panel) !important;
   border: 1px solid var(--line) !important;
-  border-radius: 14px !important;
-  box-shadow: 0 2px 10px rgba(37,38,45,.035) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 
 /* Semantic panels follow the native app: pale state colour, short message, optional action. */
@@ -2514,9 +2529,9 @@ label p {
 
 /* Maintain large field tap targets even while visual weight is reduced. */
 @media (max-width: 700px) {
-  div.stButton > button,
-  div.stFormSubmitButton > button,
-  div.stDownloadButton > button {
+  div.stButton button,
+  div.stFormSubmitButton button,
+  div.stDownloadButton button {
     min-height: 3.1rem;
   }
 }
@@ -2531,8 +2546,8 @@ label p {
 .trap-history-details { color: var(--muted); font-size: .88rem; line-height: 1.45; margin-top: .12rem; }
 .drawer-close-marker { display: none; }
 div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) { align-items: start; }
-div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button { min-height: 2.25rem !important; height: 2.25rem !important; width: 2.25rem !important; padding: 0 !important; border-radius: 999px !important; font-size: 1.35rem !important; line-height: 1 !important; background: transparent !important; border-color: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
-div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton > button:hover { background: #ececea !important; color: var(--text) !important; }
+div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton button { min-height: 2.25rem !important; height: 2.25rem !important; width: 2.25rem !important; padding: 0 !important; border-radius: 999px !important; font-size: 1.35rem !important; line-height: 1 !important; background: transparent !important; border-color: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
+div[data-testid="stHorizontalBlock"]:has(.drawer-close-marker) div.stButton button:hover { background: #ececea !important; color: var(--text) !important; }
 @media (max-width: 520px) { .trap-history-event { grid-template-columns: 4.6rem minmax(0, 1fr); column-gap: .65rem; } }
 
 /* v8.6.63 — mobile sidebar control must remain visible on the white header. */
@@ -2663,7 +2678,8 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
   margin: 0 0 1rem 0;
   padding: 1rem 1.1rem;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 20px;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05);
   background: #ffffff;
   box-sizing: border-box;
 }
@@ -2779,21 +2795,21 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
   background: var(--card-bg) !important;
   border: 1px solid var(--card-border) !important;
-  border-radius: 14px !important;
-  box-shadow: none !important;
+  border-radius: 20px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
-  padding: .9rem 1rem !important;
+  padding: 15px !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) {
   background: var(--card-success-bg) !important;
   border-color: var(--card-success-border) !important;
 }
 
-.shared-card-copy { display:grid; gap:.32rem; width:100%; margin:0 0 .35rem 0; }
+.shared-card-copy { display:grid; gap:15px; width:100%; margin:0 0 .35rem 0; }
 .shared-card-heading { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; }
-.shared-card-heading strong { color:var(--text); font-size:1rem; }
+.shared-card-heading strong { color:var(--text); font-size:22px; }
 .shared-card-main { color:var(--text); font-size:.95rem; }
 .shared-card-meta { color:var(--muted); font-size:.86rem; line-height:1.4; }
 .shared-card-label { color:var(--text); font-size:.88rem; text-align:right; }
@@ -2807,12 +2823,12 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
   background:var(--card-success-bg) !important;
   border-color:var(--card-success-border) !important;
 }
-.visit-trap-card { padding:.9rem 1rem !important; margin-bottom:.7rem !important; min-height:0 !important; }
+.visit-trap-card { padding:15px !important; margin-bottom:.7rem !important; min-height:0 !important; }
 
 /* Compact action spacing inside all shared cards. */
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton {
-  margin-top:.35rem !important;
+  margin-top:15px !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button {
@@ -2822,9 +2838,8 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 @media (max-width:700px) {
   [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
   [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div,
-  .visit-trap-card { padding:.8rem .9rem !important; }
+  .visit-trap-card { padding:15px !important; }
   .shared-card-heading { gap:.5rem; }
-  .shared-card-heading strong { font-size:.96rem; }
   .shared-card-main { font-size:.9rem; }
   .shared-card-meta, .shared-card-label { font-size:.82rem; }
 }
@@ -2869,20 +2884,20 @@ input, textarea, select, button,
    Applies on desktop and mobile; never targets generic header buttons. *//* Hide only the two native sidebar-control SVGs. *//* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. *//* Open drawer: left-pointing close chevron. *//* Maintain visible controls without hover-dependent colour changes. */
 
 /* Compact field cards. */
-.visit-trap-card { min-height:0 !important; padding:.9rem 1rem !important; display:block !important; margin-bottom:.7rem !important; }
+.visit-trap-card { min-height:0 !important; padding:15px !important; display:block !important; margin-bottom:.7rem !important; }
 .visit-trap-copy { display:grid; gap:.35rem; width:100%; }
 .visit-trap-line { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
 .visit-trap-meta { color:#737780; font-size:.9rem; }
 .visit-trap-status { color:#22683d; white-space:nowrap; }
 .visit-trap-card.is-checked { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) { margin-bottom:.7rem !important; }
-[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:.85rem 1rem !important; }
+[data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
 
 /* Completed site state and compact site metadata. */
 [data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 .site-card-compact { display:grid; gap:.35rem; }
-.site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:1.05rem; }
+.site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:22px; }
 .site-card-meta { color:#737780; font-size:.9rem; }
 
 /* v8.7.6.6 photo layout is isolated inside the custom component iframe. */
@@ -2905,13 +2920,13 @@ input, textarea, select, button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
   background:#f3f3f0 !important;
   border:1px solid #d7d9dd !important;
-  border-radius:14px !important;
-  box-shadow:none !important;
+  border-radius:20px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 
 [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) > div,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
-  padding:.85rem 1rem !important;
+  padding:15px !important;
 }
 
 /* Streamlit wrapper fallback for mobile DOM variants. Keep the selector limited to
@@ -2920,8 +2935,8 @@ div[data-testid="stVerticalBlock"]:has(.setup-trap-card-marker)[style*="border"]
 div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"] {
   background:#f3f3f0 !important;
   border-color:#d7d9dd !important;
-  border-radius:14px !important;
-  box-shadow:none !important;
+  border-radius:20px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 
 @media (max-width:700px) {
@@ -2931,11 +2946,7 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
   }
   [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) > div,
   [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
-    padding:.8rem .9rem !important;
-  }
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.setup-trap-card-marker) .shared-card-copy {
-    gap:.28rem !important;
-    margin-bottom:.2rem !important;
+    padding:15px !important;
   }
 }/* v8.7.5.6 — final drawer-control isolation.
    Some Streamlit builds render an underlying double-arrow text glyph. Suppress
@@ -3142,7 +3153,9 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 [data-testid="stPopoverBody"] {
   background: #ffffff !important;
   color: #25262d !important;
-  border: 1px solid #d7d9dd !important;
+  border: none !important;
+  border-radius: 10px !important;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 [data-testid="stPopoverBody"] * {
   color: #25262d !important;
@@ -3151,6 +3164,20 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 [data-testid="stPopoverBody"] [data-testid="stBaseButton-secondary"] {
   background: #ffffff !important;
   border-color: #d7d9dd !important;
+}
+
+/* Card-system brief: bring the popover's page-link/button rows to the same
+   40px/15px row rhythm as the rest of this release, in place of whatever
+   height/padding they happened to inherit from the generic button rules. */
+[data-testid="stPopoverBody"] [data-testid="stPageLink"] a {
+  min-height: 40px !important;
+  padding: 0 15px !important;
+  display: flex !important;
+  align-items: center !important;
+}
+[data-testid="stPopoverBody"] div.stButton button {
+  min-height: 40px !important;
+  padding: 0 15px !important;
 }
 
 /* Material icon glyphs (accordion/expander chevrons etc.) render as text
@@ -3287,30 +3314,11 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
     margin-right: auto !important;
   }
 
-  /* Cards were padded/spaced for a container that used to sprawl edge to
-     edge; capping the width alone (tried first) made them read as
-     noticeably cramped. Loosen padding and internal rhythm to match, desktop
-     only — mobile's existing tighter spacing already reads correctly at
-     that width and must stay untouched. */
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
-    padding: 1.375rem 1.5rem !important;
-  }
-
-  .shared-card-copy { gap: .4rem !important; }
-  /* Extra breathing room specifically after the title/status heading row,
-     stacked on top of the base .shared-card-copy gap above (grid gaps and
-     child margins don't collapse), rather than raising the base gap for
-     every line and losing the tighter rhythm between metadata lines. */
-  .shared-card-heading + .shared-card-main,
-  .shared-card-heading + .shared-card-meta {
-    margin-top: .4rem !important;
-  }
-
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton {
-    margin-top: 1.1rem !important;
-  }
+  /* Card padding/gap/button spacing intentionally not overridden here any
+     more — the card-system brief moved these to one consistent 15px value
+     (outer padding, inter-element gap, and button spacing alike) at every
+     breakpoint, so the desktop-only "loosen it further" step this block
+     used to do is now redundant with the base rules above. */
 }
 </style>
 
@@ -3334,9 +3342,47 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 .status-pill-success { background: #eaf7ef; color: #22683d; }
 .status-pill-guidance { background: #edf4fb; color: #235f93; }
 .status-pill-warning { background: #fff3d9; color: #775900; }
+/* Category tag, not a status: same pill shape as the semantic states above,
+   but deliberately grey/low-contrast so a task TYPE (e.g. "Camera review")
+   never reads as a state the four real colours are reserved for. */
+.status-pill-neutral { background: #eef0f2; color: #4a4f57; }
 
 @media (max-width: 700px) {
   .status-pill { font-size: .78rem; padding: .18rem .5rem; }
+}
+
+/* Card-system brief — Tertiary tier: lower-emphasis actions, icon-left
+   ghost treatment. Scoped to this one confirmed button via its own key,
+   not a shared class/type — other "Back" buttons in the app were checked
+   and are deliberately not swept into this, since that's a separate
+   decision for each of them, not implied by this one. Padding is bumped
+   past Figma's ~34-40px spec to a 44px minimum tap target: this is a
+   field app, sometimes used with gloves, and STYLE_GUIDE.md's "field
+   clarity first" principle takes priority over matching the visual spec's
+   hit-area exactly. Placed in this final style block deliberately: earlier
+   placement lost the background/color half of this rule to the later
+   button[kind="secondary"] redeclarations elsewhere in this file, which
+   tie on specificity and then win on cascade order. */
+.st-key-back_followup_list button {
+  background: rgba(0,0,0,.05) !important;
+  border: none !important;
+  border-radius: 999px !important;
+  color: #F36C21 !important;
+  font-weight: 700 !important;
+  font-size: 14px !important;
+  min-height: 44px !important;
+  min-width: 44px !important;
+  padding: 10px !important;
+  box-shadow: none !important;
+}
+/* The visible label sits in a child span Streamlit renders inside the
+   button, which the secondary-button rules elsewhere give its own explicit
+   dark colour — override that descendant directly, not just the button. */
+.st-key-back_followup_list button * {
+  color: #F36C21 !important;
+}
+.st-key-back_followup_list button:hover {
+  background: rgba(0,0,0,.09) !important;
 }
 </style>
 
@@ -3544,16 +3590,24 @@ if page == "sites":
         with app_card():
             if completed_today and active is None:
                 st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
+            # Trap count is shown once: as a fraction while a visit is in
+            # progress (matches the "X of Y" language already used
+            # elsewhere), or as a plain count before one starts — never both,
+            # since showing "9 active traps" next to "0 of 9 traps checked"
+            # repeats the same number for no reason.
+            trap_count_text = (
+                f"{len(checks)} of {len(traps)} traps checked" if active is not None
+                else f"{len(traps)} active traps"
+            )
             st.markdown(
                 '<div class="shared-card-copy site-card-compact">'
                 f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
-                f'<div class="shared-card-meta">{len(traps)} active traps · Every {interval} days</div>'
+                f'<div class="shared-card-meta">{trap_count_text} · Every {interval} days</div>'
                 f'<div class="shared-card-meta">Last {last_dt.strftime("%d %b %Y") if last_dt else "not completed"} · Next {"due now" if next_dt.date() <= now().date() else next_dt.strftime("%d %b %Y")}</div>'
                 '</div>',
                 unsafe_allow_html=True,
             )
             if active is not None:
-                st.caption(f"{len(checks)} of {len(traps)} traps checked")
                 if st.button("Resume checking", key=f"resume_{sid}", type="primary"):
                     go("visit", site_id=sid, visit_id=active["Visit ID"])
             else:
@@ -4012,16 +4066,19 @@ elif page == "network":
             )
 
             with app_card():
+                build_prefix = f"{tr['Product']} Build "
+                build_raw = str(tr["Build Version"] or "—")
+                build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
                 render_compact_card_content(
                     title=trap_id,
                     right_label=site_name(data, tr["Site ID"]),
                     main_line=trap_location_label(tr),
                     meta_line=(
-                        f"{tr['Build Version']} · "
+                        f"Build: {build_text} · "
                         f"{len(kills)} kill{'s' if len(kills) != 1 else ''} · "
-                        f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''} · "
-                        f"Last kill: {last_kill}"
+                        f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''}"
                     ),
+                    meta_line_2=f"Last kill: {last_kill}",
                 )
 
                 if st.button(
@@ -4182,13 +4239,19 @@ elif page == "followups":
             for _,item_row in fu.iterrows():
                 row_fid=item_row["Follow-up ID"]
                 with app_card():
-                    bag_text = f"Bag {item_row['Bag ID']} · " if str(item_row.get("Bag ID", "")).strip() else ""
+                    bag_text = f"Bag: {item_row['Bag ID']} · " if str(item_row.get("Bag ID", "")).strip() else ""
                     reason_text = item_row["Reason"] or "—"
+                    # Priority is shown plainly, same as before — an explicit decision,
+                    # not the unresolved default: this card doesn't give High any
+                    # extra visual weight (no colour, no icon), since that's a separate
+                    # design decision this release isn't making. If that changes later,
+                    # it should be a deliberate follow-up, not a silent addition here.
                     st.markdown(
                         '<div class="shared-card-copy">'
-                        f'<div class="shared-card-heading"><strong>{html.escape(str(item_row["Trap ID"]))}</strong><span class="shared-card-label">{html.escape(str(item_row["Follow-up Type"]))}</span></div>'
+                        f'<div class="shared-card-heading"><strong>{html.escape(str(item_row["Trap ID"]))}</strong>{status_pill(str(item_row["Follow-up Type"]), "neutral")}</div>'
                         f'<div class="shared-card-meta">{html.escape(site_name(data,item_row["Site ID"]))} · {html.escape(str(item_row["Priority"]))}</div>'
-                        f'<div class="shared-card-meta">{html.escape(bag_text + str(reason_text))} · Created {html.escape(human_dt(item_row["Created Time"]))}</div>'
+                        f'<div class="shared-card-meta">{html.escape(bag_text)}Reason: {html.escape(str(reason_text))}</div>'
+                        f'<div class="shared-card-meta">Created: {html.escape(human_dt(item_row["Created Time"]))}</div>'
                         '</div>',
                         unsafe_allow_html=True,
                     )
@@ -4840,12 +4903,15 @@ elif page == "setup":
                     trap_id = tr["Trap ID"]
                     with app_card():
                         st.markdown('<span class="setup-trap-card-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-                        camera_text = tr["Camera ID"] or "No camera"
+                        camera_text = tr["Camera ID"] or "None"
+                        build_prefix = f"{tr['Product']} Build "
+                        build_raw = str(tr["Build Version"] or "—")
+                        build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
                         st.markdown(
                             '<div class="shared-card-copy">'
                             f'<div class="shared-card-heading"><strong>{html.escape(str(trap_id))}</strong>{status_pill(str(tr["Status"]), "success" if tr["Status"] == "Active" else "none")}</div>'
                             f'<div class="shared-card-main">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
-                            f'<div class="shared-card-meta">{html.escape(str(tr["Product"]))} · Build {html.escape(str(tr["Build Version"] or "—"))} · {html.escape(str(camera_text))} · Route {html.escape(str(tr["Route Order"] or "—"))}</div>'
+                            f'<div class="shared-card-meta">Build: {html.escape(build_text)} · Camera: {html.escape(str(camera_text))} · Route: {html.escape(str(tr["Route Order"] or "—"))}</div>'
                             '</div>',
                             unsafe_allow_html=True,
                         )
@@ -5165,12 +5231,15 @@ elif page == "setup":
                 with app_card():
                     first_active = parse_dt(build_row["First Active Date"])
                     first_active_text = first_active.strftime("%d %b %Y") if first_active else "—"
+                    notes_raw = str(build_row["Notes"] or "No notes")
+                    source_prefix = "Built from "
+                    source_text = notes_raw[len(source_prefix):].rstrip(".") if notes_raw.startswith(source_prefix) else notes_raw
                     render_compact_card_content(
                         title=f"{product_code} Build {version}",
                         right_label=str(build_row["Build Status"]),
                         right_label_kind="success" if build_row["Build Status"] == "Current" else "none",
                         main_line=f"{active_traps} active trap{'s' if active_traps != 1 else ''}",
-                        meta_line=f"First active {first_active_text} · {build_row['Notes'] or 'No notes'}",
+                        meta_line=f"First active: {first_active_text} · Source: {source_text}",
                     )
                     if st.button("Edit", key=f"setup_edit_build_{product_code}_{version}"):
                         st.session_state.setup_build=build_identity

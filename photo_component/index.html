@@ -406,8 +406,21 @@ input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; }
     if (!e.data || e.data.type!=='streamlit:render') return;
     renderArgs=e.data.args||{};
     render();
+    setHeight();
   });
   ready(); setHeight();
+
+  // The original single setHeight() call on load was the only trigger this
+  // component ever had — real-device testing found it can leave the iframe
+  // stuck at Streamlit's fallback height (confirmed via devtools: height
+  // stayed 501px with an empty, ~150px-tall summary+grid) rather than the
+  // content's actual size, with nothing to correct it afterward. A
+  // ResizeObserver keeps the reported height continuously in sync with
+  // whatever the content actually needs, independent of any specific event
+  // firing at the right moment.
+  new ResizeObserver(() => setHeight()).observe(document.body);
+  window.addEventListener('load', setHeight);
+  setTimeout(setHeight, 150);
 })();
 </script>
 </body>

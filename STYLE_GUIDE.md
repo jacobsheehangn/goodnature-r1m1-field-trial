@@ -43,8 +43,18 @@ than the native consumer app.
 - Page: `#FFFFFF`
 - Standard grouped surface: `#F7F7F5`
 - Standard border: `#D7D9DD`
-- Standard radius: `14px`
-- Form-control radius: `10px–12px`
+- Card radius: `20px` (card-system release, superseding the earlier `14px`)
+- Form-control radius: `10px–12px` (unchanged — this release only touched cards and buttons)
+- Card shadow: soft ambient glow, zero offset on all three layers —
+  `0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05)`.
+  Applies to every card type and the Administration menu panel (at a smaller
+  `10px` radius, appropriately scaled for a compact menu). Does **not**
+  apply to the top navigation pills — their `box-shadow: none` is deliberate,
+  not an oversight; see "Navigation" below.
+- Card padding: `15px` on every side, at every breakpoint — explicit now,
+  not inherited from an unstated Streamlit default.
+- Card internal gap: `15px` between every stacked element (title → status →
+  stats → button), consistent at every breakpoint.
 
 ### Semantic status colours
 
@@ -61,6 +71,10 @@ than the native consumer app.
 - Avoid multiple large headings competing in one viewport.
 - Labels remain explicit and medium-to-bold for outdoor readability.
 - Do not reduce type simply to match native-app density.
+- Card title: `22px` bold (`.shared-card-heading strong`, `.site-card-heading`)
+  — bumped from `16–16.8px` in the card-system release so a card's title
+  reads as a clear step above its own meta/status text, not a weak size
+  step next to it.
 
 ## Surfaces
 
@@ -77,6 +91,9 @@ than the native consumer app.
 - Filled Goodnature orange.
 - One primary action per section where possible.
 - White text.
+- Radius: `999px` (fully pill-shaped) — card-system release. Secondary
+  buttons keep their existing, smaller `9px` radius; this is a Primary-only
+  change.
 
 ### Secondary
 
@@ -86,8 +103,24 @@ than the native consumer app.
 
 ### Tertiary
 
-- Orange text on transparent background.
-- Use for low-risk actions such as Cancel, Back or View details.
+Icon-left, lower-emphasis actions such as Cancel, Back or View details —
+distinct from Secondary, not a smaller version of it.
+
+- Ghost background: `rgba(0,0,0,.05)`, orange text (`#F36C21`), no border.
+- Radius: `999px` (pill), Lato/Inter Bold `14px`.
+- Visual padding `10px 10px`, but the actual tap target is a `44px`
+  minimum on both axes — deliberately larger than the visual padding alone
+  would give. This is a field app, sometimes used with gloves; "Field
+  clarity first" takes priority over matching a visual spec's hit-area
+  exactly.
+- Confirmed for the necropsy review "← Back to task list" only so far —
+  scoped per-button (by its own key), not via a shared class. Other "Back"
+  buttons elsewhere in the app were deliberately not swept into this; each
+  is its own decision.
+- "Add site" / "Add trap" / "Add build" stay filled Primary for now —
+  downgrading the one clearly findable action on a sparse admin page to a
+  near-invisible ghost button was considered and deliberately not done in
+  this release.
 
 ### Destructive
 
@@ -303,17 +336,27 @@ define the full interaction across closed, open, mobile and desktop states, pres
 unrelated behaviour, and use established interface conventions unless the product
 requires otherwise.
 
-## Shared card system (v8.7.5.2)
+## Shared card system (v8.7.5.2, shell updated in the card-system release)
 
 All record, task, site and field cards use one visual base:
 
 - soft neutral grey background (`#F3F3F0`)
 - light grey border (`#D7D9DD`)
-- 14 px radius
-- no shadow
-- compact padding on mobile
+- 20 px radius (bumped from 14 px)
+- soft ambient shadow (see Tokens → Surfaces and borders for the exact
+  three-layer value) — reverses the earlier "flat cards, no shadow"
+  principle, deliberately, with a Figma mockup behind the decision, not by
+  default
+- 15 px padding and 15 px inter-element gap, identical at every breakpoint
+  (no separate, tighter mobile spacing any more)
 - identity/status first, main context second, supporting metadata grouped third
 - one action area only
+- card title at `22px` bold (see Typography)
+
+Category tags (a task **type**, e.g. "Camera review" / "Necropsy review")
+use a neutral grey pill (`status-pill-neutral`), never one of the four
+semantic status colours — those stay reserved for actual states
+(guidance/success/warning/error), so a type never gets mistaken for one.
 
 Variants:
 
@@ -323,3 +366,10 @@ Variants:
 - inactive: neutral card with reduced emphasis and explicit status
 
 Page-specific card layouts must not introduce different surfaces, spacing systems or nested card borders.
+
+The Administration menu panel (`[data-testid="stPopoverBody"]`) uses the
+same shadow treatment as cards, at a smaller `10px` radius appropriate for
+a compact menu, with no border — the shadow alone provides definition.
+Its page-link and button rows use a `40px` height / `15px` horizontal
+padding rhythm, matching the spacing decisions made elsewhere in this
+release.
