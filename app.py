@@ -2417,15 +2417,25 @@ input::placeholder, textarea::placeholder {
 
 /* App-owned marked cards plus Streamlit wrapper fallback. */
 .app-card-marker {display: none !important;}
-/* The marker span above is hidden, but its own stElementContainer div isn't
-   - that div still counts as a flex sibling in the card's column layout, so
-   the card's inter-element gap (16px, Streamlit's own default) still opens
-   up around it even though it renders at 0 height. That reads as ~30px of
-   unexplained dead space above every card's title (padding + a phantom
-   gap), on every card regardless of content - confirmed via
-   getComputedStyle showing a 0-height first child still consuming a gap.
-   Hiding the whole container removes it from the flex layout entirely. */
-[data-testid="stElementContainer"]:has(.app-card-marker) {display: none !important;}
+/* site-complete-marker (a second, separate hidden hook span used only on a
+   freshly-completed site's card - see the "sites" page) has the exact same
+   issue below, so it gets the same two-part fix. Confirmed live on staging:
+   a completed-today card showed 32px of dead space (two phantom gaps
+   stacked) where a normal card only had one, because this marker's own
+   container wasn't covered by the app-card-marker fix - local demo data
+   never exercised a "completed today" card during testing, so this half
+   was missed the first time. */
+.site-complete-marker {display: none !important;}
+/* The marker spans above are hidden, but their own stElementContainer divs
+   aren't - those divs still count as flex siblings in the card's column
+   layout, so the card's inter-element gap (16px, Streamlit's own default)
+   still opens up around them even though they render at 0 height. That
+   reads as unexplained dead space above every card's title (padding plus
+   a phantom gap per hidden marker present) - confirmed via getComputedStyle
+   showing 0-height children still consuming a gap. Hiding the whole
+   container removes each one from the flex layout entirely. */
+[data-testid="stElementContainer"]:has(.app-card-marker),
+[data-testid="stElementContainer"]:has(.site-complete-marker) {display: none !important;}
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .app-card-marker),
 div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker) {
