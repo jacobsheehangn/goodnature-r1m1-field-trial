@@ -4155,262 +4155,292 @@ elif page == "check":
     tr = trap_row(data, trap_id)
     w = open_window(data, trap_id)
 
-    if st.button("← Back to trap selector"):
-        go("visit", site_id=sid, visit_id=vid)
+    # Extracted to a closure so progressive disclosure and save-validation
+    # can use plain `return` instead of st.stop() (Layout stability pass,
+    # R1_M1_Agreed_Release_Sequence_Updated.md). st.stop() halts the ENTIRE
+    # script for this rerun, not just this page - anything after the whole
+    # page-routing if/elif chain (e.g. scroll_to_top_once() at the very
+    # bottom of the file) silently never ran whenever this page stopped
+    # early. `return` only exits this page's own render function, which is
+    # both what was actually intended and a real, if minor, existing bug
+    # fix on its own.
+    def _render_check_page():
+        if st.button("← Back to trap selector"):
+            go("visit", site_id=sid, visit_id=vid)
 
-    header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
+        header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
 
-    if w is None:
-        message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
-        if st.button("Start window and continue", type="primary"):
-            try:
-                repair_missing_window(data, trap_id)
-                st.rerun()
-            except Exception as exc:
-                st.error(str(exc))
-        st.stop()
+        if w is None:
+            message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
+            if st.button("Start window and continue", type="primary"):
+                try:
+                    repair_missing_window(data, trap_id)
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
+            return
 
-    st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
-    finding = st.radio(
-        "What did you find?",
-        FINDINGS,
-        index=None,
-        key=f"finding_{trap_id}_{vid}",
-    )
-    if finding is None:
-        st.caption("Choose one finding to continue.")
-        st.stop()
-
-    has_animal = finding == "Dead animal found"
-    assessable = finding not in ["Trap missing", "Unable to check"]
-    bag_id = ""
-    species = ""
-    rat_type = ""
-    condition = ""
-    bag_labelled = False
-    photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
-
-    if has_animal:
-        bag_key = f"bag_id_{vid}_{trap_id}"
-        pending_check_id = ensure_pending_check_id(vid, trap_id)
-        if bag_key not in st.session_state:
-            recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
-            st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
-        bag_id = st.session_state[bag_key]
-        message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
-        st.markdown("### Photos")
-        st.caption("Choose the photos already taken from the camera roll.")
-        photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
-        species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
-        if species == "Rat":
-            rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
-        condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
-        bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
-    elif finding == "Trap fired, no animal":
-        st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
-    elif not assessable:
-        st.warning("This check will close the current window and no new window will start.")
-
-    service_ready = False
-    service_reason = ""
-    if assessable:
-        st.markdown("### Trap service")
-        service_choice = st.radio(
-            "Trap relured, reset and ready?",
-            ["Yes", "No"],
+        st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
+        finding = st.radio(
+            "What did you find?",
+            FINDINGS,
             index=None,
-            horizontal=True,
-            key=f"service_ready_{trap_id}_{vid}",
+            key=f"finding_{trap_id}_{vid}",
         )
-        service_ready = service_choice == "Yes"
-        if service_choice == "No":
-            service_reason = st.text_area(
-                "Why is the trap not ready?",
-                key=f"service_reason_{trap_id}_{vid}",
-            ).strip()
-    else:
-        service_choice = "Not applicable"
+        if finding is None:
+            st.caption("Choose one finding to continue.")
+            return
 
-    camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
-    camera = "No camera"
-    covers = "Not applicable"
-    adjusted = False
-    camera_ready = True
-    if camera_assigned and assessable:
-        st.markdown("### Camera check")
-        camera_choice = st.radio(
-            "Camera working and covering the trap?",
-            ["Yes", "No", "Could not assess"],
-            index=None,
-            key=f"camera_ready_{trap_id}_{vid}",
-        )
-        if camera_choice == "Yes":
-            camera, covers, camera_ready = "Working", "Yes", True
-        elif camera_choice == "No":
-            camera = st.radio(
-                "Camera issue",
-                [x for x in CAMERA if x != "Working"],
-                index=None,
-                key=f"camera_issue_{trap_id}_{vid}",
-            ) or ""
-            covers = st.radio(
-                "Camera still covers the trap?",
-                ["Yes", "No", "Unsure"],
-                index=None,
-                key=f"covers_{trap_id}_{vid}",
-            ) or ""
-            adjusted = st.checkbox("Camera adjusted", key=f"adjusted_{trap_id}_{vid}")
-            camera_ready = False
-        elif camera_choice == "Could not assess":
-            camera, covers, camera_ready = "Unsure", "Unsure", False
-        else:
-            camera_choice = None
-            camera_ready = False
-    else:
-        camera_choice = "Not applicable"
-        if not camera_assigned:
-            st.caption("No camera assigned.")
+        has_animal = finding == "Dead animal found"
+        assessable = finding not in ["Trap missing", "Unable to check"]
+        bag_id = ""
+        species = ""
+        rat_type = ""
+        condition = ""
+        bag_labelled = False
+        photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
 
-    notes = st.text_area("Anything else to record?", height=72, key=f"notes_{trap_id}_{vid}")
-    change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
-    if change_time:
-        c1, c2 = st.columns(2)
-        d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}")
-        tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}")
-    else:
-        d = tm = None
-
-    photo_blocked = bool(has_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-    if has_animal and photo_gate.get("expected_count", 0):
-        if photo_gate.get("manual_failure_count", 0):
-            count = int(photo_gate["manual_failure_count"])
-            st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
-        elif photo_gate.get("ready"):
-            st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
-        else:
-            remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
-            st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
-    save_label = "Please wait" if photo_blocked else "Save check"
-    if st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked):
-        saving_feedback = st.empty()
-        saving_feedback.info("Saving check… Do not tap again.")
-        errors = []
-        if has_animal and not species:
-            errors.append("Choose the species.")
-        if has_animal and species == "Rat" and not rat_type:
-            errors.append("Choose the rat type.")
-        if has_animal and not condition:
-            errors.append("Choose the animal condition.")
-        if has_animal and not bag_labelled:
-            errors.append(f"Confirm that bag {bag_id} is labelled.")
-        if assessable and service_choice is None:
-            errors.append("Confirm whether the trap is relured, reset and ready.")
-        if assessable and service_choice == "No" and not service_reason:
-            errors.append("Record why the trap is not ready.")
-        if camera_assigned and assessable and camera_choice is None:
-            errors.append("Complete the camera check.")
-        if camera_assigned and assessable and camera_choice == "No" and not camera:
-            errors.append("Choose the camera issue.")
-        if camera_assigned and assessable and camera_choice == "No" and not covers:
-            errors.append("Record whether the camera covers the trap.")
-        if errors:
-            message_panel("error", "Complete these details before saving.", errors)
-            st.stop()
-
-        check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
-        if has_animal and photo_gate.get("expected_count", 0):
-            photo_gate = {
-                **photo_gate,
-                **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
-            }
-            if not (
-                photo_gate.get("ready")
-                and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
-            ):
-                st.error("One or more selected photos are not safely stored yet.")
-                st.stop()
-        active = open_window(data, trap_id)
-        if active is None:
-            message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
-            if st.button("Start missing window", key=f"repair_on_save_{trap_id}_{vid}"):
-                repair_missing_window(data, trap_id)
-                st.rerun()
-            st.stop()
-
-        original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
-        staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-        old_id = close_window(staged, trap_id, check_time, finding, bag_id)
-        will_start = bool(assessable and service_ready and camera_ready)
-        new_id = start_window(staged, trap_id, check_time) if will_start else ""
-        idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
-        if idxs:
-            staged["Windows"].at[idxs[0], "Species"] = species
-            staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
-
-        expected_photo_count = int(photo_gate.get("expected_count", 0)) if has_animal else 0
-        check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
-        trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
-        trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
-        row = [
-            check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
-            condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
-            "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
-            "Yes" if service_ready else "No", "Yes" if service_ready else "No",
-            trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
-            (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
-        ]
-        staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
-
-        if assessable and camera_assigned:
-            priority = "High" if finding == "Trap fired, no animal" else "Normal"
-            add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
-                         "Confirm target interaction, activation, kill and video evidence", priority)
         if has_animal:
-            add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
-                         "Dead animal collected",
-                         "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
-        if assessable and not service_ready:
-            add_followup(staged, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
-                         service_reason, "Restore the trap to service and record the outcome", "High")
-        if camera_issue_required(camera_assigned, camera, covers):
-            add_followup(staged, "Camera issue", sid, trap_id, vid, old_id, bag_id,
-                         "Camera issue", "Resolve camera condition and record the evidence gap", "High")
+            bag_key = f"bag_id_{vid}_{trap_id}"
+            pending_check_id = ensure_pending_check_id(vid, trap_id)
+            if bag_key not in st.session_state:
+                recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
+                st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
+            bag_id = st.session_state[bag_key]
+            message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
+            st.markdown("### Photos")
+            st.caption("Choose the photos already taken from the camera roll.")
+            photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
+            species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
+            if species == "Rat":
+                rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
+            condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
+            bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+        elif finding == "Trap fired, no animal":
+            st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
+        elif not assessable:
+            st.warning("This check will close the current window and no new window will start.")
 
-        refresh_review_status(staged, old_id)
+        service_ready = False
+        service_reason = ""
+        if assessable:
+            st.markdown("### Trap service")
+            service_choice = st.radio(
+                "Trap relured, reset and ready?",
+                ["Yes", "No"],
+                index=None,
+                horizontal=True,
+                key=f"service_ready_{trap_id}_{vid}",
+            )
+            service_ready = service_choice == "Yes"
+            if service_choice == "No":
+                service_reason = st.text_area(
+                    "Why is the trap not ready?",
+                    key=f"service_reason_{trap_id}_{vid}",
+                ).strip()
+        else:
+            service_choice = "Not applicable"
 
-        def _verify_check_persisted(reloaded):
-            persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
-            persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
-            if len(persisted_check) != 1:
-                raise RuntimeError("The saved workbook did not contain exactly one completed check.")
-            return {"followup_count": len(persisted_followups)}
+        camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
+        camera = "No camera"
+        covers = "Not applicable"
+        adjusted = False
+        camera_ready = True
+        if camera_assigned and assessable:
+            st.markdown("### Camera check")
+            camera_choice = st.radio(
+                "Camera working and covering the trap?",
+                ["Yes", "No", "Could not assess"],
+                index=None,
+                key=f"camera_ready_{trap_id}_{vid}",
+            )
+            if camera_choice == "Yes":
+                camera, covers, camera_ready = "Working", "Yes", True
+            elif camera_choice == "No":
+                camera = st.radio(
+                    "Camera issue",
+                    [x for x in CAMERA if x != "Working"],
+                    index=None,
+                    key=f"camera_issue_{trap_id}_{vid}",
+                ) or ""
+                covers = st.radio(
+                    "Camera still covers the trap?",
+                    ["Yes", "No", "Unsure"],
+                    index=None,
+                    key=f"covers_{trap_id}_{vid}",
+                ) or ""
+                adjusted = st.checkbox("Camera adjusted", key=f"adjusted_{trap_id}_{vid}")
+                camera_ready = False
+            elif camera_choice == "Could not assess":
+                camera, covers, camera_ready = "Unsure", "Unsure", False
+            else:
+                camera_choice = None
+                camera_ready = False
+        else:
+            camera_choice = "Not applicable"
+            if not camera_assigned:
+                st.caption("No camera assigned.")
 
-        photo_count = commit_staged_records_with_photos(
-            data=data,
-            staged=staged,
-            original_data=original_data,
-            photo_gate=photo_gate,
-            expected_photo_count=expected_photo_count,
-            record_id=check_id,
-            photos_id_column="Check ID",
-            verify_persisted=_verify_check_persisted,
-            log_prefix="check",
-            log_fields={"check_id": check_id, "trap_id": trap_id},
-            record_noun="check",
-            record_description="check, follow-up or photo record",
-        )
+        notes = st.text_area("Anything else to record?", height=72, key=f"notes_{trap_id}_{vid}")
+        change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
+        if change_time:
+            c1, c2 = st.columns(2)
+            d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}")
+            tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}")
+        else:
+            d = tm = None
 
-        for key in [
-            f"bag_id_{vid}_{trap_id}",
-            pending_check_id_key(vid, trap_id),
-            photo_component_event_key(vid, trap_id),
-        ]:
-            st.session_state.pop(key, None)
-        st.session_state.saved_check = {
-            "trap_id": trap_id,
-            "photo_count": photo_count,
-        }
-        go("visit", site_id=sid, visit_id=vid)
+        photo_blocked = bool(has_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+        if has_animal and photo_gate.get("expected_count", 0):
+            if photo_gate.get("manual_failure_count", 0):
+                count = int(photo_gate["manual_failure_count"])
+                st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
+            elif photo_gate.get("ready"):
+                st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
+            else:
+                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+
+        # True one-tap saving lock (Layout stability pass): the "Saving
+        # check… Do not tap again." message used to be text only, with
+        # nothing actually disabling the button behind it - the only real
+        # disabled= condition was photo_blocked. On a slow field connection
+        # a second tap during a slow save could still resubmit. This flag
+        # is set the instant the button is pressed and persists across the
+        # rerun it triggers, so the button itself renders disabled on any
+        # subsequent rerun until the save fails validation (cleared, so the
+        # operator can fix and retry) or completes (popped, along with the
+        # rest of this check's transient session_state).
+        save_lock_key = f"check_saving_{trap_id}_{vid}"
+        saving = st.session_state.get(save_lock_key, False)
+        save_label = "Please wait" if photo_blocked else ("Saving…" if saving else "Save check")
+        if st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked or saving):
+            st.session_state[save_lock_key] = True
+            saving_feedback = st.empty()
+            saving_feedback.info("Saving check… Do not tap again.")
+            errors = []
+            if has_animal and not species:
+                errors.append("Choose the species.")
+            if has_animal and species == "Rat" and not rat_type:
+                errors.append("Choose the rat type.")
+            if has_animal and not condition:
+                errors.append("Choose the animal condition.")
+            if has_animal and not bag_labelled:
+                errors.append(f"Confirm that bag {bag_id} is labelled.")
+            if assessable and service_choice is None:
+                errors.append("Confirm whether the trap is relured, reset and ready.")
+            if assessable and service_choice == "No" and not service_reason:
+                errors.append("Record why the trap is not ready.")
+            if camera_assigned and assessable and camera_choice is None:
+                errors.append("Complete the camera check.")
+            if camera_assigned and assessable and camera_choice == "No" and not camera:
+                errors.append("Choose the camera issue.")
+            if camera_assigned and assessable and camera_choice == "No" and not covers:
+                errors.append("Record whether the camera covers the trap.")
+            if errors:
+                st.session_state[save_lock_key] = False
+                message_panel("error", "Complete these details before saving.", errors)
+                return
+
+            check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
+            if has_animal and photo_gate.get("expected_count", 0):
+                photo_gate = {
+                    **photo_gate,
+                    **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+                }
+                if not (
+                    photo_gate.get("ready")
+                    and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+                ):
+                    st.session_state[save_lock_key] = False
+                    st.error("One or more selected photos are not safely stored yet.")
+                    return
+            active = open_window(data, trap_id)
+            if active is None:
+                st.session_state[save_lock_key] = False
+                message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
+                if st.button("Start missing window", key=f"repair_on_save_{trap_id}_{vid}"):
+                    repair_missing_window(data, trap_id)
+                    st.rerun()
+                return
+
+            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+            old_id = close_window(staged, trap_id, check_time, finding, bag_id)
+            will_start = bool(assessable and service_ready and camera_ready)
+            new_id = start_window(staged, trap_id, check_time) if will_start else ""
+            idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
+            if idxs:
+                staged["Windows"].at[idxs[0], "Species"] = species
+                staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
+
+            expected_photo_count = int(photo_gate.get("expected_count", 0)) if has_animal else 0
+            check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
+            trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
+            trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
+            row = [
+                check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
+                condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
+                "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
+                "Yes" if service_ready else "No", "Yes" if service_ready else "No",
+                trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
+                (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
+            ]
+            staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
+
+            if assessable and camera_assigned:
+                priority = "High" if finding == "Trap fired, no animal" else "Normal"
+                add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
+                             "Confirm target interaction, activation, kill and video evidence", priority)
+            if has_animal:
+                add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
+                             "Dead animal collected",
+                             "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
+            if assessable and not service_ready:
+                add_followup(staged, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
+                             service_reason, "Restore the trap to service and record the outcome", "High")
+            if camera_issue_required(camera_assigned, camera, covers):
+                add_followup(staged, "Camera issue", sid, trap_id, vid, old_id, bag_id,
+                             "Camera issue", "Resolve camera condition and record the evidence gap", "High")
+
+            refresh_review_status(staged, old_id)
+
+            def _verify_check_persisted(reloaded):
+                persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
+                persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
+                if len(persisted_check) != 1:
+                    raise RuntimeError("The saved workbook did not contain exactly one completed check.")
+                return {"followup_count": len(persisted_followups)}
+
+            photo_count = commit_staged_records_with_photos(
+                data=data,
+                staged=staged,
+                original_data=original_data,
+                photo_gate=photo_gate,
+                expected_photo_count=expected_photo_count,
+                record_id=check_id,
+                photos_id_column="Check ID",
+                verify_persisted=_verify_check_persisted,
+                log_prefix="check",
+                log_fields={"check_id": check_id, "trap_id": trap_id},
+                record_noun="check",
+                record_description="check, follow-up or photo record",
+            )
+
+            for key in [
+                f"bag_id_{vid}_{trap_id}",
+                pending_check_id_key(vid, trap_id),
+                photo_component_event_key(vid, trap_id),
+                save_lock_key,
+            ]:
+                st.session_state.pop(key, None)
+            st.session_state.saved_check = {
+                "trap_id": trap_id,
+                "photo_count": photo_count,
+            }
+            go("visit", site_id=sid, visit_id=vid)
+
+    _render_check_page()
 
 elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
