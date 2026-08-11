@@ -6102,11 +6102,11 @@ elif page == "data_management":
                     max_evidence_date = window_end.date() if window_end else None
                     changed = {}
                     timestamp_inputs = {}
-                    with st.form("correct_camera_evidence"):
+                    with st.form(f"correct_camera_evidence_{selected_id}"):
                         for field, choices in editable.items():
                             current = str(row[field])
                             index = choices.index(current) if current in choices else 0
-                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}")
+                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
                         st.markdown("##### Event timestamps")
                         st.caption("Record when events occurred in the footage. Leave a date blank to leave that timestamp unchanged.")
                         for field, label in timestamp_fields:
@@ -6118,13 +6118,13 @@ elif page == "data_management":
                                     value=current_dt.date() if current_dt else None,
                                     min_value=min_evidence_date,
                                     max_value=max_evidence_date,
-                                    key=f"corr_{field}_date",
+                                    key=f"corr_{field}_date_{selected_id}",
                                 )
                             with time_col:
                                 ts_time = st.time_input(
                                     f"{label} time",
                                     value=current_dt.time() if current_dt else None,
-                                    key=f"corr_{field}_time",
+                                    key=f"corr_{field}_time_{selected_id}",
                                 )
                             timestamp_inputs[field] = (ts_date, ts_time)
                         reason = st.text_area("Correction reason")
@@ -6137,11 +6137,11 @@ elif page == "data_management":
                         "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending"],
                     }
                     changed = {}
-                    with st.form("correct_necropsy_evidence"):
+                    with st.form(f"correct_necropsy_evidence_{selected_id}"):
                         for field, choices in editable.items():
                             current = str(row[field])
                             index = choices.index(current) if current in choices else 0
-                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}")
+                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
                         reason = st.text_area("Correction reason")
                         save_correction = st.form_submit_button("Save correction", type="primary")
                 if save_correction:
