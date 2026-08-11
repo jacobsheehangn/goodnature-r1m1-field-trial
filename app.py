@@ -2169,6 +2169,65 @@ def recalculate_window(data, idx: int) -> None:
     data["Windows"].at[idx, "Valid"] = "Yes" if usable == "Yes" and target in ["Yes", "No"] else "No"
 
 
+def suspect_earliest_window_candidates(data: Dict[str, pd.DataFrame], product: str) -> list:
+    """Flag traps of the given product whose earliest window's Start Time falls
+    on a different calendar day than the trap's own Deployment Start.
+
+    This is the exact signature the "trap was physically live before being
+    added to the app" bug leaves behind: start_window() stamps Start Time
+    with whatever moment the trap record was entered, while Deployment Start
+    (edited separately) holds the operator's belief about the true date.
+    A day-level mismatch between the two is real, code-grounded evidence of
+    the bug — not a guess about "looks like batch entry."
+    """
+    candidates = []
+    traps = data["Traps"][data["Traps"]["Product"] == product]
+    for _, t in traps.iterrows():
+        trap_id = t["Trap ID"]
+        windows = data["Windows"][data["Windows"]["Trap ID"] == trap_id].copy()
+        if windows.empty:
+            continue
+        windows["_start_dt"] = windows["Start Time"].apply(parse_dt)
+        windows = windows[windows["_start_dt"].notna()]
+        if windows.empty:
+            continue
+        earliest = windows.sort_values("_start_dt").iloc[0]
+        window_start_dt = earliest["_start_dt"]
+        deployment_dt = parse_dt(t["Deployment Start"])
+        suspect = deployment_dt is None or window_start_dt.date() != deployment_dt.date()
+        if not suspect:
+            continue
+        candidates.append({
+            "Trap ID": trap_id,
+            "Site ID": t["Site ID"],
+            "Window ID": earliest["Window ID"],
+            "Current Start": window_start_dt,
+            "Deployment Start": deployment_dt,
+            "Review Status": str(earliest["Review Status"]),
+            "Eligible": str(earliest["Review Status"]) != "Complete",
+        })
+    return candidates
+
+
+def correct_window_start(data: Dict[str, pd.DataFrame], window_id: str, new_start: datetime, reason: str) -> bool:
+    """Correct a single window's Start Time, re-checking eligibility against
+    live data (not a page-render-time snapshot) so a review completed after
+    the diagnostic list was drawn can never be silently overwritten."""
+    idxs = data["Windows"].index[data["Windows"]["Window ID"] == window_id].tolist()
+    if not idxs:
+        raise ValueError(f"Window {window_id} could not be found.")
+    idx = idxs[0]
+    if str(data["Windows"].at[idx, "Review Status"]) == "Complete":
+        raise ValueError("This window's review has already been completed and can no longer be corrected here.")
+    old_value = str(data["Windows"].at[idx, "Start Time"])
+    new_value = dtstr(new_start)
+    if old_value == new_value:
+        return False
+    data["Windows"].at[idx, "Start Time"] = new_value
+    recalculate_window(data, idx)
+    audit_change(data, "Window", window_id, "Start Time", old_value, new_value, reason)
+    return True
+
 
 @contextmanager
 def app_card():
@@ -4819,7 +4878,7 @@ elif page == "followups":
             window_start=parse_dt(linked_window["Start Time"]) if linked_window is not None else None
             window_end=parse_dt(linked_window["End Time"]) if linked_window is not None else None
 
-            context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Build",tr["Build Version"]),("Bag ID",item["Bag ID"]),("Reason",item["Reason"] or "Not recorded")]
+            context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Build",tr["Build Version"]),("Camera",str(tr["Camera ID"]).strip() or "No camera assigned"),("Bag ID",item["Bag ID"]),("Reason",item["Reason"] or "Not recorded")]
             if window_start and window_end:
                 context_rows.append(("Evidence period",f"{human_dt(window_start)} to {human_dt(window_end)}"))
             workflow_context(context_rows)
@@ -5504,6 +5563,8 @@ elif page == "setup":
                     deployment=parse_dt(existing["Deployment Start"]) if existing is not None else now()
                     dep_date=st.date_input("Deployment start date",value=deployment.date() if deployment else now().date())
                     dep_time=st.time_input("Deployment start time",value=deployment.time() if deployment else now().time())
+                    if dep_date==now().date():
+                        st.caption("Defaults to today — change this if the trap was actually deployed earlier.")
                     image=st.text_input("Setup image link",value=existing["Setup Image Link"] if existing is not None else "")
                     status=st.selectbox("Status",["Active","Inactive"],index=0 if existing is None or existing["Status"]=="Active" else 1)
                     notes=st.text_area("Notes",value=existing["Notes"] if existing is not None else "")
@@ -5939,7 +6000,7 @@ elif page == "data_management":
     header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
     active_data_section = st.radio(
         "Data section",
-        ["Corrections", "Trial history", "Audit log", "Export and backup"],
+        ["Corrections", "Window start corrections", "Trial history", "Audit log", "Export and backup"],
         horizontal=True,
         key="data_management_section",
         label_visibility="collapsed",
@@ -6102,6 +6163,120 @@ elif page == "data_management":
                             data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
                             save_data(data); set_flash("success","Correction saved.",[f"{len(audit_rows)} field change(s) were applied.","The audit log retained the previous and corrected values.","Next: make another correction or return to the relevant record."]); st.rerun()
                         else: st.info("No values changed.")
+
+    if active_data_section == "Window start corrections":
+        helper("A trap's earliest test window can end up with a Start Time later than when the trap was truly deployed, if the trap was physically live in the field before being added to the app. That blocks entering real footage timestamps from before the window's recorded start.")
+        st.write("Correct a flagged trap's earliest window individually, or select several traps and apply one confirmed date and time to all of them at once.")
+
+        r1_candidates = suspect_earliest_window_candidates(data, "R1")
+        if not r1_candidates:
+            st.success("No R1 trap's earliest window currently looks suspect.")
+        else:
+            r1_trap_ids = data["Traps"][data["Traps"]["Product"] == "R1"]["Trap ID"]
+            open_camera_reviews = data["Followups"][
+                (data["Followups"]["Status"] == "Open")
+                & (data["Followups"]["Follow-up Type"] == "Camera review")
+                & (data["Followups"]["Trap ID"].isin(r1_trap_ids))
+            ]
+            st.caption(f"{len(r1_candidates)} R1 trap(s) flagged with a suspect earliest-window start · {len(open_camera_reviews)} open camera review task(s) exist for R1 traps. If these counts don't roughly line up, some cases may be missing from this list.")
+
+            reason = st.text_area(
+                "Reason for these corrections",
+                placeholder="e.g. Confirmed true deployment date against field records and camera footage timestamps.",
+                key="winfix_reason",
+            )
+
+            st.markdown("#### Flagged traps")
+            selected_ids = []
+            for c in r1_candidates:
+                with app_card():
+                    sel_col, info_col = st.columns([0.08, 0.92])
+                    with sel_col:
+                        selected = st.checkbox(
+                            "Select",
+                            key=f"winfix_select_{c['Trap ID']}",
+                            label_visibility="collapsed",
+                            disabled=not c["Eligible"],
+                        )
+                    with info_col:
+                        st.markdown(f"**{c['Trap ID']}** · {site_name(data, c['Site ID'])}")
+                        st.caption(f"Window {c['Window ID']} · Review status: {c['Review Status']}")
+                        st.write(f"Current earliest-window start: {human_dt(c['Current Start'], include_year=True)}")
+                        st.write(f"Trap's Deployment Start: {human_dt(c['Deployment Start'], include_year=True) if c['Deployment Start'] else 'Not set'}")
+                        if not c["Eligible"]:
+                            st.warning("This window's review has already been completed — it can no longer be corrected through this tool.")
+                        else:
+                            d_col, t_col = st.columns(2)
+                            with d_col:
+                                new_date = st.date_input("True deployment date", value=c["Current Start"].date(), key=f"winfix_date_{c['Trap ID']}")
+                            with t_col:
+                                new_time = st.time_input("True deployment time", value=c["Current Start"].time(), key=f"winfix_time_{c['Trap ID']}")
+                            if st.button("Apply this trap", key=f"winfix_apply_{c['Trap ID']}"):
+                                if not reason.strip():
+                                    st.error("Enter a reason before applying a correction.")
+                                else:
+                                    try:
+                                        changed = correct_window_start(data, c["Window ID"], datetime.combine(new_date, new_time), reason.strip())
+                                        if changed:
+                                            save_data(data)
+                                            set_flash("success", f"{c['Trap ID']} corrected.", [f"Window {c['Window ID']} Start Time updated.", "Recorded in the audit log."])
+                                        else:
+                                            st.info("No change — the entered date and time match the current value.")
+                                        st.rerun()
+                                    except ValueError as exc:
+                                        st.error(str(exc))
+                if selected:
+                    selected_ids.append(c["Trap ID"])
+
+            st.markdown("#### Bulk apply to selected traps")
+            if not selected_ids:
+                st.caption("Select one or more traps above to apply one date and time to all of them.")
+            else:
+                bulk_date = st.date_input("Shared true deployment date", key="winfix_bulk_date")
+                bulk_time = st.time_input("Shared true deployment time", key="winfix_bulk_time")
+                if st.button("Preview bulk apply", key="winfix_bulk_preview"):
+                    st.session_state["winfix_bulk_pending"] = {
+                        "trap_ids": list(selected_ids),
+                        "date": bulk_date,
+                        "time": bulk_time,
+                    }
+                    st.rerun()
+
+            pending = st.session_state.get("winfix_bulk_pending")
+            if pending:
+                st.markdown("##### Confirm bulk correction")
+                new_dt = datetime.combine(pending["date"], pending["time"])
+                preview_rows = [
+                    {"Trap ID": c["Trap ID"], "Old Start": human_dt(c["Current Start"], include_year=True), "New Start": human_dt(new_dt, include_year=True)}
+                    for c in r1_candidates if c["Trap ID"] in pending["trap_ids"]
+                ]
+                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                confirm_col, cancel_col = st.columns(2)
+                with confirm_col:
+                    if st.button("Confirm bulk apply", type="primary", key="winfix_bulk_confirm", disabled=not reason.strip()):
+                        applied, skipped = [], []
+                        for c in r1_candidates:
+                            if c["Trap ID"] not in pending["trap_ids"]:
+                                continue
+                            try:
+                                if correct_window_start(data, c["Window ID"], new_dt, reason.strip()):
+                                    applied.append(c["Trap ID"])
+                                else:
+                                    skipped.append(f"{c['Trap ID']} (no change)")
+                            except ValueError as exc:
+                                skipped.append(f"{c['Trap ID']} ({exc})")
+                        if applied:
+                            save_data(data)
+                        st.session_state.pop("winfix_bulk_pending", None)
+                        detail = [f"{len(applied)} trap(s) corrected: {', '.join(applied)}."] if applied else []
+                        if skipped:
+                            detail.append(f"Skipped: {'; '.join(skipped)}.")
+                        set_flash("success" if applied else "error", "Bulk correction applied." if applied else "No traps were corrected.", detail)
+                        st.rerun()
+                with cancel_col:
+                    if st.button("Cancel", key="winfix_bulk_cancel"):
+                        st.session_state.pop("winfix_bulk_pending", None)
+                        st.rerun()
 
     if active_data_section == "Trial history":
         helper("Trial history shows each period between a trap being set or relured and its next field check.")
