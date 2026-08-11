@@ -6080,6 +6080,7 @@ elif page == "data_management":
                 idx = data["Windows"].index[data["Windows"]["Window ID"] == selected_id][0]
                 row = data["Windows"].loc[idx]
                 st.caption(f"Evidence period: {human_dt(row['Start Time'])} – {human_dt(row['End Time'])}")
+                timestamp_inputs = {}
                 if record_type == "Camera evidence":
                     editable = {
                         "Evidence Usable": ["Yes", "No", "Pending"],
@@ -6090,12 +6091,42 @@ elif page == "data_management":
                         "Kill Confirmed": ["Yes", "No", "Unclear", "Pending"],
                         "Video Assessment": ["Humane", "Not humane", "Unclear", "No usable video", "Not applicable", "Pending"],
                     }
+                    timestamp_fields = [
+                        ("First Interaction Time", "First target interaction"),
+                        ("Trigger Time", "First activation"),
+                        ("Kill Time", "Kill"),
+                    ]
+                    window_start = parse_dt(row["Start Time"])
+                    window_end = parse_dt(row["End Time"])
+                    min_evidence_date = window_start.date() if window_start else None
+                    max_evidence_date = window_end.date() if window_end else None
                     changed = {}
+                    timestamp_inputs = {}
                     with st.form("correct_camera_evidence"):
                         for field, choices in editable.items():
                             current = str(row[field])
                             index = choices.index(current) if current in choices else 0
                             changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}")
+                        st.markdown("##### Event timestamps")
+                        st.caption("Record when events occurred in the footage. Leave a date blank to leave that timestamp unchanged.")
+                        for field, label in timestamp_fields:
+                            current_dt = parse_dt(row[field])
+                            date_col, time_col = st.columns(2)
+                            with date_col:
+                                ts_date = st.date_input(
+                                    f"{label} date",
+                                    value=current_dt.date() if current_dt else None,
+                                    min_value=min_evidence_date,
+                                    max_value=max_evidence_date,
+                                    key=f"corr_{field}_date",
+                                )
+                            with time_col:
+                                ts_time = st.time_input(
+                                    f"{label} time",
+                                    value=current_dt.time() if current_dt else None,
+                                    key=f"corr_{field}_time",
+                                )
+                            timestamp_inputs[field] = (ts_date, ts_time)
                         reason = st.text_area("Correction reason")
                         save_correction = st.form_submit_button("Save correction", type="primary")
                 else:
@@ -6123,6 +6154,14 @@ elif page == "data_management":
                             if str(new_value) != old_value:
                                 data["Windows"].at[idx, field] = new_value
                                 audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
+                        for field, (ts_date, ts_time) in timestamp_inputs.items():
+                            if ts_date is None or ts_time is None:
+                                continue
+                            old_value = str(data["Windows"].at[idx, field])
+                            new_value = dtstr(datetime.combine(ts_date, ts_time))
+                            if new_value != old_value:
+                                data["Windows"].at[idx, field] = new_value
+                                audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, new_value, reason.strip()])
                         if audit_rows:
                             recalculate_window(data,idx)
                             refresh_review_status(data,selected_id)
