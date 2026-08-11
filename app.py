@@ -69,8 +69,8 @@ SHEETS = {
     "Builds": ["Product", "Build Version", "Build Status", "First Active Date", "Notes"],
     "Traps": ["Trap ID", "Product", "Build Version", "Site ID", "Route Order", "Location", "Camera ID", "Deployment Start", "Setup Image Link", "Status", "Notes"],
     "Visits": ["Visit ID", "Site ID", "Operator", "Start Time", "End Time", "Status", "Notes"],
-    "Checks": ["Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID", "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function", "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes"],
-    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes"],
+    "Checks": ["Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID", "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function", "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes", "Excluded", "Exclusion Reason"],
+    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason"],
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
     "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
@@ -2134,6 +2134,128 @@ def physical_kill_population(windows: pd.DataFrame) -> pd.DataFrame:
     return windows[windows["Finding At Close"] == "Dead animal found"].copy()
 
 
+DATA_QUALITY_REVIEW_RECORD_TYPE = "Data quality review"
+
+# Derived from real completed-visit check-activity spans, confirmed 11 Aug 2026.
+# Of 8 completed visits, only 4 were confirmed genuine single continuous
+# site checks (0 to 34.3 min of check-to-check span); the other 2 (5.15 hr,
+# 10.94 hr) were confirmed NOT real continuous visits - a Visit record left
+# open and resumed later under the same Visit ID, not one accelerated check -
+# and excluded from this derivation. VIS-TR-20260806-224548-9542 (34.3 min,
+# 9 checks) is the longest confirmed-real span. Set to roughly 2.6x that, so
+# a real visit is never mistaken for isolation with a comfortable margin.
+# Revisit once more completed-visit data exists to derive this with a larger
+# sample than n=4.
+DATA_QUALITY_ISOLATION_WINDOW_MINUTES = 90
+
+
+def data_quality_reviewed_check_ids(data: Dict[str, pd.DataFrame]) -> set:
+    """Check IDs already reviewed (confirmed real or voided) - a human decision
+    is permanent once made, so a confirmed check must never resurface as a
+    candidate again. Tracked via Audit Log rather than a field on the Check
+    row itself: confirming a check as real makes no data change, so there is
+    nothing else to check for on the row - the log is the only durable record
+    that the review happened at all."""
+    log = data["Audit Log"]
+    if log.empty:
+        return set()
+    return set(log[log["Record Type"] == DATA_QUALITY_REVIEW_RECORD_TYPE]["Record ID"].astype(str))
+
+
+def find_data_quality_candidates(data: Dict[str, pd.DataFrame], window_minutes: int = DATA_QUALITY_ISOLATION_WINDOW_MINUTES) -> list:
+    """Flag checks with no other trap activity nearby at the same site.
+
+    Isolation, not duration, is the signal: a real accelerated whole-line
+    check (site operators deliberately check every trap on a site ahead of
+    schedule whenever a kill is found anywhere on it) always shows multiple
+    traps checked together, clustered close in time. A single trap checked
+    alone, with nothing else at that site nearby, is the actual tell - a
+    short resulting window is common and legitimate on its own and is
+    deliberately not used as a signal here.
+    """
+    checks = data["Checks"].copy()
+    if checks.empty:
+        return []
+    reviewed = data_quality_reviewed_check_ids(data)
+    trap_site = data["Traps"].set_index("Trap ID")["Site ID"].to_dict()
+    checks["_dt"] = checks["Check Time"].apply(parse_dt)
+    checks["_site"] = checks["Trap ID"].map(trap_site)
+
+    candidates = []
+    window = pd.Timedelta(minutes=window_minutes)
+    for _, row in checks.iterrows():
+        check_id = str(row["Check ID"])
+        if str(row.get("Excluded", "")) == "Yes" or check_id in reviewed:
+            continue
+        this_dt, this_site = row["_dt"], row["_site"]
+        if this_dt is None or not this_site:
+            continue
+        site_checks = checks[(checks["_site"] == this_site) & (checks["Check ID"].astype(str) != check_id) & checks["_dt"].notna()]
+        if site_checks.empty:
+            gap = pd.Timedelta.max
+        else:
+            gap = (site_checks["_dt"] - this_dt).abs().min()
+        if gap <= window:
+            continue  # real activity nearby - not a candidate
+
+        before = site_checks[site_checks["_dt"] < this_dt].sort_values("_dt")
+        after = site_checks[site_checks["_dt"] > this_dt].sort_values("_dt")
+        candidates.append({
+            "Check ID": check_id,
+            "Trap ID": row["Trap ID"],
+            "Site ID": this_site,
+            "Check Time": this_dt,
+            "Finding": row["Finding"],
+            "Window Closed": row.get("Window Closed", ""),
+            "Visit ID": row.get("Visit ID", ""),
+            "closest_before": before.iloc[-1]["_dt"] if not before.empty else None,
+            "closest_after": after.iloc[0]["_dt"] if not after.empty else None,
+        })
+    candidates.sort(key=lambda c: c["Check Time"], reverse=True)
+    return candidates
+
+
+def void_check_as_test_data(data: Dict[str, pd.DataFrame], check_id: str, reason: str) -> None:
+    """Soft-exclude a check confirmed to be test/UI data, and the window it
+    closed (whose Finding/Species/etc. feed Trial Performance directly) -
+    never a hard delete. The window boundary itself (this check possibly also
+    opening a new window) is left exactly as-is, a deliberate, confirmed
+    choice: the split happened, and unwinding it risks orphaning any
+    Followups/Photos row that already references the new window's ID."""
+    if not reason.strip():
+        raise ValueError("Enter a reason for voiding this record.")
+    check_idxs = data["Checks"].index[data["Checks"]["Check ID"].astype(str) == str(check_id)].tolist()
+    if not check_idxs:
+        raise ValueError("That check could not be found.")
+    check_idx = check_idxs[0]
+    reason = reason.strip()
+
+    data["Checks"].at[check_idx, "Excluded"] = "Yes"
+    data["Checks"].at[check_idx, "Exclusion Reason"] = reason
+    audit_change(data, "Check", check_id, "Excluded", "", "Yes", reason)
+
+    window_id = str(data["Checks"].at[check_idx, "Window Closed"] or "")
+    if window_id:
+        window_idxs = data["Windows"].index[data["Windows"]["Window ID"] == window_id].tolist()
+        if window_idxs:
+            window_idx = window_idxs[0]
+            data["Windows"].at[window_idx, "Excluded"] = "Yes"
+            data["Windows"].at[window_idx, "Exclusion Reason"] = reason
+            audit_change(data, "Window", window_id, "Excluded", "", "Yes", reason)
+
+    save_data(data)
+
+
+def confirm_check_as_real(data: Dict[str, pd.DataFrame], check_id: str) -> None:
+    """Record a human's confirmation that a flagged check is real field data.
+    Makes no change to the check or window's recorded values - the Audit Log
+    entry alone is what keeps this candidate from resurfacing."""
+    if data["Checks"][data["Checks"]["Check ID"].astype(str) == str(check_id)].empty:
+        raise ValueError("That check could not be found.")
+    audit_change(data, DATA_QUALITY_REVIEW_RECORD_TYPE, check_id, "Review", "", "Confirmed real", "Reviewed and confirmed as real field data, not test data.")
+    save_data(data)
+
+
 def classify_camera_outcome(is_kill_review, evidence_usable, target, strike_area, activated, assessment):
     if evidence_usable == "No":
         return "Unable to determine"
@@ -2664,7 +2786,13 @@ input::placeholder, textarea::placeholder {
    color-scheme were byte-identical before and after. */
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> .stMarkdown [data-testid="stMarkdownContainer"] > link),
 [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> .stMarkdown [data-testid="stMarkdownContainer"] > style),
-[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> iframe[data-testid="stIFrame"]) {
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"]:has(> iframe[data-testid="stIFrame"]),
+/* Same phantom-gap fix, scoped to a popover body instead of the page's own
+   top-level block - needed the moment a popover renders its own conditional
+   style-only markdown (Administration's Data quality badge), since a
+   popover's content sits in a different container than stMainBlockContainer
+   and the rule above never reaches it. */
+[data-testid="stPopoverBody"] [data-testid="stElementContainer"]:has(> .stMarkdown [data-testid="stMarkdownContainer"] > style) {
   display: none !important;
 }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker),
@@ -3861,6 +3989,39 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 .st-key-exit_workflow_to_sites button:hover {
   background: rgba(0,0,0,.09) !important;
 }
+
+/* Data quality tool — the same Tertiary/Primary mechanics as above, colour
+   swapped to the semantic token that matches what each action means, not a
+   new button type. Keys are per-candidate (check ID suffix), so these use a
+   substring class match rather than one exact .st-key-<name> selector - one
+   rule still covers every candidate's pair of buttons. Placed in this same
+   final block for the identical cascade-order reason documented above. */
+[class*="st-key-data_quality_confirm_"] button {
+  background: rgba(0,0,0,.05) !important;
+  border: none !important;
+  border-radius: 999px !important;
+  color: #22683D !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+[class*="st-key-data_quality_confirm_"] button * {
+  color: #22683D !important;
+}
+[class*="st-key-data_quality_confirm_"] button:hover {
+  background: rgba(0,0,0,.09) !important;
+}
+[class*="st-key-data_quality_void_"] button[kind="primary"] {
+  background: #9B3B29 !important;
+  border-color: #9B3B29 !important;
+  color: #FFFFFF !important;
+}
+[class*="st-key-data_quality_void_"] button[kind="primary"] * {
+  color: #FFFFFF !important;
+}
+[class*="st-key-data_quality_void_"] button[kind="primary"]:hover {
+  background: #7d2f21 !important;
+  border-color: #7d2f21 !important;
+}
 </style>
 
 
@@ -3966,6 +4127,10 @@ def top_nav_data_records() -> None:
     select_top_navigation("data_management", {"data_management", "windows"})
 
 
+def top_nav_data_quality() -> None:
+    select_top_navigation("data_quality", {"data_quality"})
+
+
 def top_nav_sign_out() -> None:
     clear_workflow_query_params()
     st.session_state.clear()
@@ -3986,11 +4151,14 @@ PAGE_TRIAL_SETUP = st.Page(
 PAGE_DATA_RECORDS = st.Page(
     top_nav_data_records, title="Data & records", url_path="data-records"
 )
+PAGE_DATA_QUALITY = st.Page(
+    top_nav_data_quality, title="Data quality", url_path="data-quality"
+)
 PAGE_SIGN_OUT = st.Page(top_nav_sign_out, title="Sign out", url_path="sign-out")
 
 NAVIGATION_PAGES = {
     "": [PAGE_TRAP_SITES, PAGE_FOLLOWUPS, PAGE_PERFORMANCE],
-    "Administration": [PAGE_TRAPS, PAGE_TRIAL_SETUP, PAGE_DATA_RECORDS, PAGE_SIGN_OUT],
+    "Administration": [PAGE_TRAPS, PAGE_TRIAL_SETUP, PAGE_DATA_RECORDS, PAGE_DATA_QUALITY, PAGE_SIGN_OUT],
 }
 
 # Keep Streamlit's supported page router, but do not render its responsive
@@ -4054,6 +4222,32 @@ with st.container(
         st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
         st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
+        data_quality_candidate_count = len(find_data_quality_candidates(data))
+        if data_quality_candidate_count:
+            # The badge's count is baked directly into the CSS content string
+            # rather than styled unconditionally, so the highlighted
+            # background and count pill only ever render when there really
+            # are candidates waiting - nothing to hide/show client-side.
+            st.markdown(
+                f"""<style>
+                [data-testid="stPageLink"]:has(a[href*="data-quality"]) {{
+                    background: #FFF3D9 !important;
+                    border-radius: 8px;
+                }}
+                [data-testid="stPageLink"]:has(a[href*="data-quality"]) a::after {{
+                    content: "{data_quality_candidate_count}";
+                    background: #775900;
+                    color: #FFFFFF;
+                    font-size: 10px;
+                    font-weight: 700;
+                    border-radius: 999px;
+                    padding: 1px 6px;
+                    margin-left: 6px;
+                }}
+                </style>""",
+                unsafe_allow_html=True,
+            )
+        st.page_link(PAGE_DATA_QUALITY, label="Data quality", width="stretch")
         st.divider()
         if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
             clear_workflow_query_params()
@@ -4549,6 +4743,7 @@ elif page == "check":
                 "Yes" if service_ready else "No", "Yes" if service_ready else "No",
                 trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
                 (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
+                "", "",
             ]
             staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
 
@@ -5130,7 +5325,7 @@ elif page == "windows":
                 row_wid = wr_row["Window ID"]
                 with app_card():
                     c1, c2, c3, c4, action = st.columns([1.05, 1.1, 1.15, 1.1, 0.9], vertical_alignment="center")
-                    c1.markdown(f"**{row_wid}**")
+                    c1.markdown(f"**{row_wid}**" + (" " + status_pill("Excluded", "warning") if wr_row.get("Excluded") == "Yes" else ""), unsafe_allow_html=True)
                     c1.caption(wr_row["Trap ID"])
                     c2.write(wr_row["Build Version"] or "—")
                     c2.caption(site_name(data, wr_row["Site ID"]))
@@ -5150,6 +5345,8 @@ elif page == "windows":
                 st.rerun()
             else:
                 wr=wr.iloc[0]; st.subheader(wid); st.caption(f"{wr['Trap ID']} · {wr['Build Version']}")
+                if wr.get("Excluded") == "Yes":
+                    message_panel("warning", "Excluded from Trial performance", [wr.get("Exclusion Reason") or "No reason recorded."])
                 for label,col in [("Status","Status"),("Started","Start Time"),("Closed","End Time"),("Physical finding","Finding At Close"),("Outcome","Outcome"),("Target present","Target Present"),("Video assessment","Video Assessment"),("Necropsy assessment","Necropsy Assessment"),("Animal weight range","Animal Weight Range"),("Final humane kill","Final Humane Kill"),("Review status","Review Status")]:
                     value = human_dt(wr[col]) if col in ["Start Time", "End Time"] else (wr[col] or "—")
                     if col == "Status" and value == "Open": value = "Active"
@@ -5157,6 +5354,80 @@ elif page == "windows":
                 if wr["Status"] == "Open":
                     helper("This window is still active. Evidence and final assessment are added only after the next field check closes it.")
                 if st.button("Close panel", key="close_window_panel"): st.session_state.pop("window_panel",None); st.rerun()
+
+elif page == "data_quality":
+    header("Data quality review", "Checks with no other trap activity nearby at the same site, worth a human look before they're treated as real field data.")
+    candidates = find_data_quality_candidates(data)
+    reviewing_id = st.session_state.get("data_quality_review")
+
+    if not candidates:
+        st.session_state.pop("data_quality_review", None)
+        st.success("No flagged checks right now — every check either has real activity nearby at its site, or has already been reviewed.")
+    elif reviewing_id and reviewing_id not in {c["Check ID"] for c in candidates}:
+        # Resolved (confirmed or voided) since this panel opened, or no longer a candidate for any other reason.
+        st.session_state.pop("data_quality_review", None)
+        st.rerun()
+    elif reviewing_id:
+        candidate = next(c for c in candidates if c["Check ID"] == reviewing_id)
+        position = next(i for i, c in enumerate(candidates) if c["Check ID"] == reviewing_id) + 1
+        if st.button("← Back to list", key="data_quality_back"):
+            st.session_state.pop("data_quality_review", None)
+            st.rerun()
+        st.caption(f"Reviewing candidate {position} of {len(candidates)}")
+        st.subheader(candidate["Trap ID"])
+        st.caption(site_name(data, candidate["Site ID"]))
+
+        workflow_context([
+            ("Check time", human_dt(candidate["Check Time"], include_year=True)),
+            ("Finding", candidate["Finding"]),
+            ("Window closed → new window", human_dt(candidate["Check Time"], include_year=True)),
+        ])
+
+        before_txt = f"the closest earlier check at this site was {human_dt(candidate['closest_before'], include_year=True)}" if candidate["closest_before"] is not None else "no earlier check at this site was found"
+        after_txt = f"the closest later check was {human_dt(candidate['closest_after'], include_year=True)}" if candidate["closest_after"] is not None else "no later check at this site was found yet"
+        message_panel(
+            "warning",
+            f"No other activity at {site_name(data, candidate['Site ID'])} nearby",
+            [f"{before_txt[0].upper()}{before_txt[1:]}, and {after_txt} — nothing else was checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes of this record."],
+        )
+
+        st.markdown("**Reason (required if voiding)**")
+        void_reason = st.text_area(
+            "Reason for voiding",
+            key=f"data_quality_reason_{reviewing_id}",
+            placeholder="e.g. Confirmed this was a UI test click during setup, not a real field visit.",
+            label_visibility="collapsed",
+        )
+        confirm_col, void_col = st.columns(2)
+        with confirm_col:
+            if st.button("Confirm as real", key=f"data_quality_confirm_{reviewing_id}", use_container_width=True):
+                confirm_check_as_real(data, reviewing_id)
+                st.session_state.pop("data_quality_review", None)
+                set_flash("success", "Confirmed as real.", ["No data was changed.", "This check will not be flagged again."])
+                st.rerun()
+        with void_col:
+            if st.button("Void as test data", key=f"data_quality_void_{reviewing_id}", type="primary", use_container_width=True):
+                if not void_reason.strip():
+                    st.error("Enter a reason before voiding this record.")
+                else:
+                    try:
+                        void_check_as_test_data(data, reviewing_id, void_reason)
+                        st.session_state.pop("data_quality_review", None)
+                        set_flash("success", "Voided as test data.", ["Excluded from Trial performance and the camera funnel.", "The original record remains in the workbook, marked excluded.", "Recorded in the audit log."])
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+    else:
+        st.caption(f"{len(candidates)} check{'s' if len(candidates) != 1 else ''} flagged for review — each was checked with no other trap activity nearby at the same site.")
+        for c in candidates:
+            with app_card():
+                cols = st.columns([3, 1])
+                cols[0].markdown(f"**{c['Trap ID']} · {site_name(data, c['Site ID'])}**")
+                cols[1].caption(human_dt(c["Check Time"], include_year=True))
+                st.caption(f"No other traps at this site checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes")
+                if st.button("Review", key=f"data_quality_open_{c['Check ID']}"):
+                    st.session_state.data_quality_review = c["Check ID"]
+                    st.rerun()
 
 elif page == "results":
     header("Trial performance", "See whether kills are humane and happen within the agreed time-to-kill target across the trial.")
@@ -5168,7 +5439,7 @@ elif page == "results":
         selected=build_col.selectbox("Build to assess",["Latest active build"]+builds["Build Version"].tolist()+["Compare builds","All builds — use with care"])
         site=site_col.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x))
 
-    windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")].copy()
+    windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")&(data["Windows"]["Excluded"]!="Yes")].copy()
     windows=windows[windows["End Time"].astype(str).str.strip()!=""]
     if selected=="Latest active build":
         windows=windows[windows["Build Version"].isin(current)]; context_label=f"Current build: {', '.join(current) if current else 'not configured'}"
