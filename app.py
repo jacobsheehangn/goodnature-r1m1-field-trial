@@ -44,8 +44,15 @@ DATA_ROOT = Path(os.environ.get("R1M1_DATA_DIR", str(APP_DIR))).expanduser().res
 DATA_FILE = DATA_ROOT / "field_trial_data_v8_6_5.xlsx"
 DEMO_SEED_DATA_FILE = APP_DIR / "field_trial_data_v8_6_5.xlsx"
 CLEAN_SEED_DATA_FILE = APP_DIR / "field_trial_data_clean_seed.xlsx"
-SEED_MODE = os.environ.get("R1M1_SEED_MODE", "demo").strip().lower()
-SEED_DATA_FILE = CLEAN_SEED_DATA_FILE if SEED_MODE == "clean" else DEMO_SEED_DATA_FILE
+SEED_MODE = os.environ.get("R1M1_SEED_MODE", "clean").strip().lower()
+# Was "demo" by default - R1_M1_Agreed_Release_Sequence_Updated.md's Data
+# administration section calls for removing bundled demo records safely.
+# "demo" is still available as an explicit opt-in (this session's own local
+# testing has used it throughout), just no longer what a fresh deploy gets
+# without asking for it. "clean" ships the same site/trap/build scaffold
+# with zero fabricated Checks/Windows/Followups/Audit Log activity - no
+# fake kills or results to accidentally count toward real trial numbers.
+SEED_DATA_FILE = DEMO_SEED_DATA_FILE if SEED_MODE == "demo" else CLEAN_SEED_DATA_FILE
 DEPLOYMENT_ENVIRONMENT = os.environ.get("R1M1_ENVIRONMENT", "local").strip().lower()
 APP_PASSWORD = os.environ.get("R1M1_APP_PASSWORD", "")
 ALLOW_NO_AUTH = os.environ.get("R1M1_ALLOW_NO_AUTH", "false").strip().lower() == "true"
@@ -319,6 +326,104 @@ def commit_site_code_rename(
         raise
     remove_empty_evidence_directories(old_id)
     return updated, counts, len(completed_moves)
+
+
+def permanently_remove_site(data: Dict[str, pd.DataFrame], site_id: str, reason: str) -> Dict[str, int]:
+    """Permanently delete a site and every record tied to it - Sites, Traps,
+    Visits, Windows, Followups, Checks and Photos (plus their evidence
+    files on disk).
+
+    Every other removal tool in this app (delete_unused_trap,
+    remove_unused_build) deliberately only works when there's no real
+    history to lose - by design, this app otherwise never deletes trial
+    history (Trial setup's own helper text: "Historical visit and result
+    records are preserved"). This is the one deliberate exception, built
+    for R1_M1_Agreed_Release_Sequence_Updated.md's "remove remaining
+    bundled demo records safely": bundled demo sites carry fabricated
+    kills and results that were never real trial data in the first place,
+    and leaving them live corrupts real Trial Performance numbers by
+    definition (confirmed live: 3 fabricated rat kills were already being
+    counted alongside real results before this).
+
+    Guarded accordingly - the site must already be Inactive (can't pull a
+    site out from under a field operator mid-use), and reason is
+    mandatory. Unlike delete_unused_trap's silent removal, this always
+    writes one Audit Log entry with a per-sheet count of what was removed,
+    so what happened and why is never silently lost even though the
+    underlying rows are gone for good.
+
+    Checks isn't in SITE_CODE_LINKED_SHEETS (it carries Trap ID, not Site
+    ID), so it's matched separately via the site's own trap IDs rather
+    than reusing site_code_link_counts() for that one sheet.
+    """
+    if not reason.strip():
+        raise ValueError("Enter a reason for removing this site.")
+    site_code = normalise_site_code(site_id)
+    matches = data["Sites"][data["Sites"]["Site ID"].astype(str).str.upper() == site_code]
+    if matches.empty:
+        raise ValueError("That site could not be found.")
+    site_row = matches.iloc[0]
+    if str(site_row["Status"]) != "Inactive":
+        raise ValueError("Set this site to Inactive before removing it.")
+
+    counts = site_code_link_counts(data, site_code)
+    trap_ids = set(
+        data["Traps"][data["Traps"]["Site ID"].astype(str).str.upper() == site_code]["Trap ID"].astype(str)
+    )
+
+    updated = {name: frame.copy(deep=True) for name, frame in data.items()}
+
+    checks_removed = 0
+    checks_frame = updated.get("Checks")
+    if checks_frame is not None and "Trap ID" in checks_frame.columns and trap_ids:
+        checks_mask = checks_frame["Trap ID"].astype(str).isin(trap_ids)
+        checks_removed = int(checks_mask.sum())
+        updated["Checks"] = checks_frame.loc[~checks_mask].reset_index(drop=True)
+    counts["Checks"] = checks_removed
+
+    photo_files_to_delete = []
+    photos_frame = updated.get("Photos")
+    if photos_frame is not None and "Site ID" in photos_frame.columns:
+        photo_mask = photos_frame["Site ID"].astype(str).str.upper() == site_code
+        for _, prow in photos_frame.loc[photo_mask].iterrows():
+            rel_path = _safe_relative_photo_path(prow.get("File Path", ""))
+            if rel_path is not None:
+                photo_files_to_delete.append(DATA_ROOT / rel_path)
+        updated["Photos"] = photos_frame.loc[~photo_mask].reset_index(drop=True)
+
+    for sheet_name in ["Traps", "Visits", "Windows", "Followups"]:
+        frame = updated.get(sheet_name)
+        if frame is None or "Site ID" not in frame.columns:
+            continue
+        mask = frame["Site ID"].astype(str).str.upper() == site_code
+        updated[sheet_name] = frame.loc[~mask].reset_index(drop=True)
+
+    updated["Sites"] = updated["Sites"].loc[
+        updated["Sites"]["Site ID"].astype(str).str.upper() != site_code
+    ].reset_index(drop=True)
+
+    detail = ", ".join(f"{name}: {count}" for name, count in counts.items() if count)
+    audit_change(
+        updated, "Site", site_code, "Permanently removed",
+        str(site_row["Site Name"]), "",
+        f"{reason.strip()} | Records removed: {detail}" if detail else reason.strip(),
+    )
+
+    # Data first, files after: if save_data fails, the exception propagates
+    # and no file has been touched - the workbook still references
+    # everything exactly as before. Only delete evidence files once the
+    # record removal itself is safely persisted.
+    save_data(updated)
+    for path in photo_files_to_delete:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    remove_empty_evidence_directories(site_code)
+
+    for name in data:
+        data[name] = updated[name]
+    return counts
 
 
 def next_bag_id(data, site_id: str) -> str:
@@ -5656,6 +5761,71 @@ elif page == "setup":
                                     st.rerun()
                                 except Exception as exc:
                                     st.error(f"Site code was not changed: {exc}")
+
+                    if ex["Status"] == "Inactive":
+                        with st.expander("Permanently remove this site"):
+                            st.warning("This permanently deletes every record tied to this site - traps, visits, test windows, checks, follow-up tasks and photos. This cannot be undone.")
+                            removal_counts = site_code_link_counts(data, ex["Site ID"])
+                            removal_trap_ids = data["Traps"][
+                                data["Traps"]["Site ID"].astype(str).str.upper() == normalise_site_code(ex["Site ID"])
+                            ]["Trap ID"].astype(str)
+                            removal_counts["Checks"] = (
+                                int(data["Checks"]["Trap ID"].astype(str).isin(removal_trap_ids).sum())
+                                if not data["Checks"].empty else 0
+                            )
+                            st.markdown("**This will permanently remove**")
+                            removal_preview_cols = st.columns(3)
+                            removal_preview_items = [
+                                ("Traps", removal_counts.get("Traps", 0)),
+                                ("Visits", removal_counts.get("Visits", 0)),
+                                ("Test windows", removal_counts.get("Windows", 0)),
+                                ("Checks", removal_counts.get("Checks", 0)),
+                                ("Follow-up tasks", removal_counts.get("Followups", 0)),
+                                ("Photos", removal_counts.get("Photos", 0)),
+                            ]
+                            for position, (label, count) in enumerate(removal_preview_items):
+                                removal_preview_cols[position % 3].metric(label, count)
+
+                            removal_reason = st.text_area(
+                                "Reason for removal",
+                                placeholder="Why is this site being permanently removed?",
+                                key=f"remove_site_reason_{ex['Site ID']}",
+                            )
+                            removal_confirm_name = st.text_input(
+                                f"Type the site name ({ex['Site Name']}) to confirm",
+                                key=f"remove_site_confirm_name_{ex['Site ID']}",
+                            )
+                            confirm_removal = st.checkbox(
+                                "I understand this permanently deletes real trial history and cannot be undone",
+                                key=f"confirm_site_removal_{ex['Site ID']}",
+                            )
+                            removal_ready = confirm_removal and removal_confirm_name.strip() == str(ex["Site Name"]).strip()
+                            if st.button(
+                                "Permanently remove site",
+                                type="primary",
+                                key=f"remove_site_button_{ex['Site ID']}",
+                                disabled=not removal_ready,
+                            ):
+                                if not removal_reason.strip():
+                                    st.error("Enter a reason for removing this site.")
+                                else:
+                                    try:
+                                        removed_counts = permanently_remove_site(data, ex["Site ID"], removal_reason)
+                                        total_removed = sum(removed_counts.values())
+                                        site_name_removed = ex["Site Name"]
+                                        st.session_state.pop("setup_site", None)
+                                        st.session_state.pop("site_mode", None)
+                                        set_flash(
+                                            "success",
+                                            f"{site_name_removed} permanently removed.",
+                                            [
+                                                f"{total_removed} linked record{'s' if total_removed != 1 else ''} deleted.",
+                                                "A workbook backup and audit-log entry were created before removal.",
+                                            ],
+                                        )
+                                        st.rerun()
+                                    except Exception as exc:
+                                        st.error(f"Site was not removed: {exc}")
 
                 if st.button("Cancel",key="cancel_site_panel"): st.session_state.pop("site_mode",None); st.rerun()
     else:
