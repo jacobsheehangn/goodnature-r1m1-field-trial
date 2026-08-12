@@ -4205,8 +4205,21 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 }
 
 .card-footer {
-  background: #F3F3F0;
-  margin: 12px -15px -15px -15px;
+  /* Darker than --card-bg (#f3f3f0) by the same proportion the mockup's
+     footer (#f3f3f0) was darker than its own white card - #f3f3f0 alone
+     is invisible against this app's actual (already grey) card body,
+     confirmed live on staging: computed background was identical to the
+     card behind it. */
+  background: #E7E7E4;
+  /* Bottom: 0, not a negative bleed like left/right - the card shell is a
+     flex column (Streamlit's stVerticalBlock), where a negative bottom
+     margin doesn't bleed the footer to the parent's edge the way negative
+     left/right margins do; it pushes the footer's own box 15px past the
+     card's rendered bottom entirely, outside the border, confirmed live
+     via getBoundingClientRect (footer bottom 15px beyond card bottom).
+     margin-bottom: 0 lands exactly flush with the card's true edge
+     instead, verified the same way (0px diff). */
+  margin: 12px -15px 0 -15px;
   padding: 12px 15px;
   border-radius: 0 0 20px 20px;
   font-size: 12px;
