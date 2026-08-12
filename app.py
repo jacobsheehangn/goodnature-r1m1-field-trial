@@ -6354,6 +6354,7 @@ elif page == "data_management":
                 timestamp_inputs = {}
                 if record_type == "Camera evidence":
                     editable = {
+                        "Finding At Close": FINDINGS,
                         "Evidence Usable": ["Yes", "No", "Pending"],
                         "Target Present": ["Yes", "No", "Unclear", "Pending"],
                         "Interaction Level": ["Single interaction", "Repeated interaction", "Heavy / repeated interaction", "Not applicable", "Unclear", "Pending"],
