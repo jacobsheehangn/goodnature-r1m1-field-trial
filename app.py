@@ -3292,15 +3292,22 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
   color: var(--text) !important;
 }
 
-.message-panel.warning,
-[data-testid="stAlert"][data-baseweb="notification"] {
+.message-panel.warning {
   color: #4a4317 !important;
 }
 
-.message-panel.warning *,
-[data-testid="stAlert"][data-baseweb="notification"] * {
+.message-panel.warning * {
   color: #4a4317 !important;
 }
+/* The [data-testid="stAlert"][data-baseweb="notification"] half of these
+   two rules used to live here too, tinting native st.warning() text the
+   same colour. Removed as dead weight, not just left in place: a
+   Streamlit version bump dropped the data-baseweb="notification"
+   attribute from the rendered alert markup entirely (confirmed live via
+   DevTools), so it silently stopped matching anything. The real fix -
+   covering all four native alert kinds, not just warning, and restoring
+   background colour too, which this half never touched - lives in the
+   final style block below for the cascade-order reason documented there. */
 
 /* Keep page-level navigation and context below Streamlit's mobile header.
    The block-container padding-top rule that used to live here was dead
@@ -4259,6 +4266,38 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   .funnel-row { grid-template-columns: 100px 1fr 70px; gap: 10px; }
   .funnel-conversion { font-size: 17px; }
 }
+
+/* v8.7.6.7 — restore native alert colours (st.warning/error/success/info)
+   after a Streamlit version bump changed the rendered alert DOM. The old
+   rules keyed off [data-testid="stAlert"][data-baseweb="notification"],
+   an attribute the current markup never sets - confirmed live, the actual
+   structure is stAlert > stAlertContainer (background lives here) >
+   stAlertContentWarning/Error/Success/Info (text lives here), with no
+   data-baseweb anywhere. That silently broke every native alert app-wide,
+   not just warning - background fell back to Streamlit's raw notification
+   colour instead of this app's tokens, and only warning ever had a text
+   override to begin with (error/success/info text was never themed at
+   all). :has() targets the container by its content child since the
+   background and content testid are on different elements; text color is
+   set on the content div and its descendants with the same defensive *
+   pattern as the old warning-only rule, because Streamlit's own markdown
+   children declare their own color rather than inheriting it. Placed in
+   this final block for the identical cascade-order reason documented
+   above - same testid selectors exist earlier in this file, so an earlier
+   placement would tie on specificity and could lose the cascade. */
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentWarning"]) { background: var(--amber-bg) !important; }
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentError"]) { background: var(--red-bg) !important; }
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentSuccess"]) { background: var(--green-bg) !important; }
+[data-testid="stAlertContainer"]:has([data-testid="stAlertContentInfo"]) { background: var(--blue-bg) !important; }
+
+[data-testid="stAlertContentWarning"],
+[data-testid="stAlertContentWarning"] * { color: var(--amber-text) !important; }
+[data-testid="stAlertContentError"],
+[data-testid="stAlertContentError"] * { color: var(--red-text) !important; }
+[data-testid="stAlertContentSuccess"],
+[data-testid="stAlertContentSuccess"] * { color: var(--green-text) !important; }
+[data-testid="stAlertContentInfo"],
+[data-testid="stAlertContentInfo"] * { color: var(--blue-text) !important; }
 </style>
 
 
