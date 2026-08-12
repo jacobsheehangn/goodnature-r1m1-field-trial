@@ -1646,6 +1646,37 @@ def render_followup_photo_capture(item) -> dict:
     return {**result, "follow_up_id": fid}
 
 
+def correction_necropsy_photo_context(window_id: str, trap_id: str, site_id: str) -> dict:
+    """Necropsy photo transaction context for a necropsy entered retroactively via
+    Corrections rather than a Necropsy review follow-up task - this happens when a
+    kill is confirmed after the fact (e.g. from camera evidence) and no Bag ID was
+    ever assigned to queue a normal follow-up task. Deterministic from the Window ID
+    alone (like deterministic_check_id), so it survives a browser refresh."""
+    follow_up_id = f"CORRNEC-{window_id}"
+    return {
+        "check_id": follow_up_id,
+        "follow_up_id": follow_up_id,
+        "visit_id": "",
+        "trap_id": str(trap_id),
+        "site_id": str(site_id),
+        "bag_id": "",
+        "window_id": str(window_id),
+    }
+
+
+def render_correction_necropsy_photo_capture(window_id: str, trap_id: str, site_id: str) -> dict:
+    """Prepare photos in-browser and persist each selected image before a retroactive
+    necropsy correction save."""
+    context = correction_necropsy_photo_context(window_id, trap_id, site_id)
+    result = render_photo_capture_widget(
+        context,
+        widget_key=f"critical_photo_upload_corrnec_{window_id}",
+        event_key=f"photo_component_event_corrnec_{window_id}",
+        photo_kind="Necropsy evidence",
+    )
+    return {**result, "follow_up_id": context["follow_up_id"]}
+
+
 def commit_staged_records_with_photos(
     *,
     data: dict,
@@ -6401,48 +6432,108 @@ elif page == "data_management":
                             timestamp_inputs[field] = (ts_date, ts_time)
                         reason = st.text_area("Correction reason")
                         save_correction = st.form_submit_button("Save correction", type="primary")
+                    if save_correction:
+                        if not reason.strip():
+                            st.error("Enter a correction reason before saving.")
+                        else:
+                            audit_rows = []
+                            for field, new_value in changed.items():
+                                old_value = str(data["Windows"].at[idx, field])
+                                if str(new_value) != old_value:
+                                    data["Windows"].at[idx, field] = new_value
+                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
+                            for field, (ts_date, ts_time) in timestamp_inputs.items():
+                                if ts_date is None or ts_time is None:
+                                    continue
+                                old_value = str(data["Windows"].at[idx, field])
+                                new_value = dtstr(datetime.combine(ts_date, ts_time))
+                                if new_value != old_value:
+                                    data["Windows"].at[idx, field] = new_value
+                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, new_value, reason.strip()])
+                            if audit_rows:
+                                recalculate_window(data,idx)
+                                refresh_review_status(data,selected_id)
+                                data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
+                                save_data(data)
+                                set_flash("success", "Correction saved.", [f"{len(audit_rows)} field change(s) were applied.", "The audit log retained the previous and corrected values.", "Next: make another correction or return to the relevant record."])
+                                st.rerun()
+                            else:
+                                st.info("No values changed.")
                 else:
                     editable = {
                         "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started"],
                         "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending"],
+                        "Species": SPECIES,
+                        "Rat Type": RAT_TYPES,
                         "Animal Weight Range": weight_ranges_for_species(row["Species"]) + [""],
                         "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending"],
                     }
                     changed = {}
-                    with st.form(f"correct_necropsy_evidence_{selected_id}"):
-                        for field, choices in editable.items():
-                            current = str(row[field])
-                            index = choices.index(current) if current in choices else 0
-                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
-                        reason = st.text_area("Correction reason")
-                        save_correction = st.form_submit_button("Save correction", type="primary")
-                if save_correction:
-                    if not reason.strip():
-                        st.error("Enter a correction reason before saving.")
-                    else:
-                        audit_rows = []
-                        for field, new_value in changed.items():
-                            old_value = str(data["Windows"].at[idx, field])
-                            if str(new_value) != old_value:
-                                data["Windows"].at[idx, field] = new_value
-                                audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
-                        for field, (ts_date, ts_time) in timestamp_inputs.items():
-                            if ts_date is None or ts_time is None:
-                                continue
-                            old_value = str(data["Windows"].at[idx, field])
-                            new_value = dtstr(datetime.combine(ts_date, ts_time))
-                            if new_value != old_value:
-                                data["Windows"].at[idx, field] = new_value
-                                audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, new_value, reason.strip()])
-                        if audit_rows:
-                            recalculate_window(data,idx)
-                            refresh_review_status(data,selected_id)
-                            data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
-                            save_data(data)
-                            set_flash("success", "Correction saved.", [f"{len(audit_rows)} field change(s) were applied.", "The audit log retained the previous and corrected values.", "Next: make another correction or return to the relevant record."])
-                            st.rerun()
+                    st.markdown("##### Photos")
+                    st.caption("Attach necropsy photos for the trial record. Same upload behaviour as a necropsy review task - select multiple, each uploads independently.")
+                    photo_gate = render_correction_necropsy_photo_capture(selected_id, str(row["Trap ID"]), str(row["Site ID"]))
+                    photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+                    if photo_gate.get("expected_count", 0):
+                        if photo_gate.get("manual_failure_count", 0):
+                            count = int(photo_gate["manual_failure_count"])
+                            st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
+                        elif photo_gate.get("ready"):
+                            st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
                         else:
-                            st.info("No values changed.")
+                            remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                            st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+                    for field, choices in editable.items():
+                        current = str(row[field])
+                        index = choices.index(current) if current in choices else 0
+                        changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
+                    reason = st.text_area("Correction reason", key=f"corr_reason_{selected_id}")
+                    save_label = "Please wait" if photo_blocked else "Save correction"
+                    save_correction = st.button(save_label, type="primary", key=f"correct_necropsy_evidence_save_{selected_id}", disabled=photo_blocked)
+                    if save_correction:
+                        if not reason.strip():
+                            st.error("Enter a correction reason before saving.")
+                        else:
+                            expected_photo_count = int(photo_gate.get("expected_count", 0))
+                            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+                            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+                            audit_rows = []
+                            for field, new_value in changed.items():
+                                old_value = str(staged["Windows"].at[idx, field])
+                                if str(new_value) != old_value:
+                                    staged["Windows"].at[idx, field] = new_value
+                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
+                            if not audit_rows and not expected_photo_count:
+                                st.info("No values changed.")
+                            else:
+                                recalculate_window(staged, idx)
+                                refresh_review_status(staged, selected_id)
+                                if audit_rows:
+                                    staged["Audit Log"] = pd.concat([staged["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
+
+                                def _verify_correction_persisted(reloaded):
+                                    return {}
+
+                                commit_staged_records_with_photos(
+                                    data=data,
+                                    staged=staged,
+                                    original_data=original_data,
+                                    photo_gate=photo_gate,
+                                    expected_photo_count=expected_photo_count,
+                                    record_id=photo_gate["follow_up_id"],
+                                    photos_id_column="Follow-up ID",
+                                    verify_persisted=_verify_correction_persisted,
+                                    log_prefix="correction_necropsy",
+                                    log_fields={"window_id": selected_id, "trap_id": str(row["Trap ID"])},
+                                    record_noun="correction",
+                                    record_description="necropsy correction or photo record",
+                                )
+                                set_flash(
+                                    "success", "Correction saved.",
+                                    [f"{len(audit_rows)} field change(s) were applied." if audit_rows else "No field values changed.",
+                                     f"{expected_photo_count} photo(s) attached." if expected_photo_count else "No new photos attached.",
+                                     "Next: make another correction or return to the relevant record."],
+                                )
+                                st.rerun()
         else:
             candidates = data["Checks"].copy()
             if search_text:
