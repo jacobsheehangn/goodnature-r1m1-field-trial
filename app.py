@@ -2455,6 +2455,81 @@ def status_pill(label: str, kind: str = "none") -> str:
     return f'<span class="status-pill status-pill-{html.escape(str(kind))}">{html.escape(str(label))}</span>'
 
 
+def coequal_stats(stats) -> None:
+    """Trial performance brief Phase 2 (2d) — two primary values shown at
+    identical size/weight, side by side, neither promoted over the other.
+    stats: iterable of (value, label, kind) where kind is "" or "success"."""
+    parts = []
+    for value, label, kind in stats:
+        value_class = f"coequal-value {kind}".strip()
+        parts.append(
+            f'<div class="coequal-stat"><div class="{value_class}">{html.escape(str(value))}</div>'
+            f'<div class="coequal-label">{html.escape(str(label))}</div></div>'
+        )
+    st.markdown(f'<div class="coequal-row">{"".join(parts)}</div>', unsafe_allow_html=True)
+
+
+def action_callout(message_html: str) -> None:
+    """Amber actionable-pointer callout (Trial performance brief 2d) — the
+    same visual treatment as the funnel's Main loss box, reserved for a
+    pointer at unfinished work, not passive methodology text (that's
+    card_footer below)."""
+    st.markdown(f'<div class="action-callout">{message_html}</div>', unsafe_allow_html=True)
+
+
+def card_footer(label: str, tooltip_html: str, *, wide: bool = False) -> None:
+    """Passive, tooltip-gated methodology/coverage context (Trial performance
+    brief 2g) — a short label + (i) icon, full detail on hover, tap, or
+    keyboard focus. Deliberately not a Streamlit help= tooltip: that's
+    hover-only, and this app has real mobile/field usage elsewhere, so
+    hover-only would silently break on touch devices. The tap path needs
+    install_grey_footer_tooltips() called once on the page; the keyboard
+    path needs no JS at all — :focus alone shows the tooltip via CSS,
+    since the icon carries tabindex="0"."""
+    wide_class = " wide" if wide else ""
+    st.markdown(
+        f'<div class="card-footer">{html.escape(label)}'
+        f'<span class="info-icon" tabindex="0">i</span>'
+        f'<span class="tooltip{wide_class}">{tooltip_html}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def install_grey_footer_tooltips() -> None:
+    """Tap-to-toggle behaviour for card_footer's info-icon/tooltip, for touch
+    devices where there's no true hover state. Hover and keyboard focus
+    already work via pure CSS (see .info-icon rules) with no JS at all.
+
+    One delegated click listener on the parent document, installed once and
+    guarded the same way as connection_status_watcher — event delegation
+    means it keeps working across every Streamlit rerun without needing to
+    re-attach per icon each time this markup re-renders."""
+    components.html(
+        """
+        <script>
+        (() => {
+          const parent = window.parent;
+          const doc = parent.document;
+          const INSTALL_FLAG = '__r1m1FooterTooltipsInstalled';
+          if (parent[INSTALL_FLAG]) return;
+          parent[INSTALL_FLAG] = true;
+
+          doc.addEventListener('click', (e) => {
+            const icon = e.target.closest('.info-icon');
+            const open = doc.querySelectorAll('.info-icon.tap-active');
+            const wasActive = icon && icon.classList.contains('tap-active');
+            open.forEach((el) => el.classList.remove('tap-active'));
+            if (icon && !wasActive) icon.classList.add('tap-active');
+          });
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
 def site_urgency_pill(next_due_date, today_date) -> tuple[str, str]:
     """Relative-urgency pill for a site not yet visited this cycle.
 
@@ -2577,10 +2652,16 @@ def success_state(title: str, recorded=None, updated=None, next_action=None):
         st.write(next_action)
 
 
-def header(title, subtitle=""):
+def header(title, subtitle="", *, emphasize_subtitle=False):
+    """emphasize_subtitle: Trial performance brief 2c — that page's subtitle
+    reframes toward the question the page answers and needs more visual
+    weight against its H1/cards than the shared .page-context style gives
+    every other page's subtitle. Opt-in per call site, not a global change
+    to .page-context, since no other page asked for this."""
     st.title(title)
     if subtitle:
-        st.markdown(f'<p class="page-context">{subtitle}</p>', unsafe_allow_html=True)
+        subtitle_class = "page-context page-context-emphasis" if emphasize_subtitle else "page-context"
+        st.markdown(f'<p class="{subtitle_class}">{subtitle}</p>', unsafe_allow_html=True)
 
 
 def message_panel(kind: str, title: str, lines=None):
@@ -4100,6 +4181,84 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
   background: #7d2f21 !important;
   border-color: #7d2f21 !important;
 }
+
+/* Trial performance brief Phase 2 — co-equal stat pair (Kill outcome card),
+   the tooltip-gated grey-footer pattern (every stat card + the funnel), the
+   amber actionable-pointer callout, and the restyled conversion funnel.
+   Card content already sits inside a 15px-padded, 20px-radius container
+   (the card system above) - .card-footer bleeds back out to that container's
+   own edges via negative margin, rounding only its own bottom corners to
+   match, rather than redefining the card shell itself. */
+.coequal-row { display: flex; gap: 16px; }
+.coequal-stat { flex: 1; }
+.coequal-value { font-size: 26px; font-weight: 800; color: var(--text); line-height: 1.1; }
+.coequal-value.success { color: var(--green-text); }
+.coequal-label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+.action-callout {
+  background: var(--amber-bg);
+  color: var(--amber-text);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  margin: 12px 0 0;
+}
+
+.card-footer {
+  background: #F3F3F0;
+  margin: 12px -15px -15px -15px;
+  padding: 12px 15px;
+  border-radius: 0 0 20px 20px;
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative;
+}
+.info-icon {
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  border: 1.3px solid #B8BCC2;
+  color: var(--muted);
+  font-size: 10px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tooltip {
+  position: absolute; bottom: 100%; left: 15px; margin-bottom: 6px;
+  background: var(--text); color: #FFFFFF;
+  font-size: 11px; font-weight: 400;
+  padding: 8px 10px; border-radius: 8px; width: 220px; line-height: 1.4;
+  opacity: 0; visibility: hidden; transition: opacity .15s; z-index: 10;
+}
+.tooltip.wide { width: 320px; }
+.info-icon:hover + .tooltip,
+.info-icon:focus + .tooltip,
+.info-icon.tap-active + .tooltip { opacity: 1; visibility: visible; }
+
+.funnel-row { display: grid; grid-template-columns: 140px 1fr 90px; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid #F3F3F0; }
+.funnel-row:last-child { border-bottom: none; }
+.funnel-label { font-size: 13px; color: var(--text); font-weight: 500; }
+.funnel-count { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.funnel-bar-track { height: 8px; background: #F3F3F0; border-radius: 999px; overflow: hidden; }
+.funnel-bar-fill { height: 100%; background: var(--brand-orange); border-radius: 999px; }
+.funnel-conversion { font-size: 20px; font-weight: 800; color: var(--brand-orange); text-align: right; }
+.funnel-conversion .sub { display: block; font-size: 10px; font-weight: 500; color: var(--muted); }
+.funnel-conversion.base { font-size: 14px; font-weight: 500; color: var(--muted); }
+.main-loss { background: var(--amber-bg); color: var(--amber-text); border-radius: 10px; padding: 12px 14px; font-size: 13px; margin: 4px 0 0; }
+
+/* Trial performance brief 2c — mockup value (19px/600); flagged in the brief
+   itself as needing judgment in real rendered context against the page's
+   34px-ish H1 and 22px card titles, not a value to treat as final on sight. */
+.page-context-emphasis { font-size: 19px !important; font-weight: 600 !important; color: var(--text) !important; }
+
+@media (max-width: 700px) {
+  .funnel-row { grid-template-columns: 100px 1fr 70px; gap: 10px; }
+  .funnel-conversion { font-size: 17px; }
+}
 </style>
 
 
@@ -5508,7 +5667,11 @@ elif page == "data_quality":
                     st.rerun()
 
 elif page == "results":
-    header("Trial performance", "See whether kills are humane and happen within the agreed time-to-kill target across the trial.")
+    install_grey_footer_tooltips()
+    header("Trial performance",
+        "Do we have enough evidence to launch? Efficacy against the humane-kill and time-to-kill targets, trial-wide.",
+        emphasize_subtitle=True,
+    )
     with app_card():
         product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
         product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
@@ -5558,22 +5721,25 @@ elif page == "results":
     camera_reviews_open=camera_windows[camera_windows["Review Status"]=="Open"]
     unusable=camera_windows[camera_windows["Evidence Usable"]=="No"]
 
-    st.subheader("Performance at a glance")
     outcome_card,time_card,evidence_card=st.columns(3)
     with outcome_card:
         with app_card():
             st.markdown("#### Kill outcome")
-            st.metric("Good kills",len(humane))
-            st.caption(f"Bad kills: {len(non_humane)}")
-            st.write(f"**{humane_rate:.1f}% humane**" if humane_rate is not None else "**No completed humane assessments**")
-            if len(final_pending): st.caption(f"{len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment")
+            coequal_stats([
+                (len(humane), "good kills", ""),
+                (f"{humane_rate:.0f}%" if humane_rate is not None else "—", "humane", "success" if humane_rate is not None else ""),
+            ])
+            if len(final_pending):
+                action_callout(f"→ {len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention")
+            card_footer(
+                "Necropsy-dependent",
+                f"Necropsy = physical examination of the collected animal. Based on {assessed_kills} of {len(physical_kills)} confirmed kills with a completed necropsy assessment.",
+            )
     with time_card:
         with app_card():
             st.markdown("#### Time to kill")
             st.metric("Met <24 hr target",f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—")
-            st.caption(f"Missed target: {len(missed_target)}")
             st.write(f"**Median: {human_duration(minutes=interaction_to_kill)}**" if interaction_to_kill is not None else "**No usable timing yet**")
-            if len(timing_pending): st.caption(f"{len(timing_pending)} kill{'s' if len(timing_pending)!=1 else ''} without usable timing")
             # Coverage relative to the full physical-kill population, not just the
             # internal met/missed split within the timed sample - "8 of 10 met
             # target" reads very differently depending on whether that "10" is
@@ -5583,13 +5749,20 @@ elif page == "results":
                     st.caption(f"All {len(physical_kills)} confirmed kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
                 else:
                     st.caption(f"{len(timed_kills)} of {len(physical_kills)} total kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
+            card_footer(
+                "Camera-dependent",
+                f"Camera review = watching footage of the event. Based on {len(timed_kills)} of {len(physical_kills)} confirmed kills with usable, camera-reviewed footage timing.",
+            )
     with evidence_card:
         with app_card():
             st.markdown("#### Evidence")
             st.metric("Kill assessments complete",f"{len(kill_evidence_complete)} of {len(physical_kills)}")
             st.caption(f"Camera reviews complete: {len(camera_reviews_complete)} of {len(camera_windows)}")
-            st.write(f"**Open camera reviews: {len(camera_reviews_open)} · Unusable footage: {len(unusable)}**")
             if not len(windows): st.caption("No closed windows in this selection")
+            card_footer(
+                "Coverage card",
+                f"Open camera reviews: {len(camera_reviews_open)} · Unusable footage: {len(unusable)} — explains the denominators on the other two cards.",
+            )
 
     # Only surface exceptions that could change the decision.
     attention=confirmed_kills[
@@ -5611,21 +5784,44 @@ elif page == "results":
     humane_funnel=killed[killed["Final Humane Kill"]=="Yes"]
     total_product_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Status"]=="Active")]
     if site!="All sites": total_product_traps=total_product_traps[total_product_traps["Site ID"]==site]
-    st.caption(f"Camera-sampled evidence · {len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage")
+    # Stage count, order, labels, conversion calculation and "main loss"
+    # selection logic below are unchanged from before this restyle - Trial
+    # performance brief 2h locks this section's visuals once shipped, and
+    # the brief is explicit that the underlying logic must stay
+    # byte-identical, not just look the same.
     stages=[("Rat interacted",len(interacted)),("Meaningful entry",len(entered)),("Trap activated",len(activated)),("Rat killed",len(killed)),("Humane kill",len(humane_funnel))]
     base=max(1,len(interacted))
-    for i,(label,count) in enumerate(stages):
-        prior=stages[i-1][1] if i else None
-        conversion=(count/prior*100) if prior else None
-        c1,c2=st.columns([1.2,3.8],vertical_alignment="center")
-        c1.markdown(f"**{label}**  \n{count}" + (f" · {conversion:.0f}% from previous" if conversion is not None else ""))
-        c2.progress(min(1.0,count/base))
-    if len(interacted):
-        losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
-        loss_label,loss_count=max(losses,key=lambda x:x[1])
-        if loss_count>0: st.warning(f"Main loss: {loss_count} reviewed camera window{'s' if loss_count!=1 else ''} with rat interaction {loss_label}.")
-    else:
-        helper("No reviewed camera windows with target interaction are available for this selection.")
+    with app_card():
+        rows_html=[]
+        for i,(label,count) in enumerate(stages):
+            prior=stages[i-1][1] if i else None
+            conversion=(count/prior*100) if prior else None
+            bar_pct=min(100,count/base*100)
+            if conversion is None:
+                conversion_html='<div class="funnel-conversion base">base</div>'
+            else:
+                conversion_html=f'<div class="funnel-conversion">{conversion:.0f}%<span class="sub">from prior</span></div>'
+            rows_html.append(
+                '<div class="funnel-row">'
+                f'<div><div class="funnel-label">{html.escape(label)}</div><div class="funnel-count">{count} window{"s" if count!=1 else ""}</div></div>'
+                f'<div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
+                f'{conversion_html}'
+                '</div>'
+            )
+        st.markdown("".join(rows_html), unsafe_allow_html=True)
+        if len(interacted):
+            losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
+            loss_label,loss_count=max(losses,key=lambda x:x[1])
+            if loss_count>0:
+                st.markdown(f'<div class="main-loss">Main loss: {loss_count} reviewed camera window{"s" if loss_count!=1 else ""} with rat interaction {loss_label}.</div>', unsafe_allow_html=True)
+        else:
+            helper("No reviewed camera windows with target interaction are available for this selection.")
+        card_footer(
+            "Camera-sampled evidence",
+            f"{len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage. This funnel reflects that sample, not every kill trial-wide."
+            '<br><br><b>Terms:</b> a "window" is one monitoring period for a trap, between two checks — opens when a trap is set or reset, closes whenever the next check happens, whatever the outcome. Stages: Rat interacted (detected at/near the trap) → Meaningful entry (entered far enough to potentially trigger it) → Trap activated (mechanism fired) → Rat killed → Humane kill (met the humane standard). Each stage is a subset of the one before it.',
+            wide=True,
+        )
 
     st.subheader("What is driving the result?")
     st.caption("Use one breakdown at a time to see where bad kills or slow kills are clustering.")
