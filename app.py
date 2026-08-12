@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 import hashlib
 import hmac
+import logging
 import os
 import shutil
 import re
@@ -37,6 +38,8 @@ from photo_integrity import (
     store_photo as store_pending_photo,
     verify_pending as verify_pending_photo_transaction,
 )
+
+_logger = logging.getLogger(__name__)
 
 APP_TITLE = "R1/M1 Field Trial — v8.7.6.7 Photo Integrity Corrections"
 APP_DIR = Path(__file__).resolve().parent
@@ -74,6 +77,11 @@ SHEETS = {
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
     "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
+    # Derived, read-only sheets - documentation written from code, never a
+    # second source of truth. See _derived_sheet_data() for what populates
+    # them; no UI form or widget may write to either.
+    "Trial Config": ["Parameter", "Value", "Source", "Set Date"],
+    "Kills": ["Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time", "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment", "Animal Weight Range", "Bag ID"],
 }
 
 FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no animal", "Trap disturbed", "Trap missing", "Unable to check"]
@@ -633,10 +641,21 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
     ensure_storage_ready()
     temp_file = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.tmp.xlsx"
     backup_file = None
+    effective_data = data
+    try:
+        derived = _derived_sheet_data(data)
+        effective_data = {**data, **derived}
+    except Exception:
+        # Trial Config / Kills are read-only, derived-for-convenience sheets -
+        # a bug computing them must never block or corrupt the save of every
+        # other sheet in the workbook. Fall back to whatever was already in
+        # `data` for these two keys (blank if never set) and save everything
+        # else as normal.
+        _logger.exception("Failed to compute derived Trial Config / Kills sheets; saving without updating them.")
     try:
         with pd.ExcelWriter(temp_file, engine="openpyxl") as writer:
             for name, cols in SHEETS.items():
-                df = data.get(name, blank(name)).copy()
+                df = effective_data.get(name, blank(name)).copy()
                 for c in cols:
                     if c not in df.columns:
                         df[c] = ""
@@ -2164,6 +2183,34 @@ def camera_issue_required(camera_assigned: bool, camera_condition: str, covers: 
 def physical_kill_population(windows: pd.DataFrame) -> pd.DataFrame:
     return windows[windows["Finding At Close"] == "Dead animal found"].copy()
 
+
+# Time-to-kill target per Project Brief (2025), Craig Bond (Chief Product).
+# Confirmed as the correct, current target by Jacob Sheehan, 12 Aug 2026.
+TIME_TO_KILL_TARGET_MINUTES = 24*60
+TIME_TO_KILL_TARGET_SOURCE = "Project Brief (2025), Craig Bond (Chief Product) - confirmed by Jacob Sheehan, 12 Aug 2026"
+TIME_TO_KILL_TARGET_SET_DATE = "2026-08-12"
+
+
+def _derived_sheet_data(data: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    """Compute the read-only Trial Config and Kills sheets from current data.
+
+    Documentation written from the code constant / Windows data, never a
+    second source of truth - there is no UI path that writes to either
+    sheet. Called from inside save_data() itself, not left to individual
+    call sites, since there are many save_data() call sites throughout the
+    app and missing even one would silently leave a stale or blank sheet.
+    """
+    trial_config = pd.DataFrame(
+        [["Time to kill target (minutes)", str(TIME_TO_KILL_TARGET_MINUTES), TIME_TO_KILL_TARGET_SOURCE, TIME_TO_KILL_TARGET_SET_DATE]],
+        columns=SHEETS["Trial Config"],
+    )
+
+    windows = data.get("Windows", blank("Windows"))
+    kills = physical_kill_population(windows)
+    kills_cols = SHEETS["Kills"]
+    kills_out = kills[kills_cols].copy() if not kills.empty else blank("Kills")
+
+    return {"Trial Config": trial_config, "Kills": kills_out}
 
 DATA_QUALITY_REVIEW_RECORD_TYPE = "Data quality review"
 
@@ -5499,8 +5546,8 @@ elif page == "results":
     # Time-to-kill only uses physical kills with usable camera evidence and valid footage timestamps.
     confirmed_kills["Interaction To Kill Numeric"]=pd.to_numeric(confirmed_kills["Interaction To Kill Min"],errors="coerce")
     timed_kills=confirmed_kills[(confirmed_kills["Evidence Usable"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].notna()].copy()
-    within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < 24*60]
-    missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= 24*60]
+    within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES]
+    missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES]
     timing_pending=physical_kills[~physical_kills["Window ID"].isin(timed_kills["Window ID"])]
     target_rate=len(within_target)/len(timed_kills)*100 if len(timed_kills) else None
     interaction_to_kill=timed_kills["Interaction To Kill Numeric"].median() if len(timed_kills) else None
@@ -5527,6 +5574,15 @@ elif page == "results":
             st.caption(f"Missed target: {len(missed_target)}")
             st.write(f"**Median: {human_duration(minutes=interaction_to_kill)}**" if interaction_to_kill is not None else "**No usable timing yet**")
             if len(timing_pending): st.caption(f"{len(timing_pending)} kill{'s' if len(timing_pending)!=1 else ''} without usable timing")
+            # Coverage relative to the full physical-kill population, not just the
+            # internal met/missed split within the timed sample - "8 of 10 met
+            # target" reads very differently depending on whether that "10" is
+            # 90% or 15% of all confirmed kills.
+            if len(physical_kills):
+                if len(timed_kills) == len(physical_kills):
+                    st.caption(f"All {len(physical_kills)} confirmed kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
+                else:
+                    st.caption(f"{len(timed_kills)} of {len(physical_kills)} total kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
     with evidence_card:
         with app_card():
             st.markdown("#### Evidence")
@@ -5538,7 +5594,7 @@ elif page == "results":
     # Only surface exceptions that could change the decision.
     attention=confirmed_kills[
         (confirmed_kills["Final Humane Kill"]=="No") |
-        (confirmed_kills["Interaction To Kill Numeric"] >= 24*60) |
+        (confirmed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES) |
         (confirmed_kills["Final Humane Kill"].isin(["","Pending","Unclear","Not assessable"])) |
         ((confirmed_kills["Camera Assigned"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].isna())
     ].copy()
@@ -5597,8 +5653,8 @@ elif page == "results":
             bad=len(gp[gp["Final Humane Kill"]=="No"])
             assessed=good+bad
             gp_timed=gp[gp["Interaction To Kill Numeric"].notna()]
-            met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < 24*60])
-            missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= 24*60])
+            met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES])
+            missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES])
             rows.append({
                 breakdown: site_name(data,group_value) if breakdown=="Site" and group_value!="Unknown" else group_value,
                 "Kills":len(gp),
