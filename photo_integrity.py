@@ -185,6 +185,49 @@ def recover_bag_id(data_root: Path, check_id: str, visit_id: str, trap_id: str) 
     return str(manifest.get("bag_id", ""))
 
 
+def draft_answers_path(data_root: Path, check_id: str) -> Path:
+    return transaction_dir(data_root, check_id) / "draft_answers.json"
+
+
+def save_draft_answers(data_root: Path, check_id: str, answers: dict) -> None:
+    """Best-effort persistence of in-progress check-form answers (UX audit,
+    2026-08-13): before this, a real session loss (not a brief WebSocket
+    reconnect - Streamlit already handles that fine) left the "Resume
+    checking?" flow able to restore navigation position, Bag ID and already-
+    uploaded photos, but not Finding/Species/Rat type/Condition/Camera
+    check/Notes - the operator had to retype the whole form.
+
+    Lives in the same per-check transaction directory as the photo manifest
+    (so it shares that directory's lifecycle - removed on save via
+    delete_transaction, TTL-swept via cleanup_stale_transactions - without
+    any changes to either), but is intentionally its own small file, not a
+    field on the photo manifest: a lost/corrupt draft only costs a retype,
+    nothing like the integrity stakes of lost photo evidence, so this
+    skips the manifest's schema-version/context validation entirely and
+    treats any read or write failure as simply "no draft" rather than
+    raising - a failed draft write must never block the check form itself.
+    """
+    path = draft_answers_path(data_root, check_id)
+    try:
+        _atomic_write_json(path, {"check_id": check_id, "updated_at": utc_now_text(), "answers": answers})
+    except PhotoTransientError:
+        pass
+
+
+def load_draft_answers(data_root: Path, check_id: str) -> dict:
+    path = draft_answers_path(data_root, check_id)
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    answers = value.get("answers")
+    return answers if isinstance(answers, dict) else {}
+
+
 def add_expected_photos(data_root: Path, context: dict, selections: Iterable[dict]) -> dict:
     manifest = ensure_manifest(data_root, context)
     expected = list(manifest.get("expected_photo_ids", []))

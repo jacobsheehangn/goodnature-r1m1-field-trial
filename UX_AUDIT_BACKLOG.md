@@ -66,20 +66,25 @@ to tackle next, rather than letting it go stale in a closed conversation.
   retry-merge — merging per-field across every sheet was out of scope). Regression-
   tested in `tests/test_save_concurrency.py` (conflict rejected + content preserved,
   normal single-session saves unaffected, untracked/bare-mode saves unaffected).
+- ~~"Resume checking" restored position, not answers~~ (this closed the connectivity-
+  resilience finding too — same root cause) — fixed: Finding, Species, Rat type,
+  Condition, Camera check and Notes are now snapshotted to a small JSON file
+  (`save_draft_answers()`/`load_draft_answers()` in `photo_integrity.py`) on every
+  rerun of the check page, in the same per-check directory as the existing photo
+  manifest and sharing its cleanup lifecycle (`delete_transaction()` now clears it
+  unconditionally on save, not only when photos were involved). Seeded back into
+  `session_state` the moment "Resume" is clicked — the one point guaranteed to be a
+  genuinely fresh session, so it can never clobber an in-progress edit. Regression-
+  tested in `tests/test_check_draft_persistence.py`: manifest round-trip, missing/
+  corrupt-file handling, cleanup-on-save, and a full end-to-end Playwright test that
+  fills part of a real check form, opens the resume URL in a brand-new browser
+  context (a genuine dropped session, not just a rerun), clicks Resume, and confirms
+  the form comes back pre-filled.
 
 ## High severity — data integrity & security
 
-1. **"Resume checking" restores position, not answers.** After a real session drop,
-   the resume dialog reassures the operator their work is safe — but Finding, Species,
-   Rat type, Condition, Camera check, Notes live only in ephemeral `session_state` with
-   no disk backing (unlike Bag ID/photos, which do persist). Fix direction: persist
-   in-progress answers to the same kind of small on-disk transaction record already
-   used for photos/bag ID, keyed by the deterministic check ID.
-
-2. **Connectivity resilience covers photos and position, not answers.** Same root
-   cause as #1 — the app tells operators to background the browser to use the native
-   camera, which is exactly the kind of real session loss that leaves the
-   questionnaire unrecoverable.
+None open right now — all findings from the 2026-08-13 audit that were rated High
+have been fixed. See Medium/Low below for what's left.
 
 ## Medium severity — workflow friction & scale readiness
 

@@ -29,10 +29,12 @@ from photo_integrity import (
     cleanup_stale_transactions,
     delete_transaction,
     deterministic_check_id,
+    load_draft_answers,
     log_photo_event,
     mark_retry_started,
     record_failure,
     recover_bag_id,
+    save_draft_answers,
     remove_photo as remove_pending_photo,
     rollback_final_copies,
     store_photo as store_pending_photo,
@@ -1607,6 +1609,63 @@ def ensure_pending_check_id(visit_id: str, trap_id: str) -> str:
     return expected
 
 
+def check_draft_field_keys(trap_id: str, visit_id: str) -> dict:
+    """Session-state keys for every check-form answer worth restoring after a
+    real session loss - shared by the save and restore sides of draft-answer
+    persistence so they can't drift apart (UX audit, 2026-08-13: "Resume
+    checking?" restored position, Bag ID and photos, but not these). Excludes
+    Bag ID (already recovered separately via recover_bag_id) and the rarely-
+    used check-time override (not in the audit's field list, and its date/
+    time values need different JSON serialization handling)."""
+    suffix = f"{trap_id}_{visit_id}"
+    return {
+        "finding": f"finding_{suffix}",
+        "species": f"species_{suffix}",
+        "rat_type": f"rat_type_{suffix}",
+        "condition": f"condition_{suffix}",
+        "bagged": f"bagged_{suffix}",
+        "service_ready": f"service_ready_{suffix}",
+        "service_reason": f"service_reason_{suffix}",
+        "camera_ready": f"camera_ready_{suffix}",
+        "camera_issue": f"camera_issue_{suffix}",
+        "covers": f"covers_{suffix}",
+        "adjusted": f"adjusted_{suffix}",
+        "notes": f"notes_{suffix}",
+    }
+
+
+def persist_check_draft(visit_id: str, trap_id: str) -> None:
+    """Snapshot whatever's currently answered on the check form to disk, keyed
+    by the same deterministic check ID the photo pipeline already uses. Cheap
+    (small JSON, best-effort) and safe to call every rerun of the check page -
+    session_state already retains every key a widget has ever set this
+    session, so one call site right after the Finding radio (before any
+    early return) captures the full current snapshot regardless of exactly
+    how far through the form the operator has got."""
+    check_id = deterministic_check_id(visit_id, trap_id)
+    answers = {
+        name: st.session_state[key]
+        for name, key in check_draft_field_keys(trap_id, visit_id).items()
+        if key in st.session_state
+    }
+    if answers:
+        save_draft_answers(DATA_ROOT, check_id, answers)
+
+
+def seed_check_draft(visit_id: str, trap_id: str) -> None:
+    """One-time restore of a saved draft into session_state, called only from
+    the "Resume checking?" flow - i.e. only on a genuinely fresh session, and
+    only before any check-form widget has rendered this session, so this can
+    never clobber an in-progress edit (guarded again per-key regardless)."""
+    check_id = deterministic_check_id(visit_id, trap_id)
+    draft = load_draft_answers(DATA_ROOT, check_id)
+    if not draft:
+        return
+    for name, key in check_draft_field_keys(trap_id, visit_id).items():
+        if name in draft and key not in st.session_state:
+            st.session_state[key] = draft[name]
+
+
 def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
     return {
         "check_id": ensure_pending_check_id(visit_id, trap_id),
@@ -1949,8 +2008,14 @@ def commit_staged_records_with_photos(
     finally:
         rollback_copy.unlink(missing_ok=True)
 
-    if expected_photo_count:
-        delete_transaction(DATA_ROOT, record_id)
+    # Always clear the transaction directory on a successful save, not only
+    # when photos were expected - since the draft-answers persistence (UX
+    # audit, 2026-08-13) now writes into this same directory for every check
+    # attempt, a photo-less check ("no animal found") would otherwise leave
+    # its draft file behind indefinitely instead of being cleaned up here
+    # like everything else. delete_transaction() already no-ops safely on a
+    # directory that was never created.
+    delete_transaction(DATA_ROOT, record_id)
 
     return len(saved_photo_files)
 
@@ -4497,6 +4562,11 @@ if "page" not in st.session_state:
         )
         resume_col, start_over_col = st.columns(2)
         if resume_col.button("Resume", type="primary", use_container_width=True, key="workflow_resume_confirm"):
+            # UX-audit fix (2026-08-13): restore any saved draft answers before
+            # the check form renders - this is the one moment guaranteed to be
+            # a genuinely fresh session with no check-form widgets rendered
+            # yet, so it can't clobber an in-progress edit.
+            seed_check_draft(_resume_visit_id, _resume_trap_id)
             navigate("check", site_id=_resume_site_id, visit_id=_resume_visit_id, trap_id=_resume_trap_id)
         if start_over_col.button("Start over", use_container_width=True, key="workflow_resume_start_over"):
             clear_workflow_query_params()
@@ -4975,6 +5045,11 @@ elif page == "check":
             index=None,
             key=f"finding_{trap_id}_{vid}",
         )
+        # UX-audit fix (2026-08-13): snapshot the current answers to disk on
+        # every rerun of this page, so a real session loss doesn't force
+        # retyping the whole form - see persist_check_draft's own docstring
+        # for why one call site here is enough to capture the full form.
+        persist_check_draft(vid, trap_id)
         if finding is None:
             st.caption("Choose one finding to continue.")
             return
