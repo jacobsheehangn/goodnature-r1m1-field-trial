@@ -20,55 +20,54 @@ to tackle next, rather than letting it go stale in a closed conversation.
   `access` URL query param, not just session state. Regression-tested in
   `tests/test_auth.py` (confirmed it fails against the pre-fix code, not just that it
   passes now).
+- ~~Failed save can permanently strand the field operator on that trap~~ — fixed:
+  `commit_staged_records_with_photos` now accepts
+  `session_state_keys_to_clear_on_failure` and clears them in its `except` block,
+  before `st.stop()` — so the save-lock is cleared even when the deeper commit fails,
+  not just the three earlier validation paths. Regression-tested in
+  `tests/test_save_lock_recovery.py`.
+- ~~Every field visit is silently attributed to a hardcoded operator name~~ — fixed:
+  added a real "Operator" field to the Administration popover (reachable from every
+  page, same as Sign out), bound to `st.session_state.field_operator`. The dead
+  `page == "site"` handler's copy still exists but is no longer the only path.
+  Regression-tested end-to-end in `tests/test_operator_attribution.py` (sets the name
+  via the UI, starts a visit, confirms the saved `Visits.Operator` value).
+- ~~My own bulk-activate preview could go stale against what actually commits~~ —
+  fixed: the selection checkboxes, individual time overrides, and shared date/time/
+  reason inputs are now locked (`disabled=`) once a preview is pending, and the
+  confirm step reads from a fully-frozen snapshot (`individual_times` and `reason`
+  captured into `bulkact_pending` at preview time) rather than re-reading live widget
+  state. Cancel is the only way to change the selection now. Regression-tested in
+  `tests/test_bulk_activate_lock.py`.
 
 ## High severity — data integrity & security
 
-1. **Failed save can permanently strand the field operator on that trap.**
-   `app.py` — `commit_staged_records_with_photos` calls `st.stop()` on failure without
-   resetting the per-trap saving-lock; next rerun the Save button stays disabled forever.
-   Fix direction: reset the lock in the failure path too, not just the three earlier
-   validation-failure paths.
-
-2. **"Resume checking" restores position, not answers.** After a real session drop,
+1. **"Resume checking" restores position, not answers.** After a real session drop,
    the resume dialog reassures the operator their work is safe — but Finding, Species,
    Rat type, Condition, Camera check, Notes live only in ephemeral `session_state` with
    no disk backing (unlike Bag ID/photos, which do persist). Fix direction: persist
    in-progress answers to the same kind of small on-disk transaction record already
    used for photos/bag ID, keyed by the deterministic check ID.
 
-3. **Every field visit is silently attributed to a hardcoded operator name.**
-   `field_operator` defaults to `"Jake"`; the only Operator input field lives in the
-   dead `page == "site"` handler (confirmed unreachable). Fix direction: either add a
-   real operator-name entry point to the live flow, or resurrect/repair the dead one.
-
-4. **Necropsy corrections skip the consistency rules enforced at first entry.** The
+2. **Necropsy corrections skip the consistency rules enforced at first entry.** The
    original necropsy review enforces cross-field rules (e.g. "a supportive necropsy
    must have Final Humane Kill = Yes"); the Corrections version of the same form has
    none of them. Fix direction: factor those rules into a shared validator called from
    both paths.
 
-5. **Correcting a check's Finding doesn't touch the Window it closed.** The Field-check
+3. **Correcting a check's Finding doesn't touch the Window it closed.** The Field-check
    correction tool only writes `Checks`, never `Windows.Finding At Close`, and doesn't
    recalculate anything — so "Correction saved" doesn't actually move the numbers on
    Trial Performance for exactly the kind of mistake this tool exists to fix.
 
-6. **My own bulk-activate preview can go stale against what actually commits** (Trial
-   setup → Traps → Bulk activate traps). Clicking "Preview activation" freezes the
-   selected trap list and shared date/time into session state, but the checkboxes and
-   date/time widgets above stay live underneath the preview — and per-trap individual
-   time overrides are read live, not frozen. Editing a selection after previewing can
-   silently commit something different from what the preview showed. Fix direction:
-   lock the inputs once a preview is pending, or drop the freeze and compute the
-   confirm from live state at click time.
-
-7. **No concurrency check on save.** Every save is an unconditional full-workbook
+4. **No concurrency check on save.** Every save is an unconditional full-workbook
    overwrite with no check that the on-disk file is still the version this rerun
    loaded — two operators saving around the same time can silently clobber each
    other's work. Fix direction: compare file mtime/checksum immediately before the
    final write and reject/retry-merge on mismatch.
 
-8. **Connectivity resilience covers photos and position, not answers.** Same root
-   cause as #2 — the app tells operators to background the browser to use the native
+5. **Connectivity resilience covers photos and position, not answers.** Same root
+   cause as #1 — the app tells operators to background the browser to use the native
    camera, which is exactly the kind of real session loss that leaves the
    questionnaire unrecoverable.
 

@@ -1783,6 +1783,7 @@ def commit_staged_records_with_photos(
     log_fields: dict,
     record_noun: str,
     record_description: str,
+    session_state_keys_to_clear_on_failure: Optional[list] = None,
 ) -> int:
     """Finalise photos, append Photos rows, and commit staged sheets with full rollback safety.
 
@@ -1794,6 +1795,12 @@ def commit_staged_records_with_photos(
     On success, `data` is updated in place from the reloaded workbook and any
     pending photo transaction is deleted. On failure this calls st.error and
     st.stop() and never returns, matching the pre-extraction check-save flow.
+    Because st.stop() halts the script immediately, any caller-side cleanup
+    written after this call (e.g. popping a save-in-progress lock) would never
+    run on failure - pass session_state_keys_to_clear_on_failure for anything
+    that must not survive a failed save, most importantly a save-lock key,
+    or the save button stays disabled forever on the next rerun (UX audit,
+    2026-08-13).
 
     verify_persisted(reloaded) is called only after the generic Photos checks
     pass; it must raise RuntimeError with a user-facing reason on failure, or
@@ -1907,6 +1914,8 @@ def commit_staged_records_with_photos(
             rollback_errors=rollback_errors, **log_fields,
         )
         rollback_copy.unlink(missing_ok=True)
+        for key in (session_state_keys_to_clear_on_failure or []):
+            st.session_state.pop(key, None)
         if rollback_errors or not (workbook_restored and files_restored):
             st.error(f"Save failed and automatic rollback could not be confirmed. Do not continue this {record_noun}; contact the trial lead.")
         else:
@@ -4575,6 +4584,18 @@ with st.container(
     # fresh, closed popover) on every real navigation, without needing to
     # track open/closed state ourselves.
     with st.popover("Administration", key=f"app_top_navigation_admin_popover_{st.session_state.get('page', 'sites')}"):
+        # UX-audit fix (2026-08-13): this was the only place in the live app that
+        # could set the operator name attributed to a visit/check - the sole
+        # <text_input> for it lived in a dead, unreachable page handler, so every
+        # visit was silently attributed to whatever the hardcoded default happened
+        # to be. Reachable from every page via the top nav, same as Sign out below.
+        st.session_state.field_operator = st.text_input(
+            "Operator",
+            value=st.session_state.field_operator,
+            key="top_nav_operator",
+            help="Attributed to every visit and check you record until changed.",
+        )
+        st.divider()
         st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
         st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
@@ -5145,6 +5166,7 @@ elif page == "check":
                 log_fields={"check_id": check_id, "trap_id": trap_id},
                 record_noun="check",
                 record_description="check, follow-up or photo record",
+                session_state_keys_to_clear_on_failure=[save_lock_key],
             )
 
             for key in [
@@ -6232,10 +6254,20 @@ elif page == "setup":
                 if inactive_traps.empty:
                     st.caption("No inactive traps to activate" + (f" at {site_name(data, site_filter)}" if site_filter != "All sites" else "") + ".")
                 else:
+                    pending = st.session_state.get("bulkact_pending")
+                    # UX-audit fix (2026-08-13): the selection checkboxes and time
+                    # inputs used to stay live under an already-shown preview, so
+                    # editing them after clicking "Preview" could silently commit
+                    # something different from what the preview displayed. Locking
+                    # everything below once a preview is pending means Cancel is the
+                    # only way to change the selection - what's previewed is always
+                    # exactly what gets committed.
+                    locked = pending is not None
                     bulk_reason = st.text_area(
                         "Reason for these activations",
                         placeholder="e.g. New traps deployed for tomorrow's field pass.",
                         key="bulkact_reason",
+                        disabled=locked,
                     )
                     st.markdown("#### Inactive traps")
                     selected_ids = []
@@ -6245,17 +6277,17 @@ elif page == "setup":
                         with app_card():
                             sel_col, info_col = st.columns([0.12, 0.88])
                             with sel_col:
-                                selected = st.checkbox("Select", key=f"bulkact_select_{trap_id}", label_visibility="collapsed")
+                                selected = st.checkbox("Select", key=f"bulkact_select_{trap_id}", label_visibility="collapsed", disabled=locked)
                             with info_col:
                                 st.markdown(f"**{trap_id}** · {site_name(data, tr['Site ID'])}")
                                 st.caption(f"{tr['Product']} · {tr['Build Version']}")
-                                use_individual = st.checkbox("Use a different time for this trap", key=f"bulkact_individual_toggle_{trap_id}")
+                                use_individual = st.checkbox("Use a different time for this trap", key=f"bulkact_individual_toggle_{trap_id}", disabled=locked)
                                 if use_individual:
                                     d_col, t_col = st.columns(2)
                                     with d_col:
-                                        ind_date = st.date_input("Effective date", value=now().date(), key=f"bulkact_date_{trap_id}")
+                                        ind_date = st.date_input("Effective date", value=now().date(), key=f"bulkact_date_{trap_id}", disabled=locked)
                                     with t_col:
-                                        ind_time = st.time_input("Effective time", value=now().time(), key=f"bulkact_time_{trap_id}")
+                                        ind_time = st.time_input("Effective time", value=now().time(), key=f"bulkact_time_{trap_id}", disabled=locked)
                                     individual_times[trap_id] = datetime.combine(ind_date, ind_time)
                         if selected:
                             selected_ids.append(trap_id)
@@ -6264,34 +6296,36 @@ elif page == "setup":
                     if not selected_ids:
                         st.caption("Select one or more traps above to activate them together.")
                     else:
-                        bulk_date = st.date_input("Shared effective date", value=now().date(), key="bulkact_bulk_date")
-                        bulk_time = st.time_input("Shared effective time", value=now().time(), key="bulkact_bulk_time")
+                        bulk_date = st.date_input("Shared effective date", value=now().date(), key="bulkact_bulk_date", disabled=locked)
+                        bulk_time = st.time_input("Shared effective time", value=now().time(), key="bulkact_bulk_time", disabled=locked)
                         st.caption("Applies to every selected trap that doesn't have its own individual time set above.")
-                        if st.button("Preview activation", key="bulkact_preview"):
+                        if st.button("Preview activation", key="bulkact_preview", disabled=locked):
                             st.session_state["bulkact_pending"] = {
                                 "trap_ids": list(selected_ids),
                                 "date": bulk_date,
                                 "time": bulk_time,
+                                "individual_times": dict(individual_times),
+                                "reason": bulk_reason,
                             }
                             st.rerun()
 
-                    pending = st.session_state.get("bulkact_pending")
                     if pending:
                         st.markdown("##### Confirm bulk activation")
+                        pending_individual_times = pending["individual_times"]
                         shared_dt = datetime.combine(pending["date"], pending["time"])
                         preview_rows = [
-                            {"Trap ID": trap_id, "Status": "Inactive → Active", "Effective time": human_dt(individual_times.get(trap_id, shared_dt), include_year=True)}
+                            {"Trap ID": trap_id, "Status": "Inactive → Active", "Effective time": human_dt(pending_individual_times.get(trap_id, shared_dt), include_year=True)}
                             for trap_id in pending["trap_ids"]
                         ]
                         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                         confirm_col, cancel_col = st.columns(2)
                         with confirm_col:
-                            if st.button("Confirm bulk activate", type="primary", key="bulkact_confirm", disabled=not bulk_reason.strip()):
+                            if st.button("Confirm bulk activate", type="primary", key="bulkact_confirm", disabled=not pending["reason"].strip()):
                                 applied, skipped = [], []
                                 for trap_id in pending["trap_ids"]:
-                                    effective = individual_times.get(trap_id, shared_dt)
+                                    effective = pending_individual_times.get(trap_id, shared_dt)
                                     try:
-                                        activate_trap(data, trap_id, effective, bulk_reason.strip(), commit=False)
+                                        activate_trap(data, trap_id, effective, pending["reason"].strip(), commit=False)
                                         applied.append(trap_id)
                                     except ValueError as exc:
                                         skipped.append(f"{trap_id} ({exc})")
