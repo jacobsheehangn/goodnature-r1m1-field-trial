@@ -6148,6 +6148,93 @@ elif page == "setup":
             if action_col.button("Add trap", type="primary"):
                 st.session_state.setup_trap=""; st.session_state.setup_mode="add"; st.rerun()
 
+            inactive_traps = data["Traps"][data["Traps"]["Status"] == "Inactive"].copy()
+            if site_filter != "All sites":
+                inactive_traps = inactive_traps[inactive_traps["Site ID"] == site_filter]
+            with st.expander(f"Bulk activate traps ({len(inactive_traps)} inactive)"):
+                # Trap activation window brief Phase 2 - same multi-select-plus-preview
+                # shape as Window start corrections (Data & records), reused directly
+                # rather than a new pattern: per-trap select + optional individual
+                # time, a shared bulk time, a preview step, then one confirmed commit.
+                if inactive_traps.empty:
+                    st.caption("No inactive traps to activate" + (f" at {site_name(data, site_filter)}" if site_filter != "All sites" else "") + ".")
+                else:
+                    bulk_reason = st.text_area(
+                        "Reason for these activations",
+                        placeholder="e.g. New traps deployed for tomorrow's field pass.",
+                        key="bulkact_reason",
+                    )
+                    st.markdown("#### Inactive traps")
+                    selected_ids = []
+                    individual_times = {}
+                    for _, tr in inactive_traps.sort_values(["Site ID", "Trap ID"]).iterrows():
+                        trap_id = tr["Trap ID"]
+                        with app_card():
+                            sel_col, info_col = st.columns([0.12, 0.88])
+                            with sel_col:
+                                selected = st.checkbox("Select", key=f"bulkact_select_{trap_id}", label_visibility="collapsed")
+                            with info_col:
+                                st.markdown(f"**{trap_id}** · {site_name(data, tr['Site ID'])}")
+                                st.caption(f"{tr['Product']} · {tr['Build Version']}")
+                                use_individual = st.checkbox("Use a different time for this trap", key=f"bulkact_individual_toggle_{trap_id}")
+                                if use_individual:
+                                    d_col, t_col = st.columns(2)
+                                    with d_col:
+                                        ind_date = st.date_input("Effective date", value=now().date(), key=f"bulkact_date_{trap_id}")
+                                    with t_col:
+                                        ind_time = st.time_input("Effective time", value=now().time(), key=f"bulkact_time_{trap_id}")
+                                    individual_times[trap_id] = datetime.combine(ind_date, ind_time)
+                        if selected:
+                            selected_ids.append(trap_id)
+
+                    st.markdown("#### Bulk apply")
+                    if not selected_ids:
+                        st.caption("Select one or more traps above to activate them together.")
+                    else:
+                        bulk_date = st.date_input("Shared effective date", value=now().date(), key="bulkact_bulk_date")
+                        bulk_time = st.time_input("Shared effective time", value=now().time(), key="bulkact_bulk_time")
+                        st.caption("Applies to every selected trap that doesn't have its own individual time set above.")
+                        if st.button("Preview activation", key="bulkact_preview"):
+                            st.session_state["bulkact_pending"] = {
+                                "trap_ids": list(selected_ids),
+                                "date": bulk_date,
+                                "time": bulk_time,
+                            }
+                            st.rerun()
+
+                    pending = st.session_state.get("bulkact_pending")
+                    if pending:
+                        st.markdown("##### Confirm bulk activation")
+                        shared_dt = datetime.combine(pending["date"], pending["time"])
+                        preview_rows = [
+                            {"Trap ID": trap_id, "Status": "Inactive → Active", "Effective time": human_dt(individual_times.get(trap_id, shared_dt), include_year=True)}
+                            for trap_id in pending["trap_ids"]
+                        ]
+                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
+                        confirm_col, cancel_col = st.columns(2)
+                        with confirm_col:
+                            if st.button("Confirm bulk activate", type="primary", key="bulkact_confirm", disabled=not bulk_reason.strip()):
+                                applied, skipped = [], []
+                                for trap_id in pending["trap_ids"]:
+                                    effective = individual_times.get(trap_id, shared_dt)
+                                    try:
+                                        activate_trap(data, trap_id, effective, bulk_reason.strip(), commit=False)
+                                        applied.append(trap_id)
+                                    except ValueError as exc:
+                                        skipped.append(f"{trap_id} ({exc})")
+                                if applied:
+                                    save_data(data)
+                                st.session_state.pop("bulkact_pending", None)
+                                detail = [f"{len(applied)} trap(s) activated: {', '.join(applied)}."] if applied else []
+                                if skipped:
+                                    detail.append(f"Skipped: {'; '.join(skipped)}.")
+                                set_flash("success" if applied else "error", "Bulk activation applied." if applied else "No traps were activated.", detail)
+                                st.rerun()
+                        with cancel_col:
+                            if st.button("Cancel", key="bulkact_cancel"):
+                                st.session_state.pop("bulkact_pending", None)
+                                st.rerun()
+
             view=data["Traps"].copy()
             if site_filter!="All sites": view=view[view["Site ID"]==site_filter]
             if view.empty:

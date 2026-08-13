@@ -262,3 +262,108 @@ def test_add_trap_creation_path_still_starts_window_when_active(tmp_path: Path) 
         """,
     )
     assert out["window_found"] is True
+
+
+def _bulk_activation_script(force_error_on: str = "") -> str:
+    """Mirrors the bulk-activate UI's own loop exactly: activate_trap(...,
+    commit=False) per selected trap inside a try/except, one save_data() at
+    the end. force_error_on pre-activates one trap (outside the batch) so
+    the batch's own call to it raises ValueError, same as a real mid-batch
+    failure - Phase 2's test criteria wants this proven, not assumed safe."""
+    return f"""
+        import json, app
+        from datetime import datetime
+        data = app.create_sample_data()
+        trap_ids = data["Traps"].iloc[0:3]["Trap ID"].tolist()
+        for tid in trap_ids:
+            idx = data["Traps"].index[data["Traps"]["Trap ID"] == tid][0]
+            data["Traps"].at[idx, "Status"] = "Inactive"
+            data["Windows"] = data["Windows"][data["Windows"]["Trap ID"] != tid].copy()
+        app.save_data(data)
+        data = app.load_data()
+
+        force_error_on = {force_error_on!r}
+        if force_error_on:
+            app.activate_trap(data, force_error_on, datetime(2026, 8, 13, 8, 0), "pre-activated to force a batch error")
+
+        shared_dt = datetime(2026, 8, 13, 9, 0)
+        individual_times = {{trap_ids[1]: datetime(2026, 8, 13, 11, 30)}}
+
+        applied, skipped = [], []
+        for tid in trap_ids:
+            effective = individual_times.get(tid, shared_dt)
+            try:
+                app.activate_trap(data, tid, effective, "bulk test batch", commit=False)
+                applied.append(tid)
+            except ValueError as exc:
+                skipped.append(tid)
+        if applied:
+            app.save_data(data)
+
+        reloaded = app.load_data()
+        results = {{}}
+        for tid in trap_ids:
+            trow = reloaded["Traps"][reloaded["Traps"]["Trap ID"] == tid].iloc[0]
+            window = app.open_window(reloaded, tid)
+            audit = reloaded["Audit Log"]
+            audit_rows = audit[(audit["Record Type"] == "Trap") & (audit["Record ID"] == tid) & (audit["Field"] == "Status") & (audit["New Value"] == "Active")]
+            results[tid] = {{
+                "status": trow["Status"],
+                "window_start": str(window["Start Time"]) if window is not None else None,
+                "audit_count": len(audit_rows),
+            }}
+        print(json.dumps({{"applied": applied, "skipped": skipped, "results": results, "trap_ids": trap_ids}}))
+        """
+
+
+def test_bulk_activation_batch_of_three_each_gets_correct_window_and_audit(tmp_path: Path) -> None:
+    out = _run(tmp_path, _bulk_activation_script())
+    trap_ids = out["trap_ids"]
+    assert out["applied"] == trap_ids
+    assert out["skipped"] == []
+    for tid in trap_ids:
+        r = out["results"][tid]
+        assert r["status"] == "Active"
+        assert r["window_start"] is not None
+        assert r["audit_count"] == 1
+
+
+def test_bulk_activation_mixes_shared_and_individual_times_correctly(tmp_path: Path) -> None:
+    out = _run(tmp_path, _bulk_activation_script())
+    trap_ids = out["trap_ids"]
+    shared_result = out["results"][trap_ids[0]]
+    individual_result = out["results"][trap_ids[1]]
+    other_shared_result = out["results"][trap_ids[2]]
+    assert shared_result["window_start"] == "2026-08-13 09:00:00"
+    assert other_shared_result["window_start"] == "2026-08-13 09:00:00"
+    assert individual_result["window_start"] == "2026-08-13 11:30:00"
+
+
+def test_bulk_activation_error_on_one_trap_does_not_corrupt_or_skip_the_others(tmp_path: Path) -> None:
+    """Same failure-isolation standard as every other bulk write this session:
+    one trap already Active (simulating a mid-batch failure) must not
+    partially-apply or corrupt the batch - the other two still activate
+    correctly, and the failed one is cleanly skipped, not left broken."""
+    script = """
+        import json, app
+        data = app.create_sample_data()
+        trap_ids = data["Traps"].iloc[0:3]["Trap ID"].tolist()
+        print(json.dumps({"trap_ids": trap_ids}))
+        """
+    ids_out = _run(tmp_path, script)
+    force_trap = ids_out["trap_ids"][0]
+
+    out = _run(tmp_path, _bulk_activation_script(force_error_on=force_trap))
+    trap_ids = out["trap_ids"]
+    assert out["applied"] == trap_ids[1:]
+    assert out["skipped"] == [trap_ids[0]]
+    # The pre-activated trap is untouched by the batch (still Active, from
+    # the setup activation, not corrupted by the failed batch attempt).
+    assert out["results"][trap_ids[0]]["status"] == "Active"
+    assert out["results"][trap_ids[0]]["audit_count"] == 1
+    # The other two still activated correctly despite the batch containing a failure.
+    for tid in trap_ids[1:]:
+        r = out["results"][tid]
+        assert r["status"] == "Active"
+        assert r["window_start"] is not None
+        assert r["audit_count"] == 1
