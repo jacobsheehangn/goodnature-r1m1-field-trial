@@ -4607,6 +4607,11 @@ with st.container(
         st.divider()
         if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
             clear_workflow_query_params()
+            # The signed access token in the URL is what lets a refresh survive
+            # without re-prompting (see require_authentication) - it must be
+            # cleared here too, or a rerun immediately re-authenticates from the
+            # still-valid URL and Sign out has no effect.
+            st.query_params.pop(AUTH_QUERY_KEY, None)
             st.session_state.clear()
             st.rerun()
 
