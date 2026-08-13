@@ -671,8 +671,31 @@ def storage_is_potentially_ephemeral() -> bool:
     return path.startswith("/tmp") or path.startswith("/var/tmp") or "/.streamlit/" in path
 
 
+# UX audit (2026-08-13): save_data() used to be an unconditional overwrite with no
+# check that the on-disk workbook was still the version this session's data dict was
+# loaded from - two operators saving around the same time could silently clobber each
+# other's work. session_state is set once, right after the single top-level
+# `data = load_data()` call, to the mtime that data was actually loaded at; save_data()
+# then rejects a save if the file has moved since, rather than overwriting blind. Only
+# tracked in session_state (not a module-level global) since Streamlit serves multiple
+# sessions from the same process - a plain global would leak between users' reruns.
+DATA_LOADED_MTIME_KEY = "_data_loaded_mtime"
+
+
 def save_data(data: Dict[str, pd.DataFrame]) -> None:
-    """Atomically replace the workbook and retain a timestamped recovery copy."""
+    """Atomically replace the workbook and retain a timestamped recovery copy.
+
+    Rejects the save (st.error + st.stop, matching this file's other hard-failure
+    paths) if the on-disk workbook has changed since this session's data was loaded -
+    see DATA_LOADED_MTIME_KEY. The check is opt-in: it only fires when session_state
+    carries a tracked mtime, so bare-mode scripts and tests that call save_data()
+    directly (no real Streamlit session) are unaffected.
+    """
+    expected_mtime = st.session_state.get(DATA_LOADED_MTIME_KEY)
+    if expected_mtime is not None and DATA_FILE.exists() and _data_file_mtime() != expected_mtime:
+        st.error("This record was changed by someone else since this page loaded. Reload the page to see the latest version, then try again.")
+        st.stop()
+        return  # safety net for bare-mode/test contexts where st.stop() is a no-op
     ensure_storage_ready()
     temp_file = DATA_ROOT / f".{DATA_FILE.name}.{uuid.uuid4().hex}.tmp.xlsx"
     backup_file = None
@@ -702,6 +725,8 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
         backups = sorted(BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
         for old_backup in backups[20:]:
             old_backup.unlink(missing_ok=True)
+        if expected_mtime is not None:
+            st.session_state[DATA_LOADED_MTIME_KEY] = _data_file_mtime()
     finally:
         temp_file.unlink(missing_ok=True)
 
@@ -4433,6 +4458,11 @@ require_authentication()
 data = load_data()
 apply_timezone_correction_migration(data)
 apply_mouse_weight_reclassification_migration(data)
+# Save-concurrency guard (UX audit, 2026-08-13): record the mtime this session's
+# data was actually loaded at (post-migration, since either migration above may
+# have already saved) so save_data() can detect and reject a save made against a
+# workbook someone else has since changed, instead of silently overwriting it.
+st.session_state[DATA_LOADED_MTIME_KEY] = _data_file_mtime()
 if not st.session_state.get("photo_cleanup_done"):
     _completed_necropsy_ids = data["Followups"][
         (data["Followups"]["Follow-up Type"] == "Necropsy review") & (data["Followups"]["Status"] == "Complete")

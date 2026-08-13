@@ -54,6 +54,18 @@ to tackle next, rather than letting it go stale in a closed conversation.
   `followup_genuinely_warranted()` merge above) can now correctly surface "Needs
   recreation" if the correction newly warrants a review. Regression-tested end-to-end
   in `tests/test_correction_consistency.py`.
+- ~~No concurrency check on save~~ — fixed: `save_data()` now rejects a save if the
+  on-disk workbook's mtime has moved since this session's data was loaded, instead of
+  silently overwriting. Tracked via `st.session_state[DATA_LOADED_MTIME_KEY]`, set
+  once right after the app's single top-level `load_data()` call — session-scoped
+  (not a module-level global) since Streamlit serves multiple sessions from one
+  process. Opt-in: inert for the ~35 other `save_data()` call sites and every existing
+  bare-mode test, since the check only fires when session_state carries a tracked
+  mtime. On conflict: `st.error(...)` + `st.stop()`, matching this file's existing
+  hard-failure pattern, telling the user to reload and retry (a reject, not a
+  retry-merge — merging per-field across every sheet was out of scope). Regression-
+  tested in `tests/test_save_concurrency.py` (conflict rejected + content preserved,
+  normal single-session saves unaffected, untracked/bare-mode saves unaffected).
 
 ## High severity — data integrity & security
 
@@ -64,13 +76,7 @@ to tackle next, rather than letting it go stale in a closed conversation.
    in-progress answers to the same kind of small on-disk transaction record already
    used for photos/bag ID, keyed by the deterministic check ID.
 
-2. **No concurrency check on save.** Every save is an unconditional full-workbook
-   overwrite with no check that the on-disk file is still the version this rerun
-   loaded — two operators saving around the same time can silently clobber each
-   other's work. Fix direction: compare file mtime/checksum immediately before the
-   final write and reject/retry-merge on mismatch.
-
-3. **Connectivity resilience covers photos and position, not answers.** Same root
+2. **Connectivity resilience covers photos and position, not answers.** Same root
    cause as #1 — the app tells operators to background the browser to use the native
    camera, which is exactly the kind of real session loss that leaves the
    questionnaire unrecoverable.
