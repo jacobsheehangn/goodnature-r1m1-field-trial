@@ -1289,6 +1289,44 @@ def close_window(data, trap_id, when, finding, bag_id):
     return str(w["Window ID"])
 
 
+def activate_trap(data, trap_id, effective_time, reason, commit=True):
+    """Trap activation window brief - mirrors change_trap_build()'s shape:
+    a consequential, window-affecting status change gets its own function
+    with its own effective-timestamp capture, not folded into the generic
+    edit path. Opens exactly one window; there is nothing to close since an
+    Inactive trap has none open."""
+    idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+    if data["Traps"].at[idx, "Status"] == "Active":
+        raise ValueError("Trap is already active.")
+    data["Traps"].at[idx, "Status"] = "Active"
+    start_window(data, trap_id, effective_time)
+    audit_change(data, "Trap", trap_id, "Status", "Inactive", "Active", reason)
+    if commit:
+        save_data(data)
+
+
+def deactivate_trap(data, trap_id, effective_time, reason, commit=True):
+    """Closes any open window (Review Status: Not required, same as an
+    administrative build/move change - this is not a real finding and must
+    not spawn a spurious camera-review follow-up) and opens no new window.
+    This is the one place activate/deactivate are not mirror images: a
+    deactivated trap has nothing to monitor."""
+    idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+    if data["Traps"].at[idx, "Status"] == "Inactive":
+        raise ValueError("Trap is already inactive.")
+    current = open_window(data, trap_id)
+    if current is not None:
+        widx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
+        data["Windows"].at[widx, "End Time"] = dtstr(effective_time)
+        data["Windows"].at[widx, "Status"] = "Closed"
+        data["Windows"].at[widx, "End Reason"] = "Trap deactivated"
+        data["Windows"].at[widx, "Review Status"] = "Not required"
+    data["Traps"].at[idx, "Status"] = "Inactive"
+    audit_change(data, "Trap", trap_id, "Status", "Active", "Inactive", reason)
+    if commit:
+        save_data(data)
+
+
 def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag_id, reason, required, priority):
     row = [make_id("FU"), followup_type, site_id, trap_id, visit_id, window_id, bag_id, dtstr(), priority, reason, required, "Open", "", ""]
     data["Followups"] = pd.concat([data["Followups"], pd.DataFrame([row], columns=SHEETS["Followups"])], ignore_index=True)
@@ -5981,12 +6019,8 @@ elif page == "trap_edit":
             step=1,
             value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1,
         )
-        status = st.radio(
-            "Status",
-            ["Active", "Inactive"],
-            index=0 if existing["Status"] == "Active" else 1,
-            horizontal=True,
-        )
+        st.markdown(status_pill(existing["Status"], "success" if existing["Status"] == "Active" else "none"), unsafe_allow_html=True)
+        st.caption("Use Activate trap / Deactivate trap below to change status - it opens or closes a monitoring window, so it isn't a plain field edit.")
         notes = st.text_area("Notes", value=existing["Notes"])
         save_edit = st.form_submit_button("Save changes", type="primary")
     if save_edit:
@@ -5994,11 +6028,52 @@ elif page == "trap_edit":
         data["Traps"].at[idx, "Location"] = location.strip()
         data["Traps"].at[idx, "Camera ID"] = camera.strip()
         data["Traps"].at[idx, "Route Order"] = str(order)
-        data["Traps"].at[idx, "Status"] = status
         data["Traps"].at[idx, "Notes"] = notes
         save_data(data)
         set_flash("success", f"{trap_id} updated.")
         go("setup")
+
+    st.divider()
+    if existing["Status"] == "Active":
+        with st.expander("Deactivate trap"):
+            deactivate_reason = st.text_area("Reason for deactivation", key=f"deactivate_reason_{trap_id}")
+            deactivate_date = st.date_input("Effective date", value=now().date(), key=f"deactivate_date_{trap_id}")
+            deactivate_time = st.time_input("Effective time", value=now().time(), key=f"deactivate_time_{trap_id}")
+            confirm_deactivate = st.checkbox(
+                "Close the current window (if open) and set this trap to Inactive",
+                key=f"confirm_deactivate_{trap_id}",
+            )
+            if st.button("Deactivate trap", type="primary", key=f"commit_deactivate_{trap_id}", disabled=not confirm_deactivate):
+                if not deactivate_reason.strip():
+                    st.error("Enter a reason for deactivation.")
+                else:
+                    try:
+                        effective = datetime.combine(deactivate_date, deactivate_time).replace(microsecond=0)
+                        deactivate_trap(data, trap_id, effective, deactivate_reason.strip())
+                        set_flash("success", f"{trap_id} deactivated.", ["Any open window was closed.", "No new window was started."])
+                        go("setup")
+                    except Exception as exc:
+                        st.error(str(exc))
+    else:
+        with st.expander("Activate trap"):
+            activate_reason = st.text_area("Reason for activation", key=f"activate_reason_{trap_id}")
+            activate_date = st.date_input("Effective date", value=now().date(), key=f"activate_date_{trap_id}")
+            activate_time = st.time_input("Effective time", value=now().time(), key=f"activate_time_{trap_id}")
+            confirm_activate = st.checkbox(
+                "Start a new monitoring window and set this trap to Active",
+                key=f"confirm_activate_{trap_id}",
+            )
+            if st.button("Activate trap", type="primary", key=f"commit_activate_{trap_id}", disabled=not confirm_activate):
+                if not activate_reason.strip():
+                    st.error("Enter a reason for activation.")
+                else:
+                    try:
+                        effective = datetime.combine(activate_date, activate_time).replace(microsecond=0)
+                        activate_trap(data, trap_id, effective, activate_reason.strip())
+                        set_flash("success", f"{trap_id} activated.", ["A new monitoring window was started."])
+                        go("setup")
+                    except Exception as exc:
+                        st.error(str(exc))
 
     st.divider()
     show_move = st.toggle("Move trap", key=f"show_move_{trap_id}")
@@ -6133,7 +6208,7 @@ elif page == "setup":
                     if dep_date==now().date():
                         st.caption("Defaults to today — change this if the trap was actually deployed earlier.")
                     image=st.text_input("Setup image link",value=existing["Setup Image Link"] if existing is not None else "")
-                    status=st.selectbox("Status",["Active","Inactive"],index=0 if existing is None or existing["Status"]=="Active" else 1)
+                    status=st.selectbox("Status",["Active","Inactive"],index=0 if existing is None or existing["Status"]=="Active" else 1,disabled=mode=="edit",help="Use Activate trap / Deactivate trap for an existing trap." if mode=="edit" else None)
                     notes=st.text_area("Notes",value=existing["Notes"] if existing is not None else "")
                     save=st.form_submit_button("Save trap changes" if mode=="edit" else "Add trap",type="primary")
                 if save:
@@ -6145,10 +6220,13 @@ elif page == "setup":
                             idx=data["Traps"].index[data["Traps"]["Trap ID"]==trap_id][0]
                             old_build=data["Traps"].at[idx,"Build Version"]
                             old_site=data["Traps"].at[idx,"Site ID"]
+                            old_status=data["Traps"].at[idx,"Status"]
                             if old_site!=site:
                                 st.error("Use Move trap to change sites. Direct site changes are blocked so trial history is not rewritten.")
                             elif old_build!=build and open_window(data,trap_id) is not None:
                                 st.error("Close the active test window before changing this trap's build.")
+                            elif old_status!=status:
+                                st.error("Use Activate trap / Deactivate trap to change status. Direct status changes are blocked so a trial window is never silently opened or left open.")
                             else:
                                 data["Traps"].loc[idx,SHEETS["Traps"]]=row
                                 save_data(data)
