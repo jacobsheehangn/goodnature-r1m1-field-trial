@@ -2295,6 +2295,24 @@ def camera_issue_required(camera_assigned: bool, camera_condition: str, covers: 
     return bool(camera_assigned and (camera_condition != "Working" or covers != "Yes"))
 
 
+def necropsy_consistency_errors(status: str, assessment: str, final: str) -> list:
+    """Cross-field consistency rules for a necropsy result. Shared by the
+    original Necropsy review task and the Necropsy evidence correction tool
+    so a correction can't silently save data the first-entry flow would have
+    rejected (UX audit, 2026-08-13 - the correction form previously had no
+    equivalent of these checks at all)."""
+    errors = []
+    if status == "Complete" and assessment == "Not assessable":
+        errors.append("A completed necropsy cannot be marked Not assessable.")
+    if assessment == "Supports humane kill" and final != "Yes":
+        errors.append("A supportive necropsy must have a final humane-kill result of Yes.")
+    if assessment == "Does not support humane kill" and final != "No":
+        errors.append("A non-supportive necropsy must have a final humane-kill result of No.")
+    if status in ["Not completed", "Unable to assess"] and final in ["Yes", "No"]:
+        errors.append("Do not record a definite final result when the necropsy was not completed or assessable.")
+    return errors
+
+
 def physical_kill_population(windows: pd.DataFrame) -> pd.DataFrame:
     return windows[windows["Finding At Close"] == "Dead animal found"].copy()
 
@@ -5593,10 +5611,7 @@ elif page == "followups":
                 if submit:
                     errors=[]
                     if "Select…" in [status,assessment,weight_range,final]: errors.append("Complete all required necropsy fields.")
-                    if status=="Complete" and assessment=="Not assessable": errors.append("A completed necropsy cannot be marked Not assessable.")
-                    if assessment=="Supports humane kill" and final!="Yes": errors.append("A supportive necropsy must have a final humane-kill result of Yes.")
-                    if assessment=="Does not support humane kill" and final!="No": errors.append("A non-supportive necropsy must have a final humane-kill result of No.")
-                    if status in ["Not completed","Unable to assess"] and final in ["Yes","No"]: errors.append("Do not record a definite final result when the necropsy was not completed or assessable.")
+                    errors.extend(necropsy_consistency_errors(status,assessment,final))
                     idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
                     if not idxs: errors.append("The linked test window cannot be found.")
                     if errors:
@@ -7081,8 +7096,18 @@ elif page == "data_management":
                     save_label = "Please wait" if photo_blocked else "Save correction"
                     save_correction = st.button(save_label, type="primary", key=f"correct_necropsy_evidence_save_{selected_id}", disabled=photo_blocked)
                     if save_correction:
+                        # UX-audit fix (2026-08-13): this form used to let a correction save a
+                        # necropsy result the original review task would have rejected outright
+                        # (e.g. "Supports humane kill" paired with Final Humane Kill = No) - same
+                        # validator the review task itself calls, so a correction can't reintroduce
+                        # exactly the kind of inconsistency this tool exists to fix.
+                        necropsy_errors = necropsy_consistency_errors(
+                            changed["Necropsy Status"], changed["Necropsy Assessment"], changed["Final Humane Kill"]
+                        )
                         if not reason.strip():
                             st.error("Enter a correction reason before saving.")
+                        elif necropsy_errors:
+                            st.error("Please correct the necropsy result:\n\n" + "\n".join(f"- {err}" for err in necropsy_errors))
                         else:
                             expected_photo_count = int(photo_gate.get("expected_count", 0))
                             original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
@@ -7152,6 +7177,22 @@ elif page == "data_management":
                             if str(new_value)!=old_value:
                                 data["Checks"].at[idx,field]=new_value
                                 audit_rows.append([make_id("CHG"),dtstr(),record_type,selected_id,field,old_value,str(new_value),reason.strip()])
+                        # UX-audit fix (2026-08-13): correcting a check's Finding used to leave
+                        # the Window it closed untouched - Trial Performance and the Kills sheet
+                        # are both Windows-driven, so the correction silently didn't move the
+                        # numbers it exists to fix. Propagate to the window this check closed,
+                        # same as a fresh check does via close_window(), and recompute/re-review it.
+                        window_id=str(row["Window Closed"])
+                        if window_id and str(finding)!=str(row["Finding"]):
+                            window_matches=data["Windows"].index[data["Windows"]["Window ID"]==window_id].tolist()
+                            if window_matches:
+                                widx=window_matches[0]
+                                old_window_finding=str(data["Windows"].at[widx,"Finding At Close"])
+                                if old_window_finding!=str(finding):
+                                    data["Windows"].at[widx,"Finding At Close"]=finding
+                                    audit_rows.append([make_id("CHG"),dtstr(),record_type,window_id,"Finding At Close",old_window_finding,str(finding),reason.strip()])
+                                recalculate_window(data,widx)
+                                refresh_review_status(data,window_id)
                         if audit_rows:
                             data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
                             save_data(data); set_flash("success","Correction saved.",[f"{len(audit_rows)} field change(s) were applied.","The audit log retained the previous and corrected values.","Next: make another correction or return to the relevant record."]); st.rerun()

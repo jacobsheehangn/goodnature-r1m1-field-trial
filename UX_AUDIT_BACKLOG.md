@@ -39,6 +39,21 @@ to tackle next, rather than letting it go stale in a closed conversation.
   captured into `bulkact_pending` at preview time) rather than re-reading live widget
   state. Cancel is the only way to change the selection now. Regression-tested in
   `tests/test_bulk_activate_lock.py`.
+- ~~Necropsy corrections skipped the consistency rules enforced at first entry~~ —
+  fixed: extracted `necropsy_consistency_errors()` (the 4 cross-field rules — e.g. "a
+  supportive necropsy must have Final Humane Kill = Yes") into a shared function, now
+  called from both the original Necropsy review task and the Necropsy evidence
+  correction form. Regression-tested in `tests/test_correction_consistency.py`
+  (pure-function coverage of all 4 rules, plus an end-to-end UI test confirming the
+  correction form actually blocks an inconsistent save and doesn't persist it).
+- ~~Correcting a check's Finding didn't touch the Window it closed~~ — fixed: the
+  Field check correction now also updates `Windows.Finding At Close` for the window
+  the check closed (via `Checks."Window Closed"`), with its own audit-log row, then
+  calls `recalculate_window()` and `refresh_review_status()` — so a corrected Finding
+  actually moves the Trial Performance / Kills numbers, and (via the
+  `followup_genuinely_warranted()` merge above) can now correctly surface "Needs
+  recreation" if the correction newly warrants a review. Regression-tested end-to-end
+  in `tests/test_correction_consistency.py`.
 
 ## High severity — data integrity & security
 
@@ -49,24 +64,13 @@ to tackle next, rather than letting it go stale in a closed conversation.
    in-progress answers to the same kind of small on-disk transaction record already
    used for photos/bag ID, keyed by the deterministic check ID.
 
-2. **Necropsy corrections skip the consistency rules enforced at first entry.** The
-   original necropsy review enforces cross-field rules (e.g. "a supportive necropsy
-   must have Final Humane Kill = Yes"); the Corrections version of the same form has
-   none of them. Fix direction: factor those rules into a shared validator called from
-   both paths.
-
-3. **Correcting a check's Finding doesn't touch the Window it closed.** The Field-check
-   correction tool only writes `Checks`, never `Windows.Finding At Close`, and doesn't
-   recalculate anything — so "Correction saved" doesn't actually move the numbers on
-   Trial Performance for exactly the kind of mistake this tool exists to fix.
-
-4. **No concurrency check on save.** Every save is an unconditional full-workbook
+2. **No concurrency check on save.** Every save is an unconditional full-workbook
    overwrite with no check that the on-disk file is still the version this rerun
    loaded — two operators saving around the same time can silently clobber each
    other's work. Fix direction: compare file mtime/checksum immediately before the
    final write and reject/retry-merge on mismatch.
 
-5. **Connectivity resilience covers photos and position, not answers.** Same root
+3. **Connectivity resilience covers photos and position, not answers.** Same root
    cause as #1 — the app tells operators to background the browser to use the native
    camera, which is exactly the kind of real session loss that leaves the
    questionnaire unrecoverable.
