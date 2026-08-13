@@ -444,6 +444,20 @@ def next_bag_id(data, site_id: str) -> str:
     return f"{prefix}-{number:03d}"
 
 
+def followup_genuinely_warranted(w) -> bool:
+    """True if this window's own data calls for a Camera/Necropsy review, independent
+    of whether a follow-up task currently exists - mirrors the conditions add_followup's
+    callers use to create those tasks in the first place. A dead-animal window only
+    still needs a necropsy review while Final Humane Kill is Pending - once that's set
+    (e.g. entered directly via the Corrections necropsy-evidence path, which legitimately
+    never creates a follow-up row), the review is genuinely done, not missing."""
+    finding = w["Finding At Close"]
+    assessable = finding not in ["Trap missing", "Unable to check"]
+    necropsy_warranted = finding == "Dead animal found" and w["Final Humane Kill"] == "Pending"
+    camera_warranted = assessable and w["Camera Assigned"] == "Yes"
+    return necropsy_warranted or camera_warranted
+
+
 def refresh_review_status(data, window_id: str) -> None:
     if not window_id:
         return
@@ -452,12 +466,33 @@ def refresh_review_status(data, window_id: str) -> None:
         return
     tasks = data["Followups"][(data["Followups"]["Window ID"] == window_id) & (data["Followups"]["Follow-up Type"].isin(["Camera review", "Necropsy review"]))]
     if tasks.empty:
-        status = "Not required"
+        # An empty task list only means "not required" if a review was never warranted -
+        # otherwise a removed/lost task must not be read as "nothing further to do".
+        w = data["Windows"].loc[idxs[0]]
+        status = "Needs recreation" if followup_genuinely_warranted(w) else "Not required"
     elif (tasks["Status"] == "Open").any():
         status = "Open"
     else:
         status = "Complete"
     data["Windows"].at[idxs[0], "Review Status"] = status
+
+
+def missing_followup_windows(data) -> pd.DataFrame:
+    """Closed windows whose own data genuinely warrants a Camera/Necropsy review but
+    that currently have no such follow-up task linked - whether freshly orphaned
+    (Review Status 'Needs recreation') or a legacy row saved before that status
+    existed (still showing the earlier, incorrect 'Not required' label). Recomputed
+    from the underlying data rather than trusting the stored label, so it finds both."""
+    windows = data["Windows"]
+    closed = windows[windows["Status"] == "Closed"]
+    if closed.empty:
+        return closed
+    linked_window_ids = set(
+        data["Followups"][data["Followups"]["Follow-up Type"].isin(["Camera review", "Necropsy review"])]["Window ID"].astype(str)
+    )
+    missing = ~closed["Window ID"].astype(str).isin(linked_window_ids)
+    warranted = closed.apply(followup_genuinely_warranted, axis=1)
+    return closed[missing & warranted]
 
 
 def blank(sheet: str) -> pd.DataFrame:
@@ -2113,6 +2148,39 @@ def remove_followup_task(data, followup_id: str, reason: str):
     for name in data:
         data[name] = staged[name]
     return task
+
+
+def recreate_followup(data, window_id: str, followup_type: str, reason: str):
+    """Recreate a Camera review or Necropsy review follow-up for a window whose Review
+    Status shows 'Needs recreation' - the only path back once a genuinely-warranted task
+    has been removed (or otherwise lost). Wraps add_followup rather than duplicating it,
+    so a recreated task behaves identically to a normally-created one."""
+    if not reason.strip():
+        raise ValueError("Enter a reason for recreating the follow-up.")
+    matches = data["Windows"][data["Windows"]["Window ID"] == window_id]
+    if matches.empty:
+        raise ValueError("Window not found.")
+    w = matches.iloc[0]
+    existing = data["Followups"][
+        (data["Followups"]["Window ID"] == window_id)
+        & (data["Followups"]["Follow-up Type"] == followup_type)
+        & (data["Followups"]["Status"] == "Open")
+    ]
+    if not existing.empty:
+        raise ValueError("An open follow-up of this type already exists for this window.")
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    add_followup(
+        staged, followup_type, w["Site ID"], w["Trap ID"], w.get("Visit ID", ""),
+        window_id, w.get("Bag ID", ""), w["Finding At Close"],
+        "Recreated after prior removal — see Audit Log for original removal reason.",
+        "Normal",
+    )
+    refresh_review_status(staged, window_id)
+    audit_change(staged, "Follow-up", window_id, "Recreated", "", followup_type, reason.strip())
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
+    return followup_type
 
 
 def remove_unused_build(data, product: str, version: str, reason: str):
@@ -6748,6 +6816,60 @@ elif page == "data_management":
         search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
 
         if record_type == "Follow-up task":
+            orphaned = missing_followup_windows(data)
+            if not orphaned.empty:
+                st.markdown("##### Recreate a missing follow-up")
+                st.caption("Windows whose finding or camera assignment genuinely warrants a review but that currently have no linked follow-up task - most likely one was removed and needs restoring.")
+                orphan_options = orphaned["Window ID"].tolist()
+                orphan_selected = st.selectbox(
+                    "Select window needing a follow-up",
+                    orphan_options,
+                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {r['Finding At Close']} · {wid}")(orphaned[orphaned["Window ID"] == wid].iloc[0]),
+                    key="recreate_followup_window",
+                )
+                orphan_row = orphaned[orphaned["Window ID"] == orphan_selected].iloc[0]
+                workflow_context([
+                    ("Trap", orphan_row["Trap ID"]),
+                    ("Site", site_name(data, orphan_row["Site ID"])),
+                    ("Bag ID", orphan_row["Bag ID"]),
+                    ("Finding at close", orphan_row["Finding At Close"]),
+                    ("Final humane kill", orphan_row["Final Humane Kill"]),
+                    ("Review status", orphan_row["Review Status"]),
+                ])
+                types_needed = []
+                assessable_orphan = orphan_row["Finding At Close"] not in ["Trap missing", "Unable to check"]
+                if orphan_row["Finding At Close"] == "Dead animal found":
+                    types_needed.append("Necropsy review")
+                if assessable_orphan and orphan_row["Camera Assigned"] == "Yes":
+                    types_needed.append("Camera review")
+                recreate_type = st.selectbox(
+                    "Follow-up type to recreate", types_needed, key=f"recreate_followup_type_{orphan_selected}"
+                ) if types_needed else None
+                recreate_reason = st.text_area("Reason for recreating", key=f"recreate_followup_reason_{orphan_selected}")
+                if st.button(
+                    "Recreate follow-up",
+                    type="primary",
+                    key=f"recreate_followup_btn_{orphan_selected}",
+                    disabled=not recreate_type,
+                ):
+                    if not recreate_reason.strip():
+                        st.error("Enter a reason for recreating the follow-up.")
+                    else:
+                        try:
+                            recreate_followup(data, orphan_selected, recreate_type, recreate_reason)
+                            set_flash(
+                                "success",
+                                "Follow-up recreated.",
+                                [
+                                    f"{recreate_type} recreated for {orphan_row['Trap ID']}.",
+                                    "It now appears in the normal Follow-ups list to complete.",
+                                    "The recreation is recorded in the audit log, referencing the removal reason it followed.",
+                                ],
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
+                st.divider()
             candidates = data["Followups"].copy()
             if search_text:
                 mask = candidates[["Follow-up ID", "Trap ID", "Bag ID", "Window ID", "Reason"]].astype(str).apply(
