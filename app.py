@@ -1669,11 +1669,15 @@ def persist_check_draft(visit_id: str, trap_id: str) -> None:
         save_draft_answers(DATA_ROOT, check_id, answers)
 
 
-def seed_check_draft(visit_id: str, trap_id: str) -> None:
+def seed_check_draft(visit_id: str, trap_id: str) -> bool:
     """Restore a saved draft into session_state, per-key idempotent - once a
     key is set this session (a real edit, or a prior seed), it's never
     overwritten again, so this is safe to call on every render of the check
-    page, not just from the "Resume checking?" dialog.
+    page, not just from the "Resume checking?" dialog. Returns whether any
+    field was actually restored this call, so the caller can distinguish "a
+    draft just came back" from "nothing to restore" / "already restored on
+    an earlier render this session" - see the Camera check scroll-to-target
+    below, which only makes sense to trigger the first time.
 
     Field report fix (2026-08-17): originally only wired into that dialog's
     Resume button. But Streamlit's own disconnected-session recovery is only
@@ -1690,10 +1694,13 @@ def seed_check_draft(visit_id: str, trap_id: str) -> None:
     check_id = deterministic_check_id(visit_id, trap_id)
     draft = load_draft_answers(DATA_ROOT, check_id)
     if not draft:
-        return
+        return False
+    restored_any = False
     for name, key in check_draft_field_keys(trap_id, visit_id).items():
         if name in draft and key not in st.session_state:
             st.session_state[key] = draft[name]
+            restored_any = True
+    return restored_any
 
 
 def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
@@ -5124,7 +5131,7 @@ elif page == "check":
     # both what was actually intended and a real, if minor, existing bug
     # fix on its own.
     def _render_check_page():
-        seed_check_draft(vid, trap_id)
+        just_restored_draft = seed_check_draft(vid, trap_id)
         if st.button("← Back to trap selector"):
             go("visit", site_id=sid, visit_id=vid)
 
@@ -5212,7 +5219,34 @@ elif page == "check":
         adjusted = False
         camera_ready = True
         if camera_assigned and assessable:
+            st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
             st.markdown("### Camera check")
+            if just_restored_draft:
+                # Field report fix (2026-08-17): "focus directly where you
+                # left off" - Camera check is specifically where the Arlo
+                # app-switch happens, so it's the one place worth landing on
+                # directly after a restored session, rather than the top of
+                # the (now mostly-refilled) form. Same retry-on-a-timer
+                # pattern as scroll_to_top_once(), targeting this anchor
+                # instead of (0,0).
+                components.html(
+                    """
+                    <script>
+                    (() => {
+                      const doc = window.parent.document;
+                      const scrollToAnchor = () => {
+                        const el = doc.getElementById('r1m1-camera-check-anchor');
+                        if (el) el.scrollIntoView({block: 'start', behavior: 'auto'});
+                      };
+                      scrollToAnchor();
+                      requestAnimationFrame(scrollToAnchor);
+                      [80, 200, 450, 900].forEach((delay) => window.setTimeout(scrollToAnchor, delay));
+                    })();
+                    </script>
+                    """,
+                    height=0,
+                    width=0,
+                )
             camera_choice = st.radio(
                 "Camera working and covering the trap?",
                 ["Yes", "No", "Could not assess"],
