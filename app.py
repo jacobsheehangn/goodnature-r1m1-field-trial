@@ -1670,10 +1670,23 @@ def persist_check_draft(visit_id: str, trap_id: str) -> None:
 
 
 def seed_check_draft(visit_id: str, trap_id: str) -> None:
-    """One-time restore of a saved draft into session_state, called only from
-    the "Resume checking?" flow - i.e. only on a genuinely fresh session, and
-    only before any check-form widget has rendered this session, so this can
-    never clobber an in-progress edit (guarded again per-key regardless)."""
+    """Restore a saved draft into session_state, per-key idempotent - once a
+    key is set this session (a real edit, or a prior seed), it's never
+    overwritten again, so this is safe to call on every render of the check
+    page, not just from the "Resume checking?" dialog.
+
+    Field report fix (2026-08-17): originally only wired into that dialog's
+    Resume button. But Streamlit's own disconnected-session recovery is only
+    good for server.disconnectedSessionTTL (2 minutes by default) before
+    session_state is gone outright - plausible to exceed during a real trap
+    service (lure change, camera-app switch) - and even within that window,
+    the resume *candidate* can fail validation for reasons unrelated to
+    whether a draft exists (see validate_workflow_resume). Either way, the
+    operator can end up back on Trap sites and just tap "Check" on the same
+    trap again through the normal flow - which never went through the
+    dialog at all. Calling this unconditionally at the top of the check page
+    means the draft restores regardless of how the operator got there.
+    """
     check_id = deterministic_check_id(visit_id, trap_id)
     draft = load_draft_answers(DATA_ROOT, check_id)
     if not draft:
@@ -4609,11 +4622,10 @@ if "page" not in st.session_state:
         )
         resume_col, start_over_col = st.columns(2)
         if resume_col.button("Resume", type="primary", use_container_width=True, key="workflow_resume_confirm"):
-            # UX-audit fix (2026-08-13): restore any saved draft answers before
-            # the check form renders - this is the one moment guaranteed to be
-            # a genuinely fresh session with no check-form widgets rendered
-            # yet, so it can't clobber an in-progress edit.
-            seed_check_draft(_resume_visit_id, _resume_trap_id)
+            # Draft-answer restore now happens unconditionally at the top of
+            # the check page itself (see seed_check_draft's docstring) so it
+            # covers every path back to a trap's check form, not just this
+            # dialog - no separate call needed here any more.
             navigate("check", site_id=_resume_site_id, visit_id=_resume_visit_id, trap_id=_resume_trap_id)
         if start_over_col.button("Start over", use_container_width=True, key="workflow_resume_start_over"):
             clear_workflow_query_params()
@@ -5088,6 +5100,7 @@ elif page == "check":
     # both what was actually intended and a real, if minor, existing bug
     # fix on its own.
     def _render_check_page():
+        seed_check_draft(vid, trap_id)
         if st.button("← Back to trap selector"):
             go("visit", site_id=sid, visit_id=vid)
 

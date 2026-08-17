@@ -6,7 +6,19 @@ services:
     plan: starter
     autoDeploy: true
     buildCommand: pip install -r requirements.txt
-    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+    # server.disconnectedSessionTTL (default 120s): Streamlit's own built-in
+    # recovery for a dropped WebSocket, which - if the *same* session_id
+    # reconnects before this expires - restores session_state exactly, no
+    # app-level workaround needed at all. 120s is tuned for brief WiFi blips;
+    # a real field check (service the trap, then switch to a separate camera
+    # app to check it) plausibly runs longer than that. Field notes
+    # 2026-08-17: reconnecting after that kind of app-switch was landing back
+    # on Trap sites instead of the check in progress - raised to give that
+    # workflow real headroom. This app's own wf_* URL / on-disk draft-answer
+    # recovery (see seed_check_draft) is the fallback once even this expires,
+    # not the primary path - full session_state recovery when it works is
+    # strictly better (covers every field, not just the drafted ones).
+    startCommand: streamlit run app.py --server.address 0.0.0.0 --server.port $PORT --server.headless true --server.disconnectedSessionTTL=900
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
