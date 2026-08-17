@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import re
+import time
 from io import BytesIO
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -2861,7 +2862,37 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> No
             main_line=product_build,
             meta_line=f"Route {route} · Not checked",
         )
-        if st.button("Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True):
+        # Field report fix (2026-08-17): "tapping check and nothing happens,
+        # need loader state there within button too" - a plain button here
+        # gave zero feedback between tap and the page actually changing, on
+        # a field connection where that round trip is far from instant.
+        # Same two-phase trick as the Save check button: acknowledge the tap
+        # and rerun immediately (so the disabled/"Opening…" state actually
+        # gets painted), then perform the navigation on the rerun that
+        # follows, rather than navigating away in the same pass the disabled
+        # state was never given a chance to be seen in.
+        opening_key = f"visit_opening_{visit_id}_{trap_id}"
+        opening = st.session_state.get(opening_key, False)
+        check_clicked = st.button(
+            "Opening…" if opening else "Check",
+            key=f"visit_check_{visit_id}_{trap_id}",
+            use_container_width=True,
+            disabled=opening,
+        )
+        if check_clicked and not opening:
+            st.session_state[opening_key] = True
+            st.rerun()
+        if opening:
+            st.session_state.pop(opening_key, None)
+            # Unlike Save check, opening a trap has no inherent slow work of
+            # its own to naturally create a gap between "disabled button
+            # drawn" and "next rerun starts" - confirmed live (Playwright,
+            # even with the connection throttled) that without one, the two
+            # deltas can go out together and the disabled state is never
+            # actually observed at all, not just briefly. A short, deliberate
+            # dwell is the standard fix for an action too fast to otherwise
+            # register as "something happened" - not a workaround, the point.
+            time.sleep(0.3)
             go("check", site_id=site_id, visit_id=visit_id, trap_id=trap_id)
 
 
@@ -5211,8 +5242,20 @@ elif page == "check":
         save_lock_key = f"check_saving_{trap_id}_{vid}"
         saving = st.session_state.get(save_lock_key, False)
         save_label = "Please wait" if photo_blocked else ("Saving…" if saving else "Save check")
-        if st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked or saving):
+        save_clicked = st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked or saving)
+        if save_clicked and not saving:
+            # Field report fix (2026-08-17): set the lock and rerun immediately,
+            # before any of the actual save work below - Streamlit never
+            # repaints an already-drawn widget without a full rerun, so the
+            # disabled/"Saving…" button state above could never actually be
+            # seen during a real save (by the time a rerun happened, the save,
+            # and the navigation away from this page, was already done - field
+            # notes: "tap button not clear anything is happening"). Splitting
+            # the tap into "acknowledge, rerun" then "do the work" means the
+            # button visibly changes before the slow part even starts.
             st.session_state[save_lock_key] = True
+            st.rerun()
+        if saving:
             saving_feedback = st.empty()
             saving_feedback.info("Saving check… Do not tap again.")
             errors = []
