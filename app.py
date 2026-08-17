@@ -1441,6 +1441,17 @@ def validate_workflow_resume(data, site_id: str, visit_id: str, trap_id: str):
     still open, the trap still exists and its window is still open, and the
     site matches the visit's actual site (guards against a stale or
     manually-edited URL). Returns the visit row on success, None on failure.
+
+    Field report fix (2026-08-14): a trap that already has a Check row for
+    this visit must never be offered as a resume candidate, even though its
+    window is open again by the time anyone reconnects - a normal save
+    immediately starts a fresh monitoring window for the same trap (see the
+    check-save handler's `will_start`/`start_window` call), so "window is
+    open" alone can't tell "not yet checked" apart from "just finished,
+    already saved". Confirmed from the field: a session dropped right after
+    a successful save previously offered to "resume" a trap that had, in
+    fact, already saved - confusing on its own, and at least once leading to
+    a genuine duplicate Check row when the operator re-checked it.
     """
     if not (site_id and visit_id and trap_id):
         return None
@@ -1455,6 +1466,11 @@ def validate_workflow_resume(data, site_id: str, visit_id: str, trap_id: str):
     if data["Traps"][data["Traps"]["Trap ID"] == trap_id].empty:
         return None
     if open_window(data, trap_id) is None:
+        return None
+    already_checked = (
+        (data["Checks"]["Visit ID"] == visit_id) & (data["Checks"]["Trap ID"] == trap_id)
+    ).any()
+    if already_checked:
         return None
     return visit_row
 
@@ -4784,7 +4800,14 @@ if page == "sites":
         next_dt = last_dt + timedelta(days=interval) if last_dt else now()
         completed_today = bool(last_dt and last_dt.date() == now().date())
         checks = data["Checks"][data["Checks"]["Visit ID"] == active["Visit ID"]] if active is not None else pd.DataFrame()
-        active_complete = active is not None and len(traps) > 0 and len(checks) >= len(traps)
+        # Field report fix (2026-08-14): count unique traps checked, not raw
+        # Check rows - a trap checked twice in one visit (e.g. a re-check
+        # after an ambiguous/dropped-connection save) inflated this past the
+        # real trap count ("10 of 9 traps checked"). The site-detail page's
+        # own progress bar already dedupes this way (see `done` below); the
+        # list card just hadn't matched it.
+        checked_trap_count = checks["Trap ID"].astype(str).nunique() if active is not None else 0
+        active_complete = active is not None and len(traps) > 0 and checked_trap_count >= len(traps)
         if active is not None:
             status_text = "Ready to finish" if active_complete else "In progress"
             status_kind = "warning" if active_complete else "guidance"
@@ -4806,7 +4829,7 @@ if page == "sites":
             # since showing "9 active traps" next to "0 of 9 traps checked"
             # repeats the same number for no reason.
             trap_count_text = (
-                f"{len(checks)} of {len(traps)} traps checked" if active is not None
+                f"{checked_trap_count} of {len(traps)} traps checked" if active is not None
                 else f"{len(traps)} active traps"
             )
             st.markdown(
@@ -4866,6 +4889,17 @@ elif page == "start_visit":
 elif page == "visit":
     sid = st.session_state.site_id
     vid = st.session_state.visit_id
+    # Field report fix (2026-08-14): trap_id has no meaning on the trap
+    # selector page - clear it (session_state and the URL's wf_trap
+    # directly, since sync_workflow_query_params only ever sets a query
+    # param, never clears one whose session value went away) so a
+    # just-completed trap can never linger here and be misread as an
+    # unfinished resume candidate if the session drops while on this page.
+    # validate_workflow_resume's own "already checked" guard is the other,
+    # independent half of this fix - this half stops the misleading URL
+    # state from being produced in the first place.
+    st.session_state.pop("trap_id", None)
+    st.query_params.pop(WORKFLOW_QUERY_KEY_TRAP, None)
     visit_rows = data["Visits"][data["Visits"]["Visit ID"] == vid]
     if visit_rows.empty:
         message_panel("error", "This visit could not be found.", ["Return to Trap sites and start again."])
