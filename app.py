@@ -2846,7 +2846,7 @@ def render_compact_card_content(
     )
 
 
-def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> None:
+def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_saved: bool = False) -> None:
     """Compact field card with one checked-state indicator."""
     trap_id = str(tr["Trap ID"])
     build_prefix = f"{tr['Product']} Build "
@@ -2857,10 +2857,21 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str) -> No
     route = str(tr["Route Order"] or "—")
 
     if checked:
+        # Field report fix (2026-08-17): "didn't get a success status after
+        # successful trap check", "have to scroll up... just looking at
+        # cards already completed" - the top-of-page flash is a true
+        # one-shot (popped the instant it's shown), so any rerun before the
+        # operator actually looks at the screen loses it for good, and
+        # every checked card looked identical anyway, so even scrolling up
+        # didn't say *which* one was just done. just_saved (set once per
+        # save, keyed to this visit, read fresh every render - not popped)
+        # makes the just-completed card visibly distinct regardless of
+        # scroll position, reruns, or a reconnect in between.
+        status_label = "✓ Just saved" if just_saved else "✓ Checked"
         st.markdown(
-            '<div class="visit-trap-card is-checked">'
+            f'<div class="visit-trap-card is-checked{" is-just-saved" if just_saved else ""}">'
             '<div class="visit-trap-copy">'
-            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><strong class="visit-trap-status">✓ Checked</strong></div>'
+            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><strong class="visit-trap-status">{status_label}</strong></div>'
             f'<div class="visit-trap-line"><span>{html.escape(location)}</span><span class="visit-trap-meta">{html.escape(product_build)}</span></div>'
             '</div>'
             '</div>',
@@ -3674,6 +3685,18 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
 .visit-trap-card.is-checked {
   background: #eef8f1;
   border-color: #b9ddc5;
+}
+/* Field report fix (2026-08-17): the just-saved trap's own card gets a
+   bolder border on top of the normal "checked" green, on top of its own
+   distinct "Just saved" label - two independent signals (colour weight and
+   text) since it needs to be unmistakable even to a quick glance, not just
+   findable if you already know to look for it. !important + the doubled
+   class selector: a later, more specific .is-checked !important rule
+   further down this stylesheet would otherwise win on source order alone. */
+.visit-trap-card.is-checked.is-just-saved {
+  border-color: #22683d !important;
+  border-width: 2px !important;
+  box-shadow: 0 0 0 1px #22683d, 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
 }
 .visit-trap-meta { color: var(--muted); margin-top: .35rem; }
 .visit-trap-status { color: #22683d; font-weight: 700; margin-top: .35rem; }
@@ -5032,10 +5055,11 @@ elif page == "visit":
     if traps.empty:
         helper("No traps match this filter.")
     else:
+        last_saved_trap_id = st.session_state.get(f"last_saved_trap_{vid}")
         for _, tr in traps.iterrows():
             trap_id = str(tr["Trap ID"])
             checked = trap_id in done
-            render_visit_trap_card(tr, checked, vid, sid)
+            render_visit_trap_card(tr, checked, vid, sid, just_saved=(trap_id == last_saved_trap_id))
 
     # Trap-journey-scroll brief: this is the card-system brief's Phase 2
     # schedule line, relocated to the bottom of the trap list rather than
@@ -5393,6 +5417,18 @@ elif page == "check":
                 "trap_id": trap_id,
                 "photo_count": photo_count,
             }
+            # Field report fix (2026-08-17): "didn't get a success status
+            # after successful trap check", "have to scroll up... just
+            # looking at cards already completed". saved_check above is a
+            # true one-shot flash - popped the very next render, so any
+            # intervening rerun before the operator actually looks at the
+            # screen (a reconnect, scrolling straight past it, anything)
+            # means it's already gone with no second chance. This is a
+            # persistent marker instead, read by render_visit_trap_card
+            # below - it survives reruns/reconnects/scroll position, so the
+            # just-saved trap's own card visibly stands out from the plain
+            # "✓ Checked" ones, regardless of whether the flash was ever seen.
+            st.session_state[f"last_saved_trap_{vid}"] = trap_id
             go("visit", site_id=sid, visit_id=vid)
 
     _render_check_page()

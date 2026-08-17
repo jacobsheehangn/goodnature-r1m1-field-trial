@@ -61,8 +61,13 @@ def test_non_kill_check_returns_to_top_with_one_clear_checked_state(page: Page, 
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text(re.compile(r"saved$", re.I)).first).to_be_visible(timeout=30_000)
-    expect(page.get_by_text("✓ Checked", exact=True)).to_be_visible(timeout=20_000)
-    assert page.get_by_text("✓ Checked", exact=True).count() == 1
+    # Field report fix (2026-08-17): the just-saved trap's card now shows a
+    # distinct "✓ Just saved" (not the plain "✓ Checked" every other
+    # completed card gets) - since this is the first and only check in a
+    # fresh visit, that's the one indicator expected here, not "✓ Checked".
+    expect(page.get_by_text("✓ Just saved", exact=True)).to_be_visible(timeout=20_000)
+    assert page.get_by_text("✓ Just saved", exact=True).count() == 1
+    assert page.get_by_text("✓ Checked", exact=True).count() == 0
     assert main_scroll_top(page) <= 8
     page.screenshot(path=SHOTS / "mobile_checked_state.png", full_page=True)
 
