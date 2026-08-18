@@ -7510,10 +7510,33 @@ elif page == "data_management":
                                 new_date = st.date_input("True deployment date", value=c["Current Start"].date(), key=f"winfix_date_{c['Trap ID']}")
                             with t_col:
                                 new_time = st.time_input("True deployment time", value=c["Current Start"].time(), key=f"winfix_time_{c['Trap ID']}")
-                            if st.button("Apply this trap", key=f"winfix_apply_{c['Trap ID']}"):
+                            # Same one-tap lock as Save check (2026-08-17 field
+                            # report - "tap button not clear anything is
+                            # happening"): acknowledge the tap and rerun before
+                            # doing the actual write, so the disabled/"Applying…"
+                            # state is a real render the operator can see, not a
+                            # value that's already stale by the time a rerun
+                            # would show it.
+                            applying_key = f"winfix_applying_{c['Trap ID']}"
+                            applying = st.session_state.get(applying_key, False)
+                            apply_clicked = st.button(
+                                "Applying…" if applying else "Apply this trap",
+                                key=f"winfix_apply_{c['Trap ID']}",
+                                disabled=applying,
+                            )
+                            if apply_clicked and not applying:
+                                st.session_state[applying_key] = True
+                                st.rerun()
+                            if applying:
+                                st.session_state.pop(applying_key, None)
                                 if not reason.strip():
                                     st.error("Enter a reason before applying a correction.")
                                 else:
+                                    # correct_window_start()+save_data() can be too
+                                    # fast on a small workbook to naturally create a
+                                    # gap between the disabled render above and this
+                                    # rerun - same deliberate dwell as "Check".
+                                    time.sleep(0.3)
                                     try:
                                         changed = correct_window_start(data, c["Window ID"], datetime.combine(new_date, new_time), reason.strip())
                                         if changed:
@@ -7552,7 +7575,20 @@ elif page == "data_management":
                 st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                 confirm_col, cancel_col = st.columns(2)
                 with confirm_col:
-                    if st.button("Confirm bulk apply", type="primary", key="winfix_bulk_confirm", disabled=not reason.strip()):
+                    # Same one-tap lock as "Apply this trap" above.
+                    bulk_applying = st.session_state.get("winfix_bulk_applying", False)
+                    confirm_clicked = st.button(
+                        "Applying…" if bulk_applying else "Confirm bulk apply",
+                        type="primary",
+                        key="winfix_bulk_confirm",
+                        disabled=bulk_applying or not reason.strip(),
+                    )
+                    if confirm_clicked and not bulk_applying:
+                        st.session_state["winfix_bulk_applying"] = True
+                        st.rerun()
+                    if bulk_applying:
+                        st.session_state.pop("winfix_bulk_applying", None)
+                        time.sleep(0.3)
                         applied, skipped = [], []
                         for c in r1_candidates:
                             if c["Trap ID"] not in pending["trap_ids"]:
