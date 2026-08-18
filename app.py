@@ -1489,6 +1489,52 @@ def request_scroll_to_top():
     st.session_state.scroll_to_top_once = True
 
 
+def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> bool:
+    """A button that gives real, visible tap feedback before its action runs.
+
+    Streamlit only repaints an already-drawn widget on a full script rerun -
+    `if st.button(...): do_the_slow_thing()` computes the button's disabled/
+    label state BEFORE the click is even processed, so however that state
+    would change as a result of the click, the browser never sees it until
+    the NEXT rerun - by which point the slow thing (a save, a navigation)
+    has usually already finished and moved the page on. Root cause of a
+    whole class of "tap button, nothing happens" field reports
+    (2026-08-17/18) - first found and fixed one-off on Save check and the
+    trap-list Check button; this is that same fix made reusable so it can
+    be applied consistently everywhere the same problem exists, rather than
+    duplicated per call site.
+
+    Splits the tap into two passes: the first rerun only sets a lock and
+    reruns immediately (no work done yet), so the SECOND rerun genuinely
+    renders with the button already disabled/relabelled - that's the render
+    where this returns True and the caller should do its real work. The
+    lock is cleared automatically the moment this returns True, so a
+    validation failure (or anything else that doesn't navigate away)
+    naturally shows the button back in its normal state on the very next
+    render, with no cleanup required from the caller.
+
+    Not a fit for st.form_submit_button - forms only report `submitted` on
+    the exact rerun the form was submitted, so the same "check armed on the
+    next rerun" trick doesn't carry over; handle those separately.
+    """
+    lock_key = f"__two_phase_pending_{key}"
+    armed = st.session_state.get(lock_key, False)
+    disabled = button_kwargs.pop("disabled", False)
+    clicked = st.button(
+        busy_label if armed else label,
+        key=key,
+        disabled=disabled or armed,
+        **button_kwargs,
+    )
+    if clicked and not armed and not disabled:
+        st.session_state[lock_key] = True
+        st.rerun()
+    if armed:
+        st.session_state.pop(lock_key, None)
+        return True
+    return False
+
+
 def scroll_to_top_once():
     """Reset Streamlit's current page after navigation and rerender settling."""
     if not st.session_state.pop("scroll_to_top_once", False):
@@ -2897,24 +2943,7 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_
         # need loader state there within button too" - a plain button here
         # gave zero feedback between tap and the page actually changing, on
         # a field connection where that round trip is far from instant.
-        # Same two-phase trick as the Save check button: acknowledge the tap
-        # and rerun immediately (so the disabled/"Opening…" state actually
-        # gets painted), then perform the navigation on the rerun that
-        # follows, rather than navigating away in the same pass the disabled
-        # state was never given a chance to be seen in.
-        opening_key = f"visit_opening_{visit_id}_{trap_id}"
-        opening = st.session_state.get(opening_key, False)
-        check_clicked = st.button(
-            "Opening…" if opening else "Check",
-            key=f"visit_check_{visit_id}_{trap_id}",
-            use_container_width=True,
-            disabled=opening,
-        )
-        if check_clicked and not opening:
-            st.session_state[opening_key] = True
-            st.rerun()
-        if opening:
-            st.session_state.pop(opening_key, None)
+        if two_phase_button("Check", f"visit_check_{visit_id}_{trap_id}", "Opening…", use_container_width=True):
             # Unlike Save check, opening a trap has no inherent slow work of
             # its own to naturally create a gap between "disabled button
             # drawn" and "next rerun starts" - confirmed live (Playwright,
@@ -5310,23 +5339,23 @@ elif page == "check":
         # subsequent rerun until the save fails validation (cleared, so the
         # operator can fix and retry) or completes (popped, along with the
         # rest of this check's transient session_state).
+        # Field report fix (2026-08-17): uses the shared two_phase_button
+        # helper (also used for the trap-list Check button and the 3
+        # follow-up review saves - 2026-08-18: "same issues... apply system
+        # logic") for visible tap feedback, plus its own persistent lock on
+        # top since this save goes through commit_staged_records_with_photos
+        # - slower and failure-prone enough that it needs real protection
+        # against a rapid double-tap during that work, not just the two-phase
+        # helper's own lock (which clears itself the instant the slow work
+        # starts). Cleared on validation failure (retry allowed) or via
+        # session_state_keys_to_clear_on_failure on a deeper commit failure,
+        # so this can never strand the button disabled forever.
         save_lock_key = f"check_saving_{trap_id}_{vid}"
         saving = st.session_state.get(save_lock_key, False)
-        save_label = "Please wait" if photo_blocked else ("Saving…" if saving else "Save check")
-        save_clicked = st.button(save_label, type="primary", key=f"save_check_{trap_id}_{vid}", use_container_width=True, disabled=photo_blocked or saving)
-        if save_clicked and not saving:
-            # Field report fix (2026-08-17): set the lock and rerun immediately,
-            # before any of the actual save work below - Streamlit never
-            # repaints an already-drawn widget without a full rerun, so the
-            # disabled/"Saving…" button state above could never actually be
-            # seen during a real save (by the time a rerun happened, the save,
-            # and the navigation away from this page, was already done - field
-            # notes: "tap button not clear anything is happening"). Splitting
-            # the tap into "acknowledge, rerun" then "do the work" means the
-            # button visibly changes before the slow part even starts.
+        save_label = "Please wait" if photo_blocked else "Save check"
+        save_clicked = two_phase_button(save_label, f"save_check_{trap_id}_{vid}", "Saving…", type="primary", use_container_width=True, disabled=photo_blocked or saving)
+        if save_clicked:
             st.session_state[save_lock_key] = True
-            st.rerun()
-        if saving:
             saving_feedback = st.empty()
             saving_feedback.info("Saving check… Do not tap again.")
             errors = []
@@ -5802,7 +5831,10 @@ elif page == "followups":
                 notes=st.text_area("Notes",key=f"{prefix}_notes")
 
                 saving_update("Attraction, interaction-to-kill speed, video assessment and the linked test-window review status." if is_kill_review else "Attraction, conversion, missed-kill classification and the linked test-window review status.")
-                submit=st.button("Save camera review",type="primary",key=f"{prefix}_save")
+                # Field report (2026-08-18): "same issues, seems like nothing is
+                # happening" - same fix as Save check / the trap-list Check
+                # button, applied consistently rather than left as a one-off.
+                submit=two_phase_button("Save camera review",f"{prefix}_save","Saving…",type="primary")
                 if submit:
                     errors=[]
                     if evidence_usable=="Select…": errors.append("Select whether the camera evidence is usable.")
@@ -5871,15 +5903,27 @@ elif page == "followups":
                     else:
                         remaining=max(1,photo_gate.get("expected_count",0)-photo_gate.get("file_count",0))
                         st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+                # Same two-phase visible-feedback fix as Save check, plus the
+                # same persistent lock (not just the two-phase helper's own,
+                # which clears itself the instant the slow work starts) -
+                # this save goes through commit_staged_records_with_photos,
+                # same as Save check, so it needs the same protection against
+                # a rapid double-tap during that slower, failure-prone path,
+                # and the same failure-clear hook so a deep commit failure
+                # can't strand this button disabled forever.
+                nec_save_lock_key=f"{prefix}_saving"
+                nec_already_saving=st.session_state.get(nec_save_lock_key,False)
                 save_label="Please wait" if photo_blocked else "Save necropsy review"
-                submit=st.button(save_label,type="primary",key=f"{prefix}_save",disabled=photo_blocked)
+                submit=two_phase_button(save_label,f"{prefix}_save","Saving…",type="primary",disabled=photo_blocked or nec_already_saving)
                 if submit:
+                    st.session_state[nec_save_lock_key]=True
                     errors=[]
                     if "Select…" in [status,assessment,weight_range,final]: errors.append("Complete all required necropsy fields.")
                     errors.extend(necropsy_consistency_errors(status,assessment,final))
                     idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
                     if not idxs: errors.append("The linked test window cannot be found.")
                     if errors:
+                        st.session_state[nec_save_lock_key]=False
                         st.error("Please correct the necropsy review:\n\n" + "\n".join(f"- {err}" for err in errors))
                     else:
                         expected_photo_count=int(photo_gate.get("expected_count",0))
@@ -5923,8 +5967,10 @@ elif page == "followups":
                             log_fields={"follow_up_id": fid, "trap_id": item["Trap ID"]},
                             record_noun="necropsy review",
                             record_description="necropsy review or photo record",
+                            session_state_keys_to_clear_on_failure=[nec_save_lock_key],
                         )
 
+                        st.session_state.pop(nec_save_lock_key,None)
                         set_flash("success","Necropsy review saved",[f"Final humane-kill result: {final}.","The linked kill result and Performance metrics were updated.","Next: review the next open task."])
                         st.session_state.pop("followup_panel",None); st.rerun()
             else:
@@ -5934,7 +5980,7 @@ elif page == "followups":
                 evidence_gap=st.selectbox("Past test-window evidence",["Select…","Still usable","Partly usable","Not usable","Could not assess"],index=0,key=f"{prefix}_gap")
                 notes=st.text_area("Resolution notes",key=f"{prefix}_notes")
                 saving_update("The task status, current camera readiness and the linked test-window evidence status.")
-                if st.button("Save camera resolution",type="primary",key=f"{prefix}_save"):
+                if two_phase_button("Save camera resolution",f"{prefix}_save","Saving…",type="primary"):
                     errors=[]
                     if "Select…" in [resolution,current_ready,evidence_gap]: errors.append("Complete all camera-resolution fields.")
                     if resolution=="Could not fix" and current_ready=="Yes": errors.append("A camera that could not be fixed cannot be marked ready.")
@@ -6063,13 +6109,13 @@ elif page == "data_quality":
         )
         confirm_col, void_col = st.columns(2)
         with confirm_col:
-            if st.button("Confirm as real", key=f"data_quality_confirm_{reviewing_id}", use_container_width=True):
+            if two_phase_button("Confirm as real", f"data_quality_confirm_{reviewing_id}", "Confirming…", use_container_width=True):
                 confirm_check_as_real(data, reviewing_id)
                 st.session_state.pop("data_quality_review", None)
                 set_flash("success", "Confirmed as real.", ["No data was changed.", "This check will not be flagged again."])
                 st.rerun()
         with void_col:
-            if st.button("Void as test data", key=f"data_quality_void_{reviewing_id}", type="primary", use_container_width=True):
+            if two_phase_button("Void as test data", f"data_quality_void_{reviewing_id}", "Voiding…", type="primary", use_container_width=True):
                 if not void_reason.strip():
                     st.error("Enter a reason before voiding this record.")
                 else:
@@ -6418,7 +6464,7 @@ elif page == "trap_edit":
                 "Close the current window (if open) and set this trap to Inactive",
                 key=f"confirm_deactivate_{trap_id}",
             )
-            if st.button("Deactivate trap", type="primary", key=f"commit_deactivate_{trap_id}", disabled=not confirm_deactivate):
+            if two_phase_button("Deactivate trap", f"commit_deactivate_{trap_id}", "Deactivating…", type="primary", disabled=not confirm_deactivate):
                 if not deactivate_reason.strip():
                     st.error("Enter a reason for deactivation.")
                 else:
@@ -6438,7 +6484,7 @@ elif page == "trap_edit":
                 "Start a new monitoring window and set this trap to Active",
                 key=f"confirm_activate_{trap_id}",
             )
-            if st.button("Activate trap", type="primary", key=f"commit_activate_{trap_id}", disabled=not confirm_activate):
+            if two_phase_button("Activate trap", f"commit_activate_{trap_id}", "Activating…", type="primary", disabled=not confirm_activate):
                 if not activate_reason.strip():
                     st.error("Enter a reason for activation.")
                 else:
@@ -6466,7 +6512,7 @@ elif page == "trap_edit":
             move_date = st.date_input("Effective date", value=now().date())
             move_time = st.time_input("Effective time", value=now().time())
             confirm_move = st.checkbox("Close the current window and start a new window at the destination")
-            if st.button("Move trap", type="primary", disabled=not confirm_move):
+            if two_phase_button("Move trap", f"move_trap_{trap_id}", "Moving…", type="primary", disabled=not confirm_move):
                 try:
                     move_trap(
                         data, trap_id, destination,
@@ -6491,7 +6537,7 @@ elif page == "trap_edit":
             build_date = st.date_input("Effective date", value=now().date(), key=f"dedicated_build_date_{trap_id}")
             build_time = st.time_input("Effective time", value=now().time(), key=f"dedicated_build_time_{trap_id}")
             confirm_build = st.checkbox("Close the current window and start a new window on this build")
-            if st.button("Change build", type="primary", disabled=not confirm_build):
+            if two_phase_button("Change build", f"change_build_{trap_id}", "Changing…", type="primary", disabled=not confirm_build):
                 selected = available_builds[available_builds["Label"] == new_label].iloc[0]
                 try:
                     change_trap_build(
@@ -6600,7 +6646,7 @@ elif page == "setup":
                         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                         confirm_col, cancel_col = st.columns(2)
                         with confirm_col:
-                            if st.button("Confirm bulk activate", type="primary", key="bulkact_confirm", disabled=not pending["reason"].strip()):
+                            if two_phase_button("Confirm bulk activate", "bulkact_confirm", "Activating…", type="primary", disabled=not pending["reason"].strip()):
                                 applied, skipped = [], []
                                 for trap_id in pending["trap_ids"]:
                                     effective = pending_individual_times.get(trap_id, shared_dt)
@@ -7358,9 +7404,15 @@ elif page == "data_management":
                         index = choices.index(current) if current in choices else 0
                         changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
                     reason = st.text_area("Correction reason", key=f"corr_reason_{selected_id}")
+                    corr_save_lock_key = f"correct_necropsy_evidence_saving_{selected_id}"
+                    corr_already_saving = st.session_state.get(corr_save_lock_key, False)
                     save_label = "Please wait" if photo_blocked else "Save correction"
-                    save_correction = st.button(save_label, type="primary", key=f"correct_necropsy_evidence_save_{selected_id}", disabled=photo_blocked)
+                    save_correction = two_phase_button(
+                        save_label, f"correct_necropsy_evidence_save_{selected_id}", "Saving…",
+                        type="primary", disabled=photo_blocked or corr_already_saving,
+                    )
                     if save_correction:
+                        st.session_state[corr_save_lock_key] = True
                         # UX-audit fix (2026-08-13): this form used to let a correction save a
                         # necropsy result the original review task would have rejected outright
                         # (e.g. "Supports humane kill" paired with Final Humane Kill = No) - same
@@ -7370,8 +7422,10 @@ elif page == "data_management":
                             changed["Necropsy Status"], changed["Necropsy Assessment"], changed["Final Humane Kill"]
                         )
                         if not reason.strip():
+                            st.session_state[corr_save_lock_key] = False
                             st.error("Enter a correction reason before saving.")
                         elif necropsy_errors:
+                            st.session_state[corr_save_lock_key] = False
                             st.error("Please correct the necropsy result:\n\n" + "\n".join(f"- {err}" for err in necropsy_errors))
                         else:
                             expected_photo_count = int(photo_gate.get("expected_count", 0))
@@ -7384,6 +7438,7 @@ elif page == "data_management":
                                     staged["Windows"].at[idx, field] = new_value
                                     audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
                             if not audit_rows and not expected_photo_count:
+                                st.session_state[corr_save_lock_key] = False
                                 st.info("No values changed.")
                             else:
                                 recalculate_window(staged, idx)
@@ -7407,7 +7462,9 @@ elif page == "data_management":
                                     log_fields={"window_id": selected_id, "trap_id": str(row["Trap ID"])},
                                     record_noun="correction",
                                     record_description="necropsy correction or photo record",
+                                    session_state_keys_to_clear_on_failure=[corr_save_lock_key],
                                 )
+                                st.session_state.pop(corr_save_lock_key, None)
                                 set_flash(
                                     "success", "Correction saved.",
                                     [f"{len(audit_rows)} field change(s) were applied." if audit_rows else "No field values changed.",
@@ -7510,7 +7567,7 @@ elif page == "data_management":
                                 new_date = st.date_input("True deployment date", value=c["Current Start"].date(), key=f"winfix_date_{c['Trap ID']}")
                             with t_col:
                                 new_time = st.time_input("True deployment time", value=c["Current Start"].time(), key=f"winfix_time_{c['Trap ID']}")
-                            if st.button("Apply this trap", key=f"winfix_apply_{c['Trap ID']}"):
+                            if two_phase_button("Apply this trap", f"winfix_apply_{c['Trap ID']}", "Applying…"):
                                 if not reason.strip():
                                     st.error("Enter a reason before applying a correction.")
                                 else:
@@ -7552,7 +7609,7 @@ elif page == "data_management":
                 st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
                 confirm_col, cancel_col = st.columns(2)
                 with confirm_col:
-                    if st.button("Confirm bulk apply", type="primary", key="winfix_bulk_confirm", disabled=not reason.strip()):
+                    if two_phase_button("Confirm bulk apply", "winfix_bulk_confirm", "Applying…", type="primary", disabled=not reason.strip()):
                         applied, skipped = [], []
                         for c in r1_candidates:
                             if c["Trap ID"] not in pending["trap_ids"]:
