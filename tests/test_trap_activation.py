@@ -51,6 +51,11 @@ def test_activating_an_inactive_trap_opens_exactly_one_window(tmp_path: Path) ->
             if (data["Traps"]["Status"] == "Inactive").any() else data["Traps"].iloc[0]["Trap ID"]
         idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
         data["Traps"].at[idx, "Status"] = "Inactive"
+        # Sample data seeds an open window per trap - a real Inactive trap has
+        # none open (deactivate_trap() always closes it), so clear the stale
+        # one here to match that precondition instead of forcing an
+        # impossible state (Inactive trap with an open window).
+        data["Windows"] = data["Windows"][data["Windows"]["Trap ID"] != trap_id].copy()
         before_window_count = len(data["Windows"])
         effective = datetime(2026, 8, 13, 9, 30)
         app.activate_trap(data, trap_id, effective, "New trap deployed for field pass")
