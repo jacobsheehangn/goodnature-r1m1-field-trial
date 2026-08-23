@@ -5219,8 +5219,10 @@ elif page == "check":
             bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
         elif finding == "Trap fired, no animal":
             st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
+        elif finding == "Trap missing":
+            st.warning("This check will close the current window and no new window will start, since the trap is not in place to monitor. Redeploy it via Administration when it's found.")
         elif not assessable:
-            st.warning("This check will close the current window and no new window will start.")
+            st.warning("The trap wasn't reached, so its condition is unchanged - this check will record the visit and start a new monitoring window automatically, so nothing further needs fixing.")
 
         service_ready = False
         service_reason = ""
@@ -5407,7 +5409,16 @@ elif page == "check":
             original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
             staged = {name: frame.copy(deep=True) for name, frame in data.items()}
             old_id = close_window(staged, trap_id, check_time, finding, bag_id)
-            will_start = bool(assessable and service_ready and camera_ready)
+            # Field report fix (2026-08-24): "Unable to check" means the
+            # operator never reached the trap at all - nothing about its
+            # physical state changed since the last visit, so monitoring
+            # should continue uninterrupted, not strand the trap with no
+            # open window until someone finds and fixes it via a manual
+            # Deactivate-then-Activate round trip in Administration. "Trap
+            # missing" stays deliberately different: the trap is physically
+            # gone, so there is genuinely nothing to monitor until it's
+            # found and redeployed.
+            will_start = bool(assessable and service_ready and camera_ready) or finding == "Unable to check"
             new_id = start_window(staged, trap_id, check_time) if will_start else ""
             idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
             if idxs:
@@ -5422,7 +5433,7 @@ elif page == "check":
                 check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
                 condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
                 "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
-                "Yes" if service_ready else "No", "Yes" if service_ready else "No",
+                "Yes" if service_ready else "No", trap_state,
                 trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
                 (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
                 "", "",
