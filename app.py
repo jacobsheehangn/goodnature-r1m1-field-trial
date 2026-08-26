@@ -5167,13 +5167,44 @@ elif page == "check":
         header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
 
         if w is None:
-            message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
-            if st.button("Start window and continue", type="primary"):
-                try:
-                    repair_missing_window(data, trap_id)
-                    st.rerun()
-                except Exception as exc:
-                    st.error(str(exc))
+            # Field report fix (2026-08-24): repair_missing_window() refuses to guess
+            # an effective time once a trap has prior history - correct, since
+            # silently reusing "now" or the original deployment time could
+            # misrepresent when the trap actually went back into service. The bug
+            # was that this was the ONLY place offering to fix it, and it gave no
+            # way to actually supply that time - a guaranteed dead end pointing at
+            # "Administration" with no such tool there (Activate/Deactivate/Move
+            # live under Trial setup, not Data & records, and none of them apply
+            # directly to "reopen this trap's window right here"). Now this asks
+            # for the same effective-time-and-reason pair inline, in the one place
+            # the operator actually is when they hit this.
+            history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
+            if history.empty:
+                message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
+                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
+                    try:
+                        repair_missing_window(data, trap_id)
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(str(exc))
+            else:
+                message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window."])
+                repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_date_{trap_id}_{vid}")
+                repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_time_{trap_id}_{vid}")
+                repair_reason = st.text_area("Reason", key=f"repair_reason_{trap_id}_{vid}")
+                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
+                    if not repair_reason.strip():
+                        st.error("Enter a reason before starting the window.")
+                    else:
+                        try:
+                            repair_missing_window(
+                                data, trap_id,
+                                effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
+                                reason=repair_reason.strip(),
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
             return
 
         st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
@@ -5400,10 +5431,34 @@ elif page == "check":
             active = open_window(data, trap_id)
             if active is None:
                 st.session_state[save_lock_key] = False
-                message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
-                if st.button("Start missing window", key=f"repair_on_save_{trap_id}_{vid}"):
-                    repair_missing_window(data, trap_id)
-                    st.rerun()
+                # Same recovery as the "no active test window" branch above -
+                # this trap's window closed (by someone/something else) in the
+                # gap between opening this page and hitting Save. A trap with
+                # prior history needs a real effective time, same as there.
+                history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
+                if history.empty:
+                    message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
+                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
+                        repair_missing_window(data, trap_id)
+                        st.rerun()
+                else:
+                    message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window, then retry saving."])
+                    repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_on_save_date_{trap_id}_{vid}")
+                    repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_on_save_time_{trap_id}_{vid}")
+                    repair_reason = st.text_area("Reason", key=f"repair_on_save_reason_{trap_id}_{vid}")
+                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
+                        if not repair_reason.strip():
+                            st.error("Enter a reason before starting the window.")
+                        else:
+                            try:
+                                repair_missing_window(
+                                    data, trap_id,
+                                    effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
+                                    reason=repair_reason.strip(),
+                                )
+                                st.rerun()
+                            except Exception as exc:
+                                st.error(str(exc))
                 return
 
             original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
