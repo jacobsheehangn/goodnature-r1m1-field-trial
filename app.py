@@ -5834,7 +5834,16 @@ elif page == "followups":
             window_start=parse_dt(linked_window["Start Time"]) if linked_window is not None else None
             window_end=parse_dt(linked_window["End Time"]) if linked_window is not None else None
 
-            context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Build",tr["Build Version"]),("Camera",str(tr["Camera ID"]).strip() or "No camera assigned"),("Bag ID",item["Bag ID"]),("Reason",item["Reason"] or "Not recorded")]
+            # Field report fix (2026-09-16): "Build" used to read the trap's
+            # *current* Build Version, not what it was running when this
+            # window was actually open - so any trap whose build was changed
+            # since (e.g. reassigned for a new trial) showed its new build on
+            # every one of its old, still-open follow-ups, with an evidence
+            # period that predates that build even existing. Use the linked
+            # window's own recorded Build Version instead - it's captured at
+            # window-open time and never changes afterward.
+            historical_build = linked_window["Build Version"] if linked_window is not None else tr["Build Version"]
+            context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Build",historical_build),("Camera",str(tr["Camera ID"]).strip() or "No camera assigned"),("Bag ID",item["Bag ID"]),("Reason",item["Reason"] or "Not recorded")]
             if window_start and window_end:
                 context_rows.append(("Evidence period",f"{human_dt(window_start)} to {human_dt(window_end)}"))
             workflow_context(context_rows)
