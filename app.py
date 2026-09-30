@@ -2365,6 +2365,31 @@ def recreate_followup(data, window_id: str, followup_type: str, reason: str):
     return followup_type
 
 
+def abandon_incomplete_visit(data, visit_id: str, reason: str):
+    """Close out an old, partially-checked visit that can never be finished
+    normally - e.g. its site's traps were later cycled through a full
+    Deactivate/Activate for a new trial, opening fresh windows, so the
+    remaining traps can no longer be checked under this old visit (doing so
+    would open/close the wrong, brand-new windows instead). "Finish site
+    check" requires every trap checked, which is now permanently impossible
+    here; "Cancel check" only ever applies at zero checks, to guarantee it
+    can never discard real field data. This is the deliberate third path:
+    close the Visit record itself only - any Checks already saved under it
+    are left completely untouched."""
+    if not reason.strip():
+        raise ValueError("Enter a reason for abandoning this visit.")
+    matches = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
+    if matches.empty:
+        raise ValueError("Visit not found.")
+    if matches.iloc[0]["Status"] != "In progress":
+        raise ValueError("This visit is not in progress.")
+    idx = matches.index[0]
+    data["Visits"].at[idx, "Status"] = "Abandoned"
+    data["Visits"].at[idx, "End Time"] = dtstr()
+    audit_change(data, "Visit", visit_id, "Status", "In progress", "Abandoned", reason.strip())
+    save_data(data)
+
+
 def remove_unused_build(data, product: str, version: str, reason: str):
     """Remove one unreferenced build only."""
     if not reason.strip():
@@ -7252,7 +7277,7 @@ elif page == "data_management":
         st.write("The corrected value and why the original entry was wrong.")
         st.markdown("#### What the app will update")
         st.write("The linked record, any affected Performance figures, and a permanent audit-log entry.")
-        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task"])
+        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit"])
         search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
 
         if record_type == "Follow-up task":
@@ -7547,6 +7572,51 @@ elif page == "data_management":
                                      "Next: make another correction or return to the relevant record."],
                                 )
                                 st.rerun()
+        elif record_type == "Incomplete visit":
+            stale_visits = data["Visits"][data["Visits"]["Status"] == "In progress"].copy()
+            if search_text:
+                mask = stale_visits[["Visit ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
+                stale_visits = stale_visits[mask]
+            if stale_visits.empty:
+                st.success("No visits are currently in progress.")
+            else:
+                st.caption("An old visit that will never be finished normally - most often because its site's traps have since been cycled through a new trial setup, opening fresh windows the remaining traps now belong to. This only closes the visit record itself; any checks already saved under it are left exactly as they are.")
+                visit_options = stale_visits["Visit ID"].tolist()
+                selected_visit = st.selectbox(
+                    "Select in-progress visit",
+                    visit_options,
+                    format_func=lambda vid: (lambda r: f"{site_name(data, r['Site ID'])} · started {human_dt(r['Start Time'])} · {len(data['Checks'][data['Checks']['Visit ID'] == vid])} check(s) recorded · {vid}")(stale_visits[stale_visits["Visit ID"] == vid].iloc[0]),
+                )
+                visit_row = stale_visits[stale_visits["Visit ID"] == selected_visit].iloc[0]
+                checks_under_visit = data["Checks"][data["Checks"]["Visit ID"] == selected_visit]
+                workflow_context([
+                    ("Site", site_name(data, visit_row["Site ID"])),
+                    ("Started", human_dt(visit_row["Start Time"])),
+                    ("Checks recorded", str(len(checks_under_visit))),
+                ])
+                abandon_reason = st.text_area("Reason for abandoning this visit", key=f"abandon_visit_reason_{selected_visit}")
+                confirm_abandon = st.checkbox(
+                    "Close out this visit - it will no longer show as in progress",
+                    key=f"confirm_abandon_{selected_visit}",
+                )
+                if two_phase_button(
+                    "Abandon this visit", f"abandon_visit_{selected_visit}", "Closing…",
+                    type="primary", disabled=not confirm_abandon,
+                ):
+                    if not abandon_reason.strip():
+                        st.error("Enter a reason for abandoning this visit.")
+                    else:
+                        try:
+                            abandon_incomplete_visit(data, selected_visit, abandon_reason.strip())
+                            set_flash(
+                                "success", "Visit closed.",
+                                [f"{site_name(data, visit_row['Site ID'])}'s in-progress visit was abandoned.",
+                                 f"{len(checks_under_visit)} previously recorded check(s) were left untouched.",
+                                 "Recorded in the audit log."],
+                            )
+                            st.rerun()
+                        except Exception as exc:
+                            st.error(str(exc))
         else:
             candidates = data["Checks"].copy()
             if search_text:
