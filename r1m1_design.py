@@ -182,14 +182,24 @@ COMPONENT_CSS = f"""
 [class*="st-key-species"],[class*="st-key-rows"],[class*="st-key-seg"]{{width:100%!important}}
 [class*="st-key-species"] [data-testid="stRadio"],[class*="st-key-rows"] [data-testid="stRadio"],[class*="st-key-seg"] [data-testid="stButtonGroup"]{{width:100%}}
 
+/* The native radio input stays in the DOM for keyboard and screen readers but is never drawn
+   (the legacy sheet unhides it). */
+[class*="st-key-species"] [data-testid="stRadioOption"]>span:first-child,[class*="st-key-rows"] [data-testid="stRadioOption"]>span:first-child{{
+  position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);opacity:0;pointer-events:none}}
+[class*="st-key-species"] [data-testid="stRadioOption"] input,[class*="st-key-rows"] [data-testid="stRadioOption"] input{{opacity:0;position:absolute}}
+
 /* ---- Species tiles (a restyled st.radio, 4 across) ---- */
 [class*="st-key-species"] [data-testid="stRadioGroup"]{{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}}
 [class*="st-key-species"] [data-testid="stRadioOption"]{{
   min-height:96px;border-radius:var(--r-card);background:var(--ink-05);display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:6px;padding:12px 2px;margin:0;cursor:pointer;color:var(--ink)}}
 [class*="st-key-species"] [data-testid="stRadioOption"]::before{{
-  content:"";width:40px;height:40px;flex:0 0 40px;background:currentColor;
+  content:"";position:static;left:auto;top:auto;transform:none;border:0;border-radius:0;margin:0;
+  width:40px;height:40px;flex:0 0 40px;background:currentColor;
   -webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}}
+/* The legacy sheet draws its own radio dot on the label's ::before: the option rows draw their ring on ::after instead. */
+[class*="st-key-rows"] [data-testid="stRadioOption"]::before{{display:none}}
+[class*="st-key-species"] [data-testid="stRadioOption"]::after{{display:none}}
 [class*="st-key-species"] [data-testid="stRadioOption"]>div>div>div:first-child{{display:none}}
 [class*="st-key-species"] [data-testid="stRadioOption"] p{{font-size:14px;line-height:20px;text-align:center;white-space:nowrap}}
 [class*="st-key-species"] [data-testid="stRadioOption"]:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
@@ -211,6 +221,18 @@ COMPONENT_CSS = f"""
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked)::after{{
   border:0;background:var(--orange) {_CHECK_DATA_URI} center/12px no-repeat}}
+
+/* ---- Final-result rows: the same option rows, two across ---- */
+[class*="st-key-rows2"] [data-testid="stRadioGroup"]{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
+
+/* ---- Chips (st.pills): wrapping, one tap, no dropdown. For the nine-range rat weight scale. ---- */
+[class*="st-key-chips"]{{width:100%!important}}
+[class*="st-key-chips"] [role="radiogroup"]{{display:flex;flex-wrap:wrap;gap:8px;width:100%!important}}
+[class*="st-key-chips"] button[role="radio"]{{
+  min-height:44px;border-radius:var(--r-pill);border:0;background:var(--ink-05);color:var(--ink);padding:0 16px;box-shadow:none}}
+[class*="st-key-chips"] button[role="radio"] p{{font-size:15px;line-height:20px;font-weight:400;color:inherit}}
+[class*="st-key-chips"] button[role="radio"][aria-checked="true"]{{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-chips"] button[role="radio"][aria-checked="true"] p{{font-weight:700}}
 
 /* ---- Segmented control (st.segmented_control). Only when every label is about 12 characters or fewer. ---- */
 [class*="st-key-seg"] [role="radiogroup"]{{display:flex;width:100%!important;max-width:none!important;gap:0;background:var(--ink-05);border-radius:var(--r-segment);padding:2px}}
