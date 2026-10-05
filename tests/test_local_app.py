@@ -77,6 +77,7 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: str, tmp_p
     start_first_site(page)
     page.get_by_role("button", name="Check", exact=True).nth(1).click()  # camera-equipped trap
     page.get_by_role("radio", name="Dead animal found").check(force=True)
+    page.get_by_role("radiogroup", name="Carcass collected?").get_by_role("radio", name="Yes", exact=True).check(force=True)
 
     files=[]
     for i in range(3):
@@ -91,8 +92,8 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: str, tmp_p
     page.get_by_role("radio", name="Norway rat").check(force=True)
     page.get_by_role("radio", name="Dead and apparently normal").check(force=True)
     page.get_by_role("checkbox", name=re.compile(r"Bag labelled")).evaluate("el => el.click()")
-    page.get_by_role("radio", name="Yes").first.check(force=True)  # trap service
-    page.get_by_role("radio", name="Yes").last.check(force=True)   # camera check
+    page.get_by_role("radiogroup", name="Trap relured, reset and ready?").get_by_role("radio", name="Yes", exact=True).check(force=True)
+    page.get_by_role("radiogroup", name="Camera working and covering the trap?").get_by_role("radio", name="Yes", exact=True).check(force=True)
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text("3 photos stored", exact=True)).to_be_visible(timeout=60_000)
