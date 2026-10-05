@@ -1433,8 +1433,16 @@ def repair_missing_window(data, trap_id, effective_time=None, reason="Missing te
     return wid
 
 
-def move_trap(data, trap_id, destination_site, effective_time, reason, route_order, location, camera_id):
+def move_trap(data, trap_id, destination_site, effective_time, reason, route_order, location, camera_id, commit=True):
+    """Moves a trap to another site. An Active trap has its open window closed
+    and a new one opened at the destination; an Inactive trap only has its
+    fields updated and audited - it has no monitoring window, and giving it one
+    would break the "an Inactive trap has none open" assumption that
+    activate_trap() relies on. `commit=False` leaves the save to the caller so
+    several changes can be written together (same as activate_trap and
+    change_trap_build)."""
     tr = trap_row(data, trap_id)
+    is_active = str(tr["Status"]) == "Active"
     old_site = str(tr["Site ID"])
     if old_site == destination_site:
         raise ValueError("Choose a different destination site.")
@@ -1447,7 +1455,7 @@ def move_trap(data, trap_id, destination_site, effective_time, reason, route_ord
     ]
     if not active_visits.empty:
         raise ValueError("Finish or pause active visits at the source and destination sites before moving this trap.")
-    current = open_window(data, trap_id)
+    current = open_window(data, trap_id) if is_active else None
     if current is not None:
         idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
         data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
@@ -1459,20 +1467,26 @@ def move_trap(data, trap_id, destination_site, effective_time, reason, route_ord
     data["Traps"].at[idx, "Route Order"] = str(route_order)
     data["Traps"].at[idx, "Location"] = location
     data["Traps"].at[idx, "Camera ID"] = camera_id
-    new_window = start_window(data, trap_id, effective_time)
+    new_window = start_window(data, trap_id, effective_time) if is_active else ""
     audit_change(data, "Trap", trap_id, "Site ID", old_site, destination_site, reason)
     audit_change(data, "Trap", trap_id, "Route Order", tr["Route Order"], route_order, reason)
     audit_change(data, "Trap", trap_id, "Location", tr["Location"], location, reason)
-    save_data(data)
+    if commit:
+        save_data(data)
     return new_window
 
 
 def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason, commit=True):
+    """Changes a trap's build. An Active trap has its open window closed and a
+    new one opened on the new build; an Inactive trap only has its build
+    updated and audited (this is how builds are staged before a trial) - it has
+    no monitoring window, and must not be given one."""
     tr = trap_row(data, trap_id)
+    is_active = str(tr["Status"]) == "Active"
     old_product, old_build = str(tr["Product"]), str(tr["Build Version"])
     if old_product == new_product and old_build == new_build:
         raise ValueError("Choose a different build.")
-    current = open_window(data, trap_id)
+    current = open_window(data, trap_id) if is_active else None
     if current is not None:
         idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
         data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
@@ -1482,7 +1496,7 @@ def change_trap_build(data, trap_id, new_product, new_build, effective_time, rea
     idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
     data["Traps"].at[idx, "Product"] = new_product
     data["Traps"].at[idx, "Build Version"] = new_build
-    new_window = start_window(data, trap_id, effective_time)
+    new_window = start_window(data, trap_id, effective_time) if is_active else ""
     audit_change(data, "Trap", trap_id, "Build Version", f"{old_product} · {old_build}", f"{new_product} · {new_build}", reason)
     if commit:
         save_data(data)
