@@ -206,6 +206,7 @@ def test_no_carcass_kill_saves_without_bag_photos_or_necropsy_and_a_collected_ki
     assert window["Finding At Close"] == "Dead animal found", "it must still count as a kill"
     assert window["Final Humane Kill"] == "Not assessed — no carcass"
     assert window["Necropsy Status"] == "Not applicable — no carcass"
+    assert window["Necropsy Assessment"] == "Not applicable — no carcass"
     assert window["Bag ID"] == ""
     tasks = followups[followups["Window ID"] == window["Window ID"]]
     assert tasks["Follow-up Type"].tolist() == ["Camera review"], "camera review as today, and no necropsy task"
@@ -265,6 +266,9 @@ def test_one_time_correction_and_the_correction_form_still_shows_the_new_value(p
             "Not assessed — no carcass", timeout=15_000
         )
         expect(page.get_by_role("combobox", name="Necropsy Status", exact=True)).to_have_value(
+            "Not applicable — no carcass", timeout=15_000
+        )
+        expect(page.get_by_role("combobox", name="Necropsy Assessment", exact=True)).to_have_value(
             "Not applicable — no carcass", timeout=15_000
         )
     finally:

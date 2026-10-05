@@ -80,7 +80,7 @@ def test_correction_sets_the_no_carcass_values_clears_the_bag_and_logs_once() ->
         new_audit = reloaded["Audit Log"].iloc[before_audit:]
         print(json.dumps({
             "result": result,
-            "fhk": w["Final Humane Kill"], "necropsy_status": w["Necropsy Status"], "window_bag": w["Bag ID"],
+            "fhk": w["Final Humane Kill"], "necropsy_status": w["Necropsy Status"], "necropsy_assessment": w["Necropsy Assessment"], "window_bag": w["Bag ID"],
             "finding": w["Finding At Close"], "review_status": w["Review Status"],
             "check_bag": c["Bag ID"], "cleared": c["Animal Cleared"], "bagged": c["Animal Bagged"],
             "necropsy_task": fus.loc["Necropsy review", "Status"], "necropsy_task_bag": fus.loc["Necropsy review", "Bag ID"],
@@ -93,6 +93,7 @@ def test_correction_sets_the_no_carcass_values_clears_the_bag_and_logs_once() ->
     )
     assert out["fhk"] == "Not assessed — no carcass"
     assert out["necropsy_status"] == "Not applicable — no carcass"
+    assert out["necropsy_assessment"] == "Not applicable — no carcass", "the assessment must not read Pending forever"
     assert out["window_bag"] == "" and out["check_bag"] == "", "the phantom Bag ID must be cleared"
     assert out["cleared"] == "No" and out["bagged"] == "No"
     assert out["finding"] == "Dead animal found", "it must stay a kill"

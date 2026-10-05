@@ -222,6 +222,9 @@ FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no an
 NOT_ASSESSED_NO_CARCASS = "Not assessed — no carcass"
 NOT_ASSESSED_TRIAL_ENDED = "Not assessed — trial ended"
 NECROPSY_NOT_APPLICABLE_NO_CARCASS = "Not applicable — no carcass"
+# Used for both Necropsy Status and Necropsy Assessment on a no-carcass window,
+# so neither reads as "Pending" forever.
+NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS = NECROPSY_NOT_APPLICABLE_NO_CARCASS
 FOLLOWUP_NO_CARCASS_STATUS = "Resolved — no carcass collected"
 
 
@@ -2634,6 +2637,7 @@ def correct_kill_to_no_carcass(data, window_id: str) -> dict:
     staged = {name: frame.copy(deep=True) for name, frame in data.items()}
     staged["Windows"].at[widx, "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
     staged["Windows"].at[widx, "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+    staged["Windows"].at[widx, "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
     staged["Windows"].at[widx, "Bag ID"] = ""
     for cidx in check_ids:
         staged["Checks"].at[cidx, "Bag ID"] = ""
@@ -5920,6 +5924,7 @@ elif page == "check":
                 if no_carcass:
                     staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
                     staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+                    staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
 
             expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
             check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
@@ -7904,7 +7909,7 @@ elif page == "data_management":
                 else:
                     editable = {
                         "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started", NECROPSY_NOT_APPLICABLE_NO_CARCASS],
-                        "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending"],
+                        "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending", NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS],
                         "Species": SPECIES,
                         "Rat Type": RAT_TYPES,
                         "Animal Weight Range": weight_ranges_for_species(row["Species"]) + [""],
