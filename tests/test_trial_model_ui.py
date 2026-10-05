@@ -180,6 +180,9 @@ def test_bulk_activate_at_a_site_with_no_trial_says_so_up_front(page: Page, tmp_
         ).to_be_visible(timeout=15_000)
         # Nothing to select or preview while the site has no trial.
         assert page.get_by_role("button", name="Preview activation", exact=True).count() == 0
+        expect(page.get_by_role("button", name="Start a trial", exact=True)).to_be_visible()
+        page.get_by_role("button", name="Start a trial", exact=True).click()
+        expect(page.get_by_text("Builds this trial compares", exact=True)).to_be_visible(timeout=20_000)
 
 
 _SEED_TRIALS_EVERYWHERE = """
@@ -283,6 +286,7 @@ def test_blocked_actions_show_the_exact_message_and_change_nothing(page: Page, t
         page.get_by_role("button", name="Change build", exact=True).click()
         expect(page.get_by_text("A build can't change inside a trial. Changing a build starts a new trial.", exact=False)).to_be_visible(timeout=20_000)
         expect(page.get_by_text("End TRIAL-MAN-01, then start a new trial with the builds you want", exact=False)).to_be_visible()
+        expect(page.get_by_role("button", name="Go to trial", exact=True)).to_be_visible()
 
         toggle = page.get_by_role("switch", name="Move trap")
         toggle.focus()
@@ -302,6 +306,7 @@ def test_blocked_actions_show_the_exact_message_and_change_nothing(page: Page, t
         _tick(page, "Start a new monitoring window and set this trap to Active")
         page.get_by_role("button", name="Activate trap", exact=True).click()
         expect(page.get_by_text("Start a trial first. Every active trap belongs to a trial.", exact=False)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Start a trial", exact=True)).to_be_visible()
 
         # The staged-build caption shows on an Inactive trap.
         page.locator("summary", has_text="Change build").click()
