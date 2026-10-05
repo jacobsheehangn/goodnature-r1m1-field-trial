@@ -370,3 +370,67 @@ def test_the_required_actions_are_in_the_first_viewport(page: Page, tmp_path: Pa
         _open_set_up(page, url)
         nxt = page.get_by_role("button", name="Next: choose traps").bounding_box()
         assert nxt and nxt["y"] + nxt["height"] <= viewport["height"], "Set up step 1: Next is on the first screen"
+
+
+# --- Undo (Phase 3) ----------------------------------------------------------------------------------------
+
+def _set_up_to_the_result(page: Page, url: str) -> None:
+    _open_set_up(page, url)
+    page.get_by_role("button", name="Next: choose traps").click()
+    expect(page.get_by_text("Set all unassigned to", exact=True)).to_be_visible(timeout=20_000)
+    page.get_by_role("radio", name="Build 4.3").first.click()
+    page.wait_for_timeout(400)
+    page.get_by_role("button", name="Preview activation").click()
+    expect(page.get_by_text("This trial", exact=True)).to_be_visible(timeout=20_000)
+    page.get_by_role("button", name="Start trial", exact=True).click()
+    expect(page.get_by_text("Undo ends when you leave this screen or lock your phone.", exact=True)).to_be_visible(timeout=60_000)
+
+
+def test_undo_from_the_set_up_result_screen_restores_the_workbook(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED) as url:
+        before = {n: _sheet(data_dir, n) for n in ("Trials", "Traps", "Windows", "Followups", "Visits", "Checks")}
+        _set_up_to_the_result(page, url)
+        assert (_sheet(data_dir, "Trials")["Status"] == "Open").any()
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
+        for name, frame in before.items():
+            pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} after undo")
+        audit = _sheet(data_dir, "Audit Log")
+        assert audit["Reason"].str.startswith("Undo: ").any(), "the undo is itself recorded"
+        # Undo is not offered again, and not after leaving the screen.
+        assert page.get_by_role("button", name="Undo this action").count() == 0
+        page.get_by_role("button", name="Trap sites", exact=True).click()
+        expect(_card(page, "Mangaroa Farm").get_by_role("button", name="Start trial", exact=True)).to_be_visible(timeout=20_000)
+
+
+def test_undo_is_gone_once_the_operator_leaves_the_result_screen(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED) as url:
+        _set_up_to_the_result(page, url)
+        page.get_by_role("button", name="Go to trial").click()
+        expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=20_000)
+        assert page.get_by_role("button", name="Undo this action").count() == 0
+        page.get_by_role("button", name="Trap sites", exact=True).click()
+        _card(page, "Mangaroa Farm").get_by_role("button", name="Trial overview", exact=True).click()
+        expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=20_000)
+        assert page.get_by_role("button", name="Undo this action").count() == 0
+
+
+def test_undo_from_the_end_trial_result_screen_reopens_the_trial(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, END_SEED) as url:
+        before = {n: _sheet(data_dir, n) for n in ("Trials", "Traps", "Windows", "Followups", "Visits", "Checks")}
+        _to_end_trial_from_the_visit(page, url)
+        _decide_unresolvable(page)
+        expect(page.get_by_text("Marked unresolvable", exact=True)).to_be_visible(timeout=20_000)
+        _decide_unresolvable(page)
+        page.get_by_role("button", name="Continue to preview").click()
+        expect(page.get_by_text("What ending does", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Confirm trial end").click()
+        expect(page.get_by_text("Undo ends when you leave this screen or lock your phone.", exact=True)).to_be_visible(timeout=60_000)
+        assert (_sheet(data_dir, "Trials")["Status"] == "Ended").all()
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
+        for name, frame in before.items():
+            pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} after undo")

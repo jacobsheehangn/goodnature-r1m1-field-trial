@@ -1638,6 +1638,7 @@ def activate_trap(data, trap_id, effective_time, reason, commit=True):
     data["Traps"].at[idx, "Status"] = "Active"
     if not str(data["Traps"].at[idx, "Deployment Start"]).strip():
         data["Traps"].at[idx, "Deployment Start"] = dtstr(effective_time)
+        audit_change(data, "Trap", trap_id, "Deployment Start", "", dtstr(effective_time), reason)
     start_window(data, trap_id, effective_time)
     audit_change(data, "Trap", trap_id, "Status", "Inactive", "Active", reason)
     if commit:
@@ -2170,7 +2171,10 @@ def commit_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_i
         audit_change(staged, "Trial", trial["Trial ID"], field, staged["Trials"].at[tidx, field], new, TRIAL_REASON_ENDED)
         staged["Trials"].at[tidx, field] = new
     if note.strip():
-        staged["Trials"].at[tidx, "Notes"] = (str(staged["Trials"].at[tidx, "Notes"]).strip() + " · " + note.strip()).strip(" ·")
+        old_trial_notes = str(staged["Trials"].at[tidx, "Notes"])
+        new_trial_notes = (old_trial_notes.strip() + " · " + note.strip()).strip(" ·")
+        audit_change(staged, "Trial", trial["Trial ID"], "Notes", old_trial_notes, new_trial_notes, TRIAL_REASON_ENDED)
+        staged["Trials"].at[tidx, "Notes"] = new_trial_notes
     _trial_action_test_failure("end", step + 1)
     save_data(staged)
     _adopt_staged(data, staged)
@@ -2183,6 +2187,131 @@ def commit_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_i
         "visit_status": plan["visit_status"],
         "change_ids": _audit_ids_since(staged, audit_start),
     }
+
+
+# ---- Undo (Phase 3) -------------------------------------------------------------------
+# Set up, Track as a trial and End trial can each be undone from their result screen, for as
+# long as the operator stays on it. Undo reverses exactly the audit entries that action wrote
+# (by Change ID) - never a snapshot - so anything saved by another action in the meantime is
+# untouched. Every reversal first checks the record still holds the value the action wrote; if
+# anything has moved on, nothing is changed at all.
+
+_UNDO_RECORDS = {
+    "Trap": ("Traps", "Trap ID"),
+    "Window": ("Windows", "Window ID"),
+    "Follow-up": ("Followups", "Follow-up ID"),
+    "Visit": ("Visits", "Visit ID"),
+    "Trial": ("Trials", "Trial ID"),
+}
+_UNDO_PLAIN_FIELDS = {
+    "Trap": {"Status", "Site ID", "Route Order", "Location", "Deployment Start"},
+    "Window": {"End Time", "Status", "End Reason", "Review Status", "Final Humane Kill"},
+    "Follow-up": {"Status", "Completed Time", "Notes"},
+    "Visit": {"Status", "End Time", "Notes"},
+    "Trial": {"Status", "End Time", "Notes"},
+}
+
+
+def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
+    """Reverses a Set up ("set_up"), Track as a trial ("adopt") or End trial ("end") using only
+    the audit entries it created. Raises ValueError (with nothing written) if the action can no
+    longer be undone cleanly."""
+    if kind not in ("set_up", "adopt", "end"):
+        raise ValueError("Unknown action.")
+    cannot = "Undo isn't possible any more: "
+    staged = _staged_copy(data)
+    audit = staged["Audit Log"]
+    ids = [str(c) for c in change_ids]
+    rows = audit[audit["Change ID"].astype(str).isin(ids)]
+    if rows.empty or len(set(rows["Change ID"].astype(str))) != len(set(ids)):
+        raise ValueError(cannot + "this action's record could not be found.")
+    trial_rows = staged["Trials"][staged["Trials"]["Trial ID"] == trial_id]
+    if trial_rows.empty:
+        raise ValueError(cannot + "the trial no longer exists.")
+    expected_status = TRIAL_STATUS_ENDED if kind == "end" else TRIAL_STATUS_OPEN
+    if str(trial_rows.iloc[0]["Status"]) != expected_status:
+        raise ValueError(cannot + "the trial has changed since.")
+
+    created_windows = set()
+    if kind == "set_up":
+        created = staged["Windows"][staged["Windows"]["Trial ID"] == trial_id]
+        created_windows = set(created["Window ID"].astype(str))
+        if (created["Status"] != "Open").any():
+            raise ValueError(cannot + "a window this trial opened has since been closed.")
+        referenced = (
+            staged["Checks"]["Window Closed"].astype(str).isin(created_windows).any()
+            or staged["Followups"]["Window ID"].astype(str).isin(created_windows).any()
+            or staged["Photos"]["Window ID"].astype(str).isin(created_windows).any()
+        )
+        if referenced:
+            raise ValueError(cannot + "a check has been recorded since this trial started.")
+
+    problems, undone, delete_trial = [], 0, False
+    for _, entry in rows.iloc[::-1].iterrows():
+        rtype, rid, field = str(entry["Record Type"]), str(entry["Record ID"]), str(entry["Field"])
+        previous, new, reason = str(entry["Previous Value"]), str(entry["New Value"]), str(entry["Reason"])
+        if rtype == "Trap" and field == "Windows tagged to trial":
+            continue  # reversed below by clearing the stamps
+        if rtype not in _UNDO_RECORDS:
+            problems.append(f"an unexpected {rtype} entry")
+            continue
+        sheet, id_col = _UNDO_RECORDS[rtype]
+        frame = staged[sheet]
+        idxs = frame.index[frame[id_col].astype(str) == rid].tolist()
+        if field == "Created" and rtype == "Follow-up":
+            if not idxs:
+                problems.append(f"follow-up {rid} is gone")
+                continue
+            if str(frame.at[idxs[0], "Status"]) != "Open":
+                problems.append(f"follow-up {rid} has been worked on")
+                continue
+            staged[sheet] = frame.drop(index=idxs[0]).reset_index(drop=True)
+            audit_change(staged, rtype, rid, "Created", new, "", f"Undo: {reason}")
+            undone += 1
+            continue
+        if not idxs:
+            problems.append(f"{rtype} {rid} is gone")
+            continue
+        i = idxs[0]
+        if rtype == "Trial" and field == "Status" and previous == "":
+            delete_trial = True
+            audit_change(staged, rtype, rid, field, new, "", f"Undo: {reason}")
+            undone += 1
+            continue
+        if rtype == "Trap" and field == "Build Version":
+            current = f"{frame.at[i, 'Product']} · {frame.at[i, 'Build Version']}"
+            if current != new:
+                problems.append(f"{rid}'s build has changed since")
+                continue
+            product, build = previous.split(" · ", 1)
+            frame.at[i, "Product"], frame.at[i, "Build Version"] = product, build
+        elif field in _UNDO_PLAIN_FIELDS.get(rtype, set()):
+            if str(frame.at[i, field]) != new:
+                problems.append(f"{rtype} {rid}'s {field.lower()} has changed since")
+                continue
+            frame.at[i, field] = previous
+        else:
+            problems.append(f"an unexpected {rtype} change ({field})")
+            continue
+        audit_change(staged, rtype, rid, field, new, previous, f"Undo: {reason}")
+        undone += 1
+    if problems:
+        raise ValueError(cannot + problems[0][0].lower() + problems[0][1:] + ".")
+
+    windows_removed = windows_unstamped = 0
+    if kind == "set_up":
+        keep = ~staged["Windows"]["Window ID"].astype(str).isin(created_windows)
+        windows_removed = int((~keep).sum())
+        staged["Windows"] = staged["Windows"][keep].reset_index(drop=True)
+    elif kind == "adopt":
+        stamped = staged["Windows"]["Trial ID"] == trial_id
+        windows_unstamped = int(stamped.sum())
+        staged["Windows"].loc[stamped, "Trial ID"] = ""
+    if delete_trial:
+        staged["Trials"] = staged["Trials"][staged["Trials"]["Trial ID"] != trial_id].reset_index(drop=True)
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"kind": kind, "entries_reversed": undone, "windows_removed": windows_removed, "windows_unstamped": windows_unstamped}
 
 
 def sync_workflow_query_params(page: str) -> None:
@@ -4219,6 +4348,30 @@ if SPEED_PROBE:
     begin_trial_start = _probe_callback(begin_trial_start)
     begin_trial_adopt = _probe_callback(begin_trial_adopt)
     begin_trial_end = _probe_callback(begin_trial_end)
+
+
+def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids) -> bool:
+    """The Undo card on a result screen. It lasts only while the operator stays on that screen
+    (leaving the flow drops its state). Returns True once the action has been undone."""
+    state = st.session_state[state_key]
+    if state.get("undone"):
+        st.markdown(design.message_html("success", "Undone", "Everything this action changed has been put back."), unsafe_allow_html=True)
+        return True
+    with st.container(key=f"card_undo_{kind}"):
+        st.markdown('<div class="r1-card-title">Undo</div><div class="r1-meta">Undo ends when you leave this screen or lock your phone.</div>', unsafe_allow_html=True)
+        if state.get("undo_error"):
+            st.markdown(design.message_html("error", "Nothing was changed.", html.escape(state["undo_error"])), unsafe_allow_html=True)
+        if two_phase_button("Undo this action", f"undo_{kind}", "Undoing…"):
+            try:
+                undo_trial_action(data, kind, trial_id, change_ids)
+                state.update({"undone": True, "undo_error": ""})
+            except ValueError as exc:
+                state["undo_error"] = str(exc)
+            except Exception:
+                _logger.exception("Undo failed")
+                state["undo_error"] = "Check your signal and try again."
+            st.rerun()
+    return False
 
 
 def return_from_followup_task() -> bool:
@@ -6909,8 +7062,11 @@ elif page == "trial_start":
             st.stop()
         if step == 4:
             result = ts["result"]
-            st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
-            st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+            if not ts.get("undone"):
+                st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
+            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"])
+            if not undone:
+                st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ts_done", on_click=leave_trial_flow, args=("ts",))
             st.stop()
         if open_trial(data, sid) is not None:
@@ -7056,8 +7212,11 @@ elif page == "trial_adopt":
     with st.container(key=design.SCREEN_KEY):
         if ta.get("step") == 3:
             result = ta["result"]
-            st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
-            st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+            if not ta.get("undone"):
+                st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
+            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"])
+            if not undone:
+                st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ta_done", on_click=leave_trial_flow, args=("ta",))
             st.stop()
         st.button("Trap sites", key="back_ta", on_click=leave_trial_flow, args=("ta",))
@@ -7121,7 +7280,9 @@ elif page == "trial_end":
         step = te.get("step", "list")
         if step == "result":
             result = te["result"]
-            st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
+            if not te.get("undone"):
+                st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
+            r1_undo_section("te", "end", result["trial_id"], result["change_ids"])
             st.button("Trap sites", key="te_done", type="primary", on_click=leave_trial_flow, args=("te",))
             st.stop()
         if trial is None:
