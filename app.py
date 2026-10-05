@@ -213,6 +213,24 @@ SHEETS = {
 }
 
 FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no animal", "Trap disturbed", "Trap missing", "Unable to check"]
+
+# A kill whose carcass was never collected (scavenged before the check) still
+# counts as a kill but can never be necropsied. These values keep it out of
+# "awaiting final assessment" and out of the humane rate, and are listed in
+# every place that offers or reads these fields (the Data & records correction
+# lists, Trial performance) so no reader mistakes them for pending work.
+NOT_ASSESSED_NO_CARCASS = "Not assessed — no carcass"
+NOT_ASSESSED_TRIAL_ENDED = "Not assessed — trial ended"
+NECROPSY_NOT_APPLICABLE_NO_CARCASS = "Not applicable — no carcass"
+# Used for both Necropsy Status and Necropsy Assessment on a no-carcass window,
+# so neither reads as "Pending" forever.
+NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+FOLLOWUP_NO_CARCASS_STATUS = "Resolved — no carcass collected"
+
+
+def not_assessed_mask(final_humane_kill: pd.Series) -> pd.Series:
+    """Kills deliberately counted-but-not-assessed (no carcass / trial ended)."""
+    return final_humane_kill.astype(str).str.startswith("Not assessed — ")
 LURE = ["Fresh", "Present/good", "Partly eaten", "Gone", "Dry", "Mouldy", "Contaminated", "Unknown"]
 CAMERA = ["Working", "Offline", "Battery low", "Poor view", "Blocked view", "Missing", "Unsure"]
 SPECIES = ["Rat", "Mouse", "Non-target", "Unknown"]
@@ -1919,6 +1937,7 @@ def check_draft_field_keys(trap_id: str, visit_id: str) -> dict:
         "species": f"species_{suffix}",
         "rat_type": f"rat_type_{suffix}",
         "condition": f"condition_{suffix}",
+        "carcass": f"carcass_{suffix}",
         "bagged": f"bagged_{suffix}",
         "service_ready": f"service_ready_{suffix}",
         "service_reason": f"service_reason_{suffix}",
@@ -2563,6 +2582,82 @@ def remove_followup_task(data, followup_id: str, reason: str):
     for name in data:
         data[name] = staged[name]
     return task
+
+
+def no_carcass_correction_candidates(data) -> pd.DataFrame:
+    """Dead-animal windows that still have an open Necropsy review and no final
+    result - the records a "Carcass collected? No" check would never have
+    created a task for. The owner confirms each one by hand; nothing here
+    changes any data."""
+    windows = data["Windows"]
+    open_necropsy = data["Followups"][
+        (data["Followups"]["Follow-up Type"] == "Necropsy review") & (data["Followups"]["Status"] == "Open")
+    ]["Window ID"].astype(str)
+    return windows[
+        (windows["Finding At Close"] == "Dead animal found")
+        & (windows["Final Humane Kill"] == "Pending")
+        & windows["Window ID"].astype(str).isin(set(open_necropsy))
+    ].copy()
+
+
+def correct_kill_to_no_carcass(data, window_id: str) -> dict:
+    """One-time correction: this recorded kill never had a carcass collected.
+    Sets Final Humane Kill / Necropsy Status to their no-carcass values,
+    resolves the necropsy task with its own distinct status (not "Complete"),
+    clears the bag ID that was issued for no bag, and writes one audit entry.
+    Refuses if anything contradicts "no carcass" (a final result, no open
+    necropsy task, or photos attached to the bag). Staged and saved once."""
+    matches = data["Windows"].index[data["Windows"]["Window ID"] == window_id].tolist()
+    if not matches:
+        raise ValueError("That window could not be found.")
+    widx = matches[0]
+    window = data["Windows"].loc[widx]
+    if window["Finding At Close"] != "Dead animal found":
+        raise ValueError("This window's finding is not 'Dead animal found'.")
+    if window["Final Humane Kill"] != "Pending":
+        raise ValueError("This kill already has a final result recorded.")
+    task_rows = data["Followups"].index[
+        (data["Followups"]["Window ID"] == window_id)
+        & (data["Followups"]["Follow-up Type"] == "Necropsy review")
+        & (data["Followups"]["Status"] == "Open")
+    ].tolist()
+    if not task_rows:
+        raise ValueError("There is no open necropsy review for this kill.")
+    bag_id = str(window["Bag ID"]).strip()
+    check_ids = data["Checks"].index[data["Checks"]["Window Closed"] == window_id].tolist()
+    photos = data["Photos"]
+    linked_photos = (photos["Window ID"].astype(str) == str(window_id)) | (
+        photos["Check ID"].astype(str).isin(set(data["Checks"].loc[check_ids, "Check ID"].astype(str)))
+    )
+    if bag_id:
+        linked_photos = linked_photos | (photos["Bag ID"].astype(str) == bag_id)
+    if linked_photos.any():
+        raise ValueError("Photos are attached to this kill, so a carcass was collected. It cannot be marked as no carcass.")
+
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    staged["Windows"].at[widx, "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
+    staged["Windows"].at[widx, "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+    staged["Windows"].at[widx, "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
+    staged["Windows"].at[widx, "Bag ID"] = ""
+    for cidx in check_ids:
+        staged["Checks"].at[cidx, "Bag ID"] = ""
+        staged["Checks"].at[cidx, "Animal Cleared"] = "No"
+        staged["Checks"].at[cidx, "Animal Bagged"] = "No"
+    for fidx in staged["Followups"].index[staged["Followups"]["Window ID"] == window_id]:
+        staged["Followups"].at[fidx, "Bag ID"] = ""
+    for fidx in task_rows:
+        staged["Followups"].at[fidx, "Status"] = FOLLOWUP_NO_CARCASS_STATUS
+        staged["Followups"].at[fidx, "Completed Time"] = dtstr()
+    refresh_review_status(staged, window_id)
+    audit_change(
+        staged, "Kill record", window_id, "Carcass collected",
+        f"Yes (bag {bag_id})" if bag_id else "Yes", "No",
+        "One-time correction: no carcass was collected (scavenged before the check), confirmed by the owner",
+    )
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
+    return {"window_id": window_id, "bag_id": bag_id, "tasks_resolved": len(task_rows)}
 
 
 def recreate_followup(data, window_id: str, followup_type: str, reason: str):
@@ -5547,6 +5642,24 @@ elif page == "check":
             return
 
         has_animal = finding == "Dead animal found"
+        # Scavenged kills: the carcass was gone by the time of the check. "Yes"
+        # is exactly the original form; "No" skips the bag, photos and necropsy
+        # task (nothing to bag, photograph or examine) but still records the kill.
+        carcass_collected = False
+        if has_animal:
+            carcass_choice = st.radio(
+                "Carcass collected?",
+                ["Yes", "No"],
+                index=None,
+                horizontal=True,
+                key=f"carcass_{trap_id}_{vid}",
+            )
+            if carcass_choice is None:
+                st.caption("Say whether the carcass was collected to continue.")
+                return
+            carcass_collected = carcass_choice == "Yes"
+        collected_animal = has_animal and carcass_collected
+        no_carcass = has_animal and not carcass_collected
         assessable = finding not in ["Trap missing", "Unable to check"]
         bag_id = ""
         species = ""
@@ -5556,21 +5669,27 @@ elif page == "check":
         photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
 
         if has_animal:
-            bag_key = f"bag_id_{vid}_{trap_id}"
-            pending_check_id = ensure_pending_check_id(vid, trap_id)
-            if bag_key not in st.session_state:
-                recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
-                st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
-            bag_id = st.session_state[bag_key]
-            message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
-            st.markdown("### Photos")
-            st.caption("Choose the photos already taken from the camera roll.")
-            photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
+            if collected_animal:
+                bag_key = f"bag_id_{vid}_{trap_id}"
+                pending_check_id = ensure_pending_check_id(vid, trap_id)
+                if bag_key not in st.session_state:
+                    recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
+                    st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
+                bag_id = st.session_state[bag_key]
+                message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
+                st.markdown("### Photos")
+                st.caption("Choose the photos already taken from the camera roll.")
+                photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
             species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
             if species == "Rat":
                 rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
-            condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
-            bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+            if collected_animal:
+                condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
+                bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+            else:
+                condition = "Unable to assess"
+                st.caption("No Bag ID, bag tick or necropsy task. This kill counts, but can't be assessed.")
+                st.caption('Animal condition recorded as "Unable to assess".')
         elif finding == "Trap fired, no animal":
             st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
         elif finding == "Trap missing":
@@ -5674,8 +5793,8 @@ elif page == "check":
         else:
             d = tm = None
 
-        photo_blocked = bool(has_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-        if has_animal and photo_gate.get("expected_count", 0):
+        photo_blocked = bool(collected_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+        if collected_animal and photo_gate.get("expected_count", 0):
             if photo_gate.get("manual_failure_count", 0):
                 count = int(photo_gate["manual_failure_count"])
                 st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
@@ -5719,9 +5838,9 @@ elif page == "check":
                 errors.append("Choose the species.")
             if has_animal and species == "Rat" and not rat_type:
                 errors.append("Choose the rat type.")
-            if has_animal and not condition:
+            if collected_animal and not condition:
                 errors.append("Choose the animal condition.")
-            if has_animal and not bag_labelled:
+            if collected_animal and not bag_labelled:
                 errors.append(f"Confirm that bag {bag_id} is labelled.")
             if assessable and service_choice is None:
                 errors.append("Confirm whether the trap is relured, reset and ready.")
@@ -5739,7 +5858,7 @@ elif page == "check":
                 return
 
             check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
-            if has_animal and photo_gate.get("expected_count", 0):
+            if collected_animal and photo_gate.get("expected_count", 0):
                 photo_gate = {
                     **photo_gate,
                     **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
@@ -5802,8 +5921,12 @@ elif page == "check":
             if idxs:
                 staged["Windows"].at[idxs[0], "Species"] = species
                 staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
+                if no_carcass:
+                    staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
+                    staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+                    staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
 
-            expected_photo_count = int(photo_gate.get("expected_count", 0)) if has_animal else 0
+            expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
             check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
             trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
             trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
@@ -5822,7 +5945,7 @@ elif page == "check":
                 priority = "High" if finding == "Trap fired, no animal" else "Normal"
                 add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
                              "Confirm target interaction, activation, kill and video evidence", priority)
-            if has_animal:
+            if collected_animal:
                 add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
                              "Dead animal collected",
                              "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
@@ -6572,7 +6695,8 @@ elif page == "results":
     confirmed_kills=physical_kills.copy()  # retained name for the breakdown and attention views
     humane=physical_kills[physical_kills["Final Humane Kill"]=="Yes"]
     non_humane=physical_kills[physical_kills["Final Humane Kill"]=="No"]
-    final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"])]
+    not_assessed=physical_kills[not_assessed_mask(physical_kills["Final Humane Kill"])]
+    final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(physical_kills["Final Humane Kill"])]
     assessed_kills=len(humane)+len(non_humane)
     humane_rate=len(humane)/assessed_kills*100 if assessed_kills else None
 
@@ -6601,9 +6725,14 @@ elif page == "results":
             ])
             if len(final_pending):
                 action_callout(f"→ {len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention")
+            if len(not_assessed):
+                no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
+                trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
+                reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
+                st.caption(f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} counted but not assessed ({', '.join(reasons)}) — not in the humane rate.")
             card_footer(
                 "Necropsy-dependent",
-                f"Necropsy = physical examination of the collected animal. Based on {assessed_kills} of {len(physical_kills)} confirmed kills with a completed necropsy assessment.",
+                f"Necropsy = physical examination of the collected animal. Based on {assessed_kills} of {len(physical_kills)} confirmed kills with a completed necropsy assessment. All {len(physical_kills)} count as kills; only assessed kills count toward the humane rate.",
             )
     with time_card:
         with app_card():
@@ -6628,6 +6757,9 @@ elif page == "results":
             st.markdown("#### Evidence")
             st.metric("Kill assessments complete",f"{len(kill_evidence_complete)} of {len(physical_kills)}")
             st.caption(f"Camera reviews complete: {len(camera_reviews_complete)} of {len(camera_windows)}")
+            camera_reviews_unresolved=camera_windows[camera_windows["Review Status"]=="Unresolved"]
+            if len(camera_reviews_unresolved):
+                st.caption(f"Unresolved: {len(camera_reviews_unresolved)} — review given up on at trial end. Not counted as complete.")
             if not len(windows): st.caption("No closed windows in this selection")
             card_footer(
                 "Coverage card",
@@ -6755,7 +6887,7 @@ elif page == "results":
         bad_count=len(non_humane)
         slow_count=len(missed_target)
         missing_count=len(attention[
-            (~attention["Final Humane Kill"].isin(["Yes","No"])) |
+            (~attention["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(attention["Final Humane Kill"])) |
             ((attention["Camera Assigned"]=="Yes") & attention["Interaction To Kill Numeric"].isna())
         ])
         summary_parts=[]
@@ -7575,7 +7707,7 @@ elif page == "data_management":
         st.write("The corrected value and why the original entry was wrong.")
         st.markdown("#### What the app will update")
         st.write("The linked record, any affected Performance figures, and a permanent audit-log entry.")
-        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit"])
+        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit", "Kill with no carcass"])
         search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
 
         if record_type == "Follow-up task":
@@ -7601,7 +7733,7 @@ elif page == "data_management":
                 ])
                 types_needed = []
                 assessable_orphan = orphan_row["Finding At Close"] not in ["Trap missing", "Unable to check"]
-                if orphan_row["Finding At Close"] == "Dead animal found":
+                if orphan_row["Finding At Close"] == "Dead animal found" and orphan_row["Final Humane Kill"] != NOT_ASSESSED_NO_CARCASS:
                     types_needed.append("Necropsy review")
                 if assessable_orphan and orphan_row["Camera Assigned"] == "Yes":
                     types_needed.append("Camera review")
@@ -7776,12 +7908,12 @@ elif page == "data_management":
                                 st.info("No values changed.")
                 else:
                     editable = {
-                        "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started"],
-                        "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending"],
+                        "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started", NECROPSY_NOT_APPLICABLE_NO_CARCASS],
+                        "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending", NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS],
                         "Species": SPECIES,
                         "Rat Type": RAT_TYPES,
                         "Animal Weight Range": weight_ranges_for_species(row["Species"]) + [""],
-                        "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending"],
+                        "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending", NOT_ASSESSED_NO_CARCASS, NOT_ASSESSED_TRIAL_ENDED],
                     }
                     changed = {}
                     st.markdown("##### Photos")
@@ -7915,6 +8047,54 @@ elif page == "data_management":
                             st.rerun()
                         except Exception as exc:
                             st.error(str(exc))
+        elif record_type == "Kill with no carcass":
+            st.caption(
+                "For a kill recorded as a collected carcass where nothing was actually recovered (for example, eaten "
+                "before the check). It stays counted as a kill, but is taken out of the humane rate and the necropsy task is closed. "
+                "Nothing is changed unless you confirm a specific record."
+            )
+            no_carcass_candidates = no_carcass_correction_candidates(data)
+            if search_text:
+                mask = no_carcass_candidates[["Window ID", "Trap ID", "Bag ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
+                no_carcass_candidates = no_carcass_candidates[mask]
+            if no_carcass_candidates.empty:
+                st.success("No dead-animal kills are waiting on an open necropsy review.")
+            else:
+                st.caption(f"{len(no_carcass_candidates)} kill{'s' if len(no_carcass_candidates) != 1 else ''} with an open necropsy review.")
+                kill_options = no_carcass_candidates["Window ID"].tolist()
+                selected_kill = st.selectbox(
+                    "Select kill",
+                    kill_options,
+                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {human_dt(r['End Time'])}" + (f" · bag {r['Bag ID']}" if str(r['Bag ID']).strip() else "") + f" · {wid}")(no_carcass_candidates[no_carcass_candidates["Window ID"] == wid].iloc[0]),
+                    key="no_carcass_selected_kill",
+                )
+                kill_row = no_carcass_candidates[no_carcass_candidates["Window ID"] == selected_kill].iloc[0]
+                workflow_context([
+                    ("Trap", kill_row["Trap ID"]),
+                    ("Site", site_name(data, kill_row["Site ID"])),
+                    ("Found", human_dt(kill_row["End Time"], include_year=True)),
+                    ("Bag ID issued", kill_row["Bag ID"] or "None"),
+                    ("Species recorded", kill_row["Species"] or "Not recorded"),
+                ])
+                confirm_no_carcass = st.checkbox(
+                    "This kill had no carcass collected - nothing was bagged",
+                    key=f"confirm_no_carcass_{selected_kill}",
+                )
+                if two_phase_button(
+                    "Mark as no carcass collected", f"no_carcass_correct_{selected_kill}", "Saving…",
+                    type="primary", disabled=not confirm_no_carcass,
+                ):
+                    try:
+                        corrected = correct_kill_to_no_carcass(data, selected_kill)
+                        set_flash(
+                            "success", "Kill corrected.",
+                            [f"{kill_row['Trap ID']} is now recorded as a kill with no carcass.",
+                             f"{corrected['tasks_resolved']} necropsy task closed" + (f" and bag {corrected['bag_id']} cleared." if corrected['bag_id'] else "."),
+                             "It still counts as a kill and is not in the humane rate. Recorded in the audit log."],
+                        )
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
         else:
             candidates = data["Checks"].copy()
             if search_text:
