@@ -141,6 +141,19 @@ def caption_locator(page: Page):
     return page.frame_locator("iframe").last.locator("#r1m1-probe")
 
 
+def expect_caption_really_visible(page: Page) -> None:
+    """to_have_text passes for an element that is on the page but hidden, which
+    is exactly how this caption shipped invisible once (the app's own CSS hides
+    top-level helper iframes). Require it to be visible with a real size."""
+    expect(caption_locator(page)).to_be_visible(timeout=15_000)
+    box = caption_locator(page).bounding_box()
+    assert box is not None and box["height"] >= 10 and box["width"] >= 100, f"caption has no real size: {box}"
+    fits = caption_locator(page).evaluate("el => el.getBoundingClientRect().bottom <= window.innerHeight + 1")
+    assert fits, "the caption text is taller than its frame, so part of it (e.g. 'save ... ms') is cut off"
+    viewport = page.viewport_size
+    assert box["x"] >= 0 and box["x"] + box["width"] <= viewport["width"] + 1, f"caption overflows the viewport: {box}"
+
+
 def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: ProbeApp) -> None:
     open_sites(page, probe_off)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
@@ -163,10 +176,12 @@ def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: Prob
 def test_probe_on_logs_each_run_and_shows_the_caption(page: Page, probe_on: ProbeApp, viewport: dict) -> None:
     open_sites(page, probe_on, viewport)
     expect(caption_locator(page)).to_have_text(CAPTION, timeout=15_000)
+    expect_caption_really_visible(page)
 
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
     expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
     expect(caption_locator(page)).to_have_text(CAPTION, timeout=15_000)
+    expect_caption_really_visible(page)
     # A tap happened, so tap->render must now be a real number, not the
     # no-tap-yet dash.
     expect(caption_locator(page)).to_contain_text("tap→render ", timeout=10_000)
@@ -255,3 +270,11 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
             stop_app(process, log_file)
     for name in ("sites", "visit", "check"):
         assert results["on"][name] == results["off"][name], f"{name} page differs with the probe on"
+
+
+@pytest.mark.parametrize("link", ["Follow-ups", "Trial performance"])
+def test_caption_is_visible_on_the_other_top_level_pages(page: Page, probe_on: ProbeApp, link: str) -> None:
+    open_sites(page, probe_on, {"width": 390, "height": 844})
+    page.get_by_role("link", name=link, exact=True).click()
+    expect(page.get_by_text(link, exact=True).last).to_be_visible(timeout=30_000)
+    expect_caption_really_visible(page)

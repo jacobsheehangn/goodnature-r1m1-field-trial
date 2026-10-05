@@ -1750,8 +1750,7 @@ def speed_probe_caption(totals: dict) -> None:
         server_text = f"{totals.get('run_ms', 0.0) + totals.get('cb_ms', 0.0):,.0f}"
         load_text = f"{totals.get('load_ms', 0.0):,.0f}"
         save_text = f"{totals.get('save_ms', 0.0):,.0f}"
-        components.html(
-            f"""
+        caption_html = f"""
 <div id="r1m1-probe" style="font:10.5px/1.5 Inter,system-ui,sans-serif;color:#6F7178;text-align:center;padding:8px 4px 0;background:transparent;">&mdash;</div>
 <script>
 (() => {{
@@ -1796,9 +1795,12 @@ def speed_probe_caption(totals: dict) -> None:
     ' \u00b7 load {load_text} ms \u00b7 save {save_text} ms';
 }})();
 </script>
-""",
-            height=30,
-        )
+"""
+        # Inside a container, not a bare top-level element: the page's own CSS
+        # hides any top-level iframe (it exists to remove the phantom gaps
+        # left by invisible helper frames), which would hide this caption too.
+        with st.container():
+            components.html(caption_html, height=48)
     except Exception:
         pass
 
