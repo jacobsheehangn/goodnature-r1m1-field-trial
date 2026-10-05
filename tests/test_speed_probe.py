@@ -27,7 +27,9 @@ ROOT = Path(__file__).resolve().parents[1]
 LOG_LINE = re.compile(
     r"^SPEEDPROBE page=(?P<page>\S*) kind=(?P<kind>complete|navigate|rerun) "
     r"run_ms=(?P<run_ms>\d+) load_ms=(?P<load_ms>\d+) save_ms=(?P<save_ms>\d+) "
-    r"windows_rows=(?P<windows_rows>-?\d+) cb_ms=(?P<cb_ms>\d+)$"
+    r"windows_rows=(?P<windows_rows>-?\d+) cb_ms=(?P<cb_ms>\d+) "
+    r"checks_rows=(?P<checks_rows>-?\d+) followups_rows=(?P<followups_rows>-?\d+) "
+    r"audit_rows=(?P<audit_rows>-?\d+) workbook_bytes=(?P<workbook_bytes>-?\d+)$"
 )
 CAPTION = re.compile(r"server [\d,]+ ms · tap→render (—|[\d,]+ ms) · median of \d+: (—|[\d,]+ ms) · load [\d,]+ ms · save [\d,]+ ms")
 
@@ -197,6 +199,9 @@ def test_probe_on_logs_each_run_and_shows_the_caption(page: Page, probe_on: Prob
     assert any(m.group("page") == "visit" for m in parsed)
     windows_rows = {int(m.group("windows_rows")) for m in parsed if m.group("kind") == "complete"}
     assert windows_rows and min(windows_rows) > 0, "windows_rows must report the Windows sheet size"
+    complete = [m for m in parsed if m.group("kind") == "complete"]
+    assert all(int(m.group("workbook_bytes")) > 0 for m in complete), "workbook_bytes must report the file size"
+    assert all(int(m.group("checks_rows")) >= 0 and int(m.group("followups_rows")) >= 0 and int(m.group("audit_rows")) >= 0 for m in complete)
 
 
 def test_probe_median_tracks_up_to_ten_samples(page: Page, probe_on: ProbeApp) -> None:
