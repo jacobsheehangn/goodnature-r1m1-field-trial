@@ -109,6 +109,8 @@ def test_rebuild_then_activate_leaves_exactly_one_open_window() -> None:
         """
         app.change_trap_build(data, inactive_id, "R1", "R1 Build 4.2", when, "stage a build", commit=False)
         app.move_trap(data, inactive_id, site_b, when, "stage elsewhere", 3, "Spot", "", commit=False)
+        # Activation needs the destination site to have an Open trial declaring the new build (T2).
+        app.create_trial(data, site_b, ["R1 · R1 Build 4.2"], when)
         app.activate_trap(data, inactive_id, when + datetime.timedelta(hours=1), "start trial", commit=False)
         app.save_data(data)
         reloaded = app.load_data()
@@ -119,28 +121,37 @@ def test_rebuild_then_activate_leaves_exactly_one_open_window() -> None:
     assert out == {"open": 1, "status": "Active", "site": True}
 
 
-def test_active_traps_behave_exactly_as_before() -> None:
+def test_active_trap_at_an_untracked_site_can_change_build_but_not_move() -> None:
+    """The sample data has no Trials rows, so this site is untracked: a build
+    change on an Active trap keeps closing the window and opening a new one, as
+    before. Moving an Active trap is now refused (T6) and must change nothing."""
     out = _run(
         """
         windows_before = window_count(data, active_id)
         old_window = app.open_window(data, active_id)["Window ID"]
         new_window = app.change_trap_build(data, active_id, "R1", "R1 Build 4.2", when, "change build")
         after_build = app.load_data()
-        moved_window = app.move_trap(after_build, active_id, site_b, when + datetime.timedelta(hours=1), "move", 4, "Elsewhere", "")
+        move_error = ""
+        try:
+            app.move_trap(after_build, active_id, site_b, when + datetime.timedelta(hours=1), "move", 4, "Elsewhere", "")
+        except ValueError as exc:
+            move_error = str(exc)
         final = app.load_data()
         w = final["Windows"]
         print(json.dumps({
             "build_window_new": bool(new_window) and new_window != old_window,
-            "moved_window_new": bool(moved_window) and moved_window != new_window,
             "open": open_count(final, active_id), "windows_added": window_count(final, active_id) - windows_before,
             "old_closed_by": w[w["Window ID"] == old_window].iloc[0]["End Reason"],
-            "middle_closed_by": w[w["Window ID"] == new_window].iloc[0]["End Reason"],
+            "open_window_is_the_new_one": app.open_window(final, active_id)["Window ID"] == new_window,
+            "site_unchanged": trap(final, active_id)["Site ID"] == site_a,
+            "move_error": move_error,
         }))
         """
     )
-    assert out["build_window_new"] and out["moved_window_new"]
-    assert out["open"] == 1 and out["windows_added"] == 2
-    assert out["old_closed_by"] == "Build changed" and out["middle_closed_by"] == "Trap moved"
+    assert out["build_window_new"] and out["open"] == 1 and out["windows_added"] == 1
+    assert out["old_closed_by"] == "Build changed"
+    assert out["move_error"].startswith("Deactivate this trap before moving it.")
+    assert out["site_unchanged"] and out["open_window_is_the_new_one"], "a refused move must leave the trap and its window alone"
 
 
 def test_move_trap_commit_false_leaves_the_save_to_the_caller() -> None:

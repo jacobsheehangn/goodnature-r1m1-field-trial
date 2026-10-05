@@ -15,6 +15,18 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# A trap can only be activated at a site with an Open trial on one of its
+# declared builds (TRIAL_LIFECYCLE_BRIEF.md T2/T3, enforced in activate_trap()),
+# so a test that activates traps opens one first. Lives in the subprocess.
+_TRIAL_HELPER = """
+    import datetime as _dt
+    def open_trial_at(data, trap_ids, when=None):
+        import app as _a
+        traps = data["Traps"][data["Traps"]["Trap ID"].isin(trap_ids)]
+        labels = sorted({_a.trial_build_label(r["Product"], r["Build Version"]) for _, r in traps.iterrows()})
+        return [_a.create_trial(data, s, labels, when or _dt.datetime(2026, 8, 1, 8, 0)) for s in traps["Site ID"].unique()]
+"""
+
 
 def _run(tmp_path: Path, script: str) -> dict:
     data_dir = tmp_path / "data"
@@ -29,7 +41,7 @@ def _run(tmp_path: Path, script: str) -> dict:
         }
     )
     result = subprocess.run(
-        [sys.executable, "-c", textwrap.dedent(script)],
+        [sys.executable, "-c", textwrap.dedent(_TRIAL_HELPER) + "\n" + textwrap.dedent(script)],
         cwd=ROOT,
         env=env,
         capture_output=True,
@@ -57,6 +69,7 @@ def test_activating_an_inactive_trap_opens_exactly_one_window(tmp_path: Path) ->
         # impossible state (Inactive trap with an open window).
         data["Windows"] = data["Windows"][data["Windows"]["Trap ID"] != trap_id].copy()
         before_window_count = len(data["Windows"])
+        open_trial_at(data, [trap_id])
         effective = datetime(2026, 8, 13, 9, 30)
         app.activate_trap(data, trap_id, effective, "New trap deployed for field pass")
         reloaded = app.load_data()
@@ -116,6 +129,7 @@ def test_deactivating_an_active_trap_closes_open_window_and_opens_none(tmp_path:
         # Sample data seeds an open window per trap - clear it so this test's
         # own activate_trap() call is what creates the window under test.
         data["Windows"] = data["Windows"][data["Windows"]["Trap ID"] != trap_id].copy()
+        open_trial_at(data, [trap_id])
         app.activate_trap(data, trap_id, datetime(2026, 8, 10, 8, 0), "activate for test")
         data = app.load_data()
         window_before = app.open_window(data, trap_id)
@@ -215,6 +229,7 @@ def test_commit_false_defers_save(tmp_path: Path) -> None:
         trap_id = data["Traps"].iloc[0]["Trap ID"]
         idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
         data["Traps"].at[idx, "Status"] = "Inactive"
+        open_trial_at(data, [trap_id])
         app.save_data(data)
         data = app.load_data()
 
@@ -284,6 +299,7 @@ def _bulk_activation_script(force_error_on: str = "") -> str:
             idx = data["Traps"].index[data["Traps"]["Trap ID"] == tid][0]
             data["Traps"].at[idx, "Status"] = "Inactive"
             data["Windows"] = data["Windows"][data["Windows"]["Trap ID"] != tid].copy()
+        open_trial_at(data, trap_ids)
         app.save_data(data)
         data = app.load_data()
 

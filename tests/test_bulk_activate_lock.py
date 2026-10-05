@@ -59,6 +59,10 @@ def _seed_two_inactive_traps(data_dir: Path) -> dict:
         trap_ids = data["Traps"]["Trap ID"].tolist()[:2]
         for trap_id in trap_ids:
             app.deactivate_trap(data, trap_id, datetime.datetime(2026, 8, 12, 9, 0), "Test setup", commit=False)
+        # Activation needs an Open trial at the site declaring these traps' build.
+        site_id = data["Traps"].iloc[0]["Site ID"]
+        labels = sorted({app.trial_build_label(r["Product"], r["Build Version"]) for _, r in data["Traps"][data["Traps"]["Trap ID"].isin(trap_ids)].iterrows()})
+        app.create_trial(data, site_id, labels, datetime.datetime(2026, 8, 12, 8, 0))
         app.save_data(data)
         print(json.dumps({"trap_ids": trap_ids}))
     """

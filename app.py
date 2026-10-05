@@ -201,15 +201,19 @@ SHEETS = {
     "Traps": ["Trap ID", "Product", "Build Version", "Site ID", "Route Order", "Location", "Camera ID", "Deployment Start", "Setup Image Link", "Status", "Notes"],
     "Visits": ["Visit ID", "Site ID", "Operator", "Start Time", "End Time", "Status", "Notes"],
     "Checks": ["Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID", "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function", "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes", "Excluded", "Exclusion Reason"],
-    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason"],
+    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason", "Trial ID"],
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
     "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
+    # One row per trial: a bounded comparison at one site (a start, an end, 1-3
+    # declared builds). At most one is Open per site. Status: Open | Ended.
+    # Origin: Started | Adopted. Declared Builds: "Product · Build" labels joined by "; ".
+    "Trials": ["Trial ID", "Site ID", "Status", "Start Time", "End Time", "Declared Builds", "Origin", "Notes"],
     # Derived, read-only sheets - documentation written from code, never a
     # second source of truth. See _derived_sheet_data() for what populates
     # them; no UI form or widget may write to either.
     "Trial Config": ["Parameter", "Value", "Source", "Set Date"],
-    "Kills": ["Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time", "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment", "Animal Weight Range", "Bag ID"],
+    "Kills": ["Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time", "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment", "Animal Weight Range", "Bag ID", "Trial ID"],
 }
 
 FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no animal", "Trap disturbed", "Trap missing", "Unable to check"]
@@ -286,7 +290,7 @@ def make_id(prefix: str) -> str:
     return f"{prefix}-{now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
 
-SITE_CODE_LINKED_SHEETS = ["Traps", "Visits", "Windows", "Followups", "Photos"]
+SITE_CODE_LINKED_SHEETS = ["Traps", "Visits", "Windows", "Followups", "Photos", "Trials"]
 
 
 def normalise_site_code(value: str) -> str:
@@ -439,7 +443,7 @@ def rename_site_code(data: Dict[str, pd.DataFrame], old_id: str, new_id: str, re
     site_mask = updated["Sites"]["Site ID"].astype(str).str.upper() == old_code
     updated["Sites"].loc[site_mask, "Site ID"] = new_code
 
-    for sheet_name in ["Traps", "Visits", "Windows", "Followups"]:
+    for sheet_name in ["Traps", "Visits", "Windows", "Followups", "Trials"]:
         frame = updated.get(sheet_name)
         if frame is None or "Site ID" not in frame.columns:
             continue
@@ -545,7 +549,7 @@ def permanently_remove_site(data: Dict[str, pd.DataFrame], site_id: str, reason:
                 photo_files_to_delete.append(DATA_ROOT / rel_path)
         updated["Photos"] = photos_frame.loc[~photo_mask].reset_index(drop=True)
 
-    for sheet_name in ["Traps", "Visits", "Windows", "Followups"]:
+    for sheet_name in ["Traps", "Visits", "Windows", "Followups", "Trials"]:
         frame = updated.get(sheet_name)
         if frame is None or "Site ID" not in frame.columns:
             continue
@@ -973,6 +977,83 @@ def open_window(data, trap_id):
     return None if r.empty else r.sort_values("Start Time").iloc[-1]
 
 
+TRIAL_STATUS_OPEN = "Open"
+TRIAL_STATUS_ENDED = "Ended"
+MAX_DECLARED_BUILDS = 3
+
+
+def trial_build_label(product, build_version) -> str:
+    """The label form the app already uses in its build selectors."""
+    return f"{product} · {build_version}"
+
+
+def open_trial(data, site_id):
+    """The site's Open trial (a Series), or None. At most one can be open (T1)."""
+    trials = data["Trials"]
+    matches = trials[(trials["Site ID"].astype(str) == str(site_id)) & (trials["Status"] == TRIAL_STATUS_OPEN)]
+    return None if matches.empty else matches.iloc[0]
+
+
+def trial_declared_builds(trial) -> list:
+    return [label for label in str(trial["Declared Builds"]).split("; ") if label]
+
+
+def next_trial_id(data, site_id) -> str:
+    """TRIAL-<SITE>-<NN>, a per-site sequence. Deliberately unlike a bag ID
+    (TR-001 is the Te Raekaihau bag prefix), trap ID or window ID."""
+    prefix = f"TRIAL-{str(site_id).upper()}-"
+    used = [
+        int(m.group(1)) for m in (re.fullmatch(rf"{re.escape(prefix)}(\d+)", str(t)) for t in data["Trials"]["Trial ID"]) if m
+    ]
+    return f"{prefix}{(max(used) + 1) if used else 1:02d}"
+
+
+def create_trial(data, site_id, declared_builds, start_time, origin="Started", notes=""):
+    """Adds an Open trial row (no save). Enforces T1 (one open trial per site),
+    1-3 distinct declared builds that exist, and T8 (a site runs one product).
+    Returns the new Trial ID. Used by Set up and Adopt."""
+    if data["Sites"][data["Sites"]["Site ID"] == site_id].empty:
+        raise ValueError("That site could not be found.")
+    if open_trial(data, site_id) is not None:
+        raise ValueError("This site already has a trial running.")
+    labels = list(dict.fromkeys(str(b) for b in declared_builds))
+    if not 1 <= len(labels) <= MAX_DECLARED_BUILDS:
+        raise ValueError(f"A trial compares 1 to {MAX_DECLARED_BUILDS} builds.")
+    known = {trial_build_label(r["Product"], r["Build Version"]) for _, r in data["Builds"].iterrows()}
+    unknown = [b for b in labels if b not in known]
+    if unknown:
+        raise ValueError(f"Unknown build: {', '.join(unknown)}.")
+    if len({b.split(" · ")[0] for b in labels}) > 1:
+        raise ValueError("A trial's builds must all be the same product. A site that runs both R1 and M1 is set up as two sites.")
+    trial_id = next_trial_id(data, site_id)
+    row = [trial_id, site_id, TRIAL_STATUS_OPEN, dtstr(start_time), "", "; ".join(labels), origin, notes]
+    data["Trials"] = pd.concat([data["Trials"], pd.DataFrame([row], columns=SHEETS["Trials"])], ignore_index=True)
+    audit_change(data, "Trial", trial_id, "Status", "", TRIAL_STATUS_OPEN, f"Trial {origin.lower()} at {site_id}")
+    return trial_id
+
+
+def no_open_trial_message(data, site_id) -> str:
+    """Copy for "this site has no trial" - shown by the activation guard and by
+    the bulk-activate screen. Display only; enforcement is in activate_trap()."""
+    return f"No trial is running at {site_name(data, site_id)}. Start a trial first. Every active trap belongs to a trial."
+
+
+def site_trial_id_for_window(data, site_id) -> str:
+    """The Trial ID to stamp on a window opened at this site, or "" if the site
+    has no open trial. This runs inside the check-save flow, the most protected
+    path in the app, so it must never raise: a trial lookup failing must never
+    cost a field operator a saved check. User-facing refusals live in
+    activate_trap(), not here."""
+    try:
+        if os.environ.get("R1M1_TEST_FORCE_TRIAL_LOOKUP_FAILURE") == "1":
+            raise RuntimeError("forced trial lookup failure (test-only)")
+        trial = open_trial(data, site_id)
+        return "" if trial is None else str(trial["Trial ID"])
+    except Exception:
+        _logger.warning("Trial lookup failed while opening a window; leaving it unstamped.", exc_info=True)
+        return ""
+
+
 def start_window(data, trap_id, when):
     t = trap_row(data, trap_id)
     wid = make_id(f"{trap_id}-W")
@@ -1000,6 +1081,7 @@ def start_window(data, trap_id, when):
         "Valid": "Pending",
         "Review Status": "Not required",
         "Notes": "Started after line check and relure",
+        "Trial ID": site_trial_id_for_window(data, t["Site ID"]),
     })
     data["Windows"] = pd.concat([data["Windows"], pd.DataFrame([record])], ignore_index=True)
     data["Windows"] = data["Windows"][SHEETS["Windows"]]
@@ -1434,15 +1516,20 @@ def repair_missing_window(data, trap_id, effective_time=None, reason="Missing te
 
 
 def move_trap(data, trap_id, destination_site, effective_time, reason, route_order, location, camera_id, commit=True):
-    """Moves a trap to another site. An Active trap has its open window closed
-    and a new one opened at the destination; an Inactive trap only has its
-    fields updated and audited - it has no monitoring window, and giving it one
-    would break the "an Inactive trap has none open" assumption that
-    activate_trap() relies on. `commit=False` leaves the save to the caller so
-    several changes can be written together (same as activate_trap and
-    change_trap_build)."""
+    """Moves an Inactive trap to another site (T6). An Active trap is refused:
+    moving a live trap between sites mid-trial would hop it between trials, so
+    the path is deactivate, move, then activate it into the destination site's
+    trial. An Inactive trap has no monitoring window, so only its fields are
+    updated and audited - giving it a window would break the "an Inactive trap
+    has none open" assumption that activate_trap() relies on. `commit=False`
+    leaves the save to the caller so several changes can be written together
+    (same as activate_trap and change_trap_build)."""
     tr = trap_row(data, trap_id)
-    is_active = str(tr["Status"]) == "Active"
+    if str(tr["Status"]) == "Active":
+        raise ValueError(
+            "Deactivate this trap before moving it. Leaving a trial ends its part in it. "
+            "Deactivate, move, then activate it into the destination site's trial."
+        )
     old_site = str(tr["Site ID"])
     if old_site == destination_site:
         raise ValueError("Choose a different destination site.")
@@ -1455,37 +1542,39 @@ def move_trap(data, trap_id, destination_site, effective_time, reason, route_ord
     ]
     if not active_visits.empty:
         raise ValueError("Finish or pause active visits at the source and destination sites before moving this trap.")
-    current = open_window(data, trap_id) if is_active else None
-    if current is not None:
-        idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
-        data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
-        data["Windows"].at[idx, "Status"] = "Closed"
-        data["Windows"].at[idx, "End Reason"] = "Trap moved"
-        data["Windows"].at[idx, "Review Status"] = "Not required"
     idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
     data["Traps"].at[idx, "Site ID"] = destination_site
     data["Traps"].at[idx, "Route Order"] = str(route_order)
     data["Traps"].at[idx, "Location"] = location
     data["Traps"].at[idx, "Camera ID"] = camera_id
-    new_window = start_window(data, trap_id, effective_time) if is_active else ""
     audit_change(data, "Trap", trap_id, "Site ID", old_site, destination_site, reason)
     audit_change(data, "Trap", trap_id, "Route Order", tr["Route Order"], route_order, reason)
     audit_change(data, "Trap", trap_id, "Location", tr["Location"], location, reason)
     if commit:
         save_data(data)
-    return new_window
+    return ""
 
 
 def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason, commit=True):
-    """Changes a trap's build. An Active trap has its open window closed and a
-    new one opened on the new build; an Inactive trap only has its build
-    updated and audited (this is how builds are staged before a trial) - it has
-    no monitoring window, and must not be given one."""
+    """Changes a trap's build. A build never changes inside a trial (T5): an
+    Active trap at a site with an Open trial is refused - changing a build
+    starts a new trial. An Active trap at a site with no trial (not yet
+    adopted) still has its open window closed and a new one opened on the new
+    build, as before. An Inactive trap only has its build updated and audited
+    (this is how builds are staged before a trial) - it has no monitoring
+    window, and must not be given one."""
     tr = trap_row(data, trap_id)
     is_active = str(tr["Status"]) == "Active"
     old_product, old_build = str(tr["Product"]), str(tr["Build Version"])
     if old_product == new_product and old_build == new_build:
         raise ValueError("Choose a different build.")
+    if is_active:
+        trial = open_trial(data, tr["Site ID"])
+        if trial is not None:
+            raise ValueError(
+                "A build can't change inside a trial. Changing a build starts a new trial. "
+                f"End {trial['Trial ID']}, then start a new trial with the builds you want — the roster carries over."
+            )
     current = open_window(data, trap_id) if is_active else None
     if current is not None:
         idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
@@ -1519,11 +1608,30 @@ def activate_trap(data, trap_id, effective_time, reason, commit=True):
     a consequential, window-affecting status change gets its own function
     with its own effective-timestamp capture, not folded into the generic
     edit path. Opens exactly one window; there is nothing to close since an
-    Inactive trap has none open."""
+    Inactive trap has none open.
+
+    This is the ONE place that enforces "a trap can be Active only at a site
+    with an Open trial, on one of that trial's declared builds" (T2/T3).
+    Single-trap Activate, the bulk-activate expander and trial Set up all call
+    it, so one guard covers all three. It checks before changing anything, so a
+    refused trap leaves `data` untouched."""
     idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
     if data["Traps"].at[idx, "Status"] == "Active":
         raise ValueError("Trap is already active.")
+    site_id = data["Traps"].at[idx, "Site ID"]
+    trial = open_trial(data, site_id)
+    if trial is None:
+        raise ValueError(no_open_trial_message(data, site_id))
+    label = trial_build_label(data["Traps"].at[idx, "Product"], data["Traps"].at[idx, "Build Version"])
+    declared = trial_declared_builds(trial)
+    if label not in declared:
+        raise ValueError(
+            f"{label} isn't part of {trial['Trial ID']}. Declared builds: {', '.join(declared)}. "
+            "Change this trap's build first (allowed while it's Inactive), then activate it."
+        )
     data["Traps"].at[idx, "Status"] = "Active"
+    if not str(data["Traps"].at[idx, "Deployment Start"]).strip():
+        data["Traps"].at[idx, "Deployment Start"] = dtstr(effective_time)
     start_window(data, trap_id, effective_time)
     audit_change(data, "Trap", trap_id, "Status", "Inactive", "Active", reason)
     if commit:
@@ -2369,6 +2477,9 @@ def commit_staged_records_with_photos(
     return len(saved_photo_files)
 
 
+RESTORE_OPTIONAL_SHEETS = {"Trials", "Trial Config", "Kills"}
+
+
 def workbook_summary(path: Path) -> Dict[str, int]:
     summary = {}
     try:
@@ -2404,7 +2515,9 @@ def restore_backup(backup_path: Path):
     try:
         # Validate all expected sheets before replacing the live workbook.
         restored = pd.read_excel(temp_restore, sheet_name=None, dtype=str)
-        missing = [name for name in SHEETS if name not in restored]
+        # A backup made before a sheet existed must stay restorable: load_data()
+        # creates a missing sheet blank, and the derived sheets are rebuilt on save.
+        missing = [name for name in SHEETS if name not in restored and name not in RESTORE_OPTIONAL_SHEETS]
         if missing:
             raise ValueError("Backup is missing sheets: " + ", ".join(missing))
         os.replace(temp_restore, DATA_FILE)
@@ -7114,7 +7227,7 @@ elif page == "trap_edit":
             move_reason = st.text_area("Reason for move")
             move_date = st.date_input("Effective date", value=now().date())
             move_time = st.time_input("Effective time", value=now().time())
-            confirm_move = st.checkbox("Close the current window and start a new window at the destination")
+            confirm_move = st.checkbox("Move this trap to the destination site (a trap that is Inactive has no window, so none is opened)")
             if two_phase_button("Move trap", f"move_trap_{trap_id}", "Moving…", type="primary", disabled=not confirm_move):
                 try:
                     move_trap(
@@ -7135,11 +7248,16 @@ elif page == "trap_edit":
         current_label = f"{existing['Product']} · {existing['Build Version']}"
         options = [x for x in available_builds["Label"].tolist() if x != current_label]
         if options:
+            is_inactive_trap = existing["Status"] != "Active"
+            if is_inactive_trap:
+                st.caption("Allowed while the trap is Inactive — this is how builds are staged before a trial. No monitoring window is opened.")
             new_label = st.selectbox("New build", options)
             build_reason = st.text_area("Reason for build change")
             build_date = st.date_input("Effective date", value=now().date(), key=f"dedicated_build_date_{trap_id}")
             build_time = st.time_input("Effective time", value=now().time(), key=f"dedicated_build_time_{trap_id}")
-            confirm_build = st.checkbox("Close the current window and start a new window on this build")
+            confirm_build = st.checkbox(
+                "Change this trap's build" if is_inactive_trap else "Close the current window and start a new window on this build"
+            )
             if two_phase_button("Change build", f"change_build_{trap_id}", "Changing…", type="primary", disabled=not confirm_build):
                 selected = available_builds[available_builds["Label"] == new_label].iloc[0]
                 try:
@@ -7182,6 +7300,10 @@ elif page == "setup":
                 # time, a shared bulk time, a preview step, then one confirmed commit.
                 if inactive_traps.empty:
                     st.caption("No inactive traps to activate" + (f" at {site_name(data, site_filter)}" if site_filter != "All sites" else "") + ".")
+                elif site_filter != "All sites" and open_trial(data, site_filter) is None:
+                    # Same refusal activate_trap() would give each trap, shown once up front
+                    # instead of after the operator has filled the whole form in.
+                    st.error(no_open_trial_message(data, site_filter))
                 else:
                     pending = st.session_state.get("bulkact_pending")
                     # UX-audit fix (2026-08-13): the selection checkboxes and time
@@ -7325,20 +7447,38 @@ elif page == "setup":
                     location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
                     order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
-                    deployment=parse_dt(existing["Deployment Start"]) if existing is not None else now()
-                    dep_date=st.date_input("Deployment start date",value=deployment.date() if deployment else now().date())
-                    dep_time=st.time_input("Deployment start time",value=deployment.time() if deployment else now().time())
-                    if dep_date==now().date():
-                        st.caption("Defaults to today — change this if the trap was actually deployed earlier.")
+                    # A new trap is always created Inactive with no deployment date: both only
+                    # mean something once a monitoring window opens, which activating the trap
+                    # (into a trial) does. Edit shows the stored value, and writes back exactly
+                    # what is stored - never today's date in place of a blank one.
+                    stored_deployment=parse_dt(existing["Deployment Start"]) if existing is not None else None
+                    dep_date=dep_time=None
+                    if mode=="edit" and stored_deployment is not None:
+                        dep_date=st.date_input("Deployment start date",value=stored_deployment.date())
+                        dep_time=st.time_input("Deployment start time",value=stored_deployment.time())
+                    elif mode=="edit":
+                        st.caption("Deployment start: not set yet. It is recorded when the trap is first activated.")
+                    else:
+                        st.caption("New traps start Inactive. Activate the trap when a trial starts.")
                     image=st.text_input("Setup image link",value=existing["Setup Image Link"] if existing is not None else "")
-                    status=st.selectbox("Status",["Active","Inactive"],index=0 if existing is None or existing["Status"]=="Active" else 1,disabled=mode=="edit",help="Use Activate trap / Deactivate trap for an existing trap." if mode=="edit" else None)
+                    if mode=="edit":
+                        status=st.selectbox("Status",["Active","Inactive"],index=0 if existing["Status"]=="Active" else 1,disabled=True,help="Use Activate trap / Deactivate trap for an existing trap.")
+                    else:
+                        status="Inactive"
                     notes=st.text_area("Notes",value=existing["Notes"] if existing is not None else "")
                     save=st.form_submit_button("Save trap changes" if mode=="edit" else "Add trap",type="primary")
                 if save:
                     if not trap_id.strip(): st.error("Trap ID is required.")
                     elif mode=="add" and trap_id in data["Traps"]["Trap ID"].tolist(): st.error("That Trap ID already exists.")
                     else:
-                        row=[trap_id,product,build,site,str(order),location,camera,dtstr(datetime.combine(dep_date,dep_time)),image,status,notes]
+                        deployment_value=""
+                        if mode=="edit":
+                            deployment_value=str(existing["Deployment Start"])
+                            if stored_deployment is not None and dep_date is not None:
+                                picked_deployment=datetime.combine(dep_date,dep_time)
+                                if picked_deployment.replace(second=0,microsecond=0)!=stored_deployment.replace(second=0,microsecond=0):
+                                    deployment_value=dtstr(picked_deployment)
+                        row=[trap_id,product,build,site,str(order),location,camera,deployment_value,image,status,notes]
                         if mode=="edit":
                             idx=data["Traps"].index[data["Traps"]["Trap ID"]==trap_id][0]
                             old_build=data["Traps"].at[idx,"Build Version"]
@@ -7356,12 +7496,9 @@ elif page == "setup":
                                 set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."])
                                 st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
                         else:
-                            deployment_time=datetime.combine(dep_date,dep_time)
                             data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True)
-                            if status=="Active":
-                                start_window(data,trap_id,deployment_time)
                             save_data(data)
-                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "An active test window was started." if status=="Active" else "The trap was added as inactive."])
+                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "The trap was added as inactive. Activate it when a trial starts."])
                             st.session_state.pop("setup_mode",None); st.rerun()
                 if mode=="edit":
                     st.divider()
