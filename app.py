@@ -4,6 +4,7 @@ from time import perf_counter as _probe_perf_counter
 
 _PROBE_T0 = _probe_perf_counter()
 
+import bisect
 import functools
 import uuid
 import hashlib
@@ -124,17 +125,27 @@ def _probe_totals(data=None) -> dict:
     the Windows row count."""
     run_ms = (_probe_perf_counter() - _PROBE_T0) * 1000.0
     acc = st.session_state.get(_PROBE_RUN_KEY, {}) or {}
+    def _rows(sheet: str) -> int:
+        try:
+            return len(data[sheet])
+        except Exception:
+            return -1
+
     try:
-        windows_rows = len(data["Windows"])
+        workbook_bytes = DATA_FILE.stat().st_size
     except Exception:
-        windows_rows = -1
+        workbook_bytes = -1
     return {
         "page": str(st.session_state.get("page", "")),
         "run_ms": run_ms,
         "cb_ms": float(acc.get("cb", 0.0)),
         "load_ms": float(acc.get("load", 0.0)),
         "save_ms": float(acc.get("save", 0.0)),
-        "windows_rows": windows_rows,
+        "windows_rows": _rows("Windows"),
+        "checks_rows": _rows("Checks"),
+        "followups_rows": _rows("Followups"),
+        "audit_rows": _rows("Audit Log"),
+        "workbook_bytes": workbook_bytes,
     }
 
 
@@ -145,7 +156,9 @@ def _probe_log(kind: str, data=None) -> dict:
         print(
             f"SPEEDPROBE page={t['page']} kind={kind} run_ms={t['run_ms']:.0f} "
             f"load_ms={t['load_ms']:.0f} save_ms={t['save_ms']:.0f} "
-            f"windows_rows={t['windows_rows']} cb_ms={t['cb_ms']:.0f}",
+            f"windows_rows={t['windows_rows']} cb_ms={t['cb_ms']:.0f} "
+            f"checks_rows={t['checks_rows']} followups_rows={t['followups_rows']} "
+            f"audit_rows={t['audit_rows']} workbook_bytes={t['workbook_bytes']}",
             flush=True,
         )
         return t
@@ -2807,28 +2820,81 @@ def find_data_quality_candidates(data: Dict[str, pd.DataFrame], window_minutes: 
         return []
     reviewed = data_quality_reviewed_check_ids(data)
     trap_site = data["Traps"].set_index("Trap ID")["Site ID"].to_dict()
-    checks["_dt"] = checks["Check Time"].apply(parse_dt)
+    # Parsed once, with a fast path for the workbook's own timestamp format;
+    # anything else falls back to parse_dt so the parsed values are identical.
+    parsed_times = {}
+
+    def _parse_check_time(value):
+        if isinstance(value, str):
+            cached = parsed_times.get(value, parsed_times)
+            if cached is not parsed_times:
+                return cached
+            try:
+                result = datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                result = parse_dt(value)
+            parsed_times[value] = result
+            return result
+        return parse_dt(value)
+
+    # .apply, not .map: they infer different column types when no time parses,
+    # and the original used .apply (a flagged check there carries NaN, not None).
+    checks["_dt"] = checks["Check Time"].apply(_parse_check_time)
     checks["_site"] = checks["Trap ID"].map(trap_site)
+
+    # One sorted list of (time, check id) per site, built once. This replaces
+    # re-filtering the whole Checks table for every row (the cost grew with
+    # the square of the number of checks and ran on every page load).
+    dt_values = checks["_dt"].tolist()
+    site_values = checks["_site"].tolist()
+    id_values = checks["Check ID"].astype(str).tolist()
+    by_site = {}
+    for position, (dt_value, site_value) in enumerate(zip(dt_values, site_values)):
+        if pd.isna(dt_value) or pd.isna(site_value):
+            continue
+        by_site.setdefault(site_value, []).append((dt_value, id_values[position]))
+    site_times, site_ids = {}, {}
+    for site_value, entries in by_site.items():
+        entries.sort(key=lambda entry: entry[0])
+        site_times[site_value] = [entry[0] for entry in entries]
+        site_ids[site_value] = [entry[1] for entry in entries]
 
     candidates = []
     window = pd.Timedelta(minutes=window_minutes)
-    for _, row in checks.iterrows():
-        check_id = str(row["Check ID"])
+    for position, (_, row) in enumerate(checks.iterrows()):
+        check_id = id_values[position]
         if str(row.get("Excluded", "")) == "Yes" or check_id in reviewed:
             continue
+        # The row's own values, as iterrows hands them out - not the column's
+        # tolist(): with this pandas an all-None time column reads back as NaN
+        # here but None there, and a flagged check must carry exactly what the
+        # original carried.
         this_dt, this_site = row["_dt"], row["_site"]
         if this_dt is None or not this_site:
             continue
-        site_checks = checks[(checks["_site"] == this_site) & (checks["Check ID"].astype(str) != check_id) & checks["_dt"].notna()]
-        if site_checks.empty:
-            gap = pd.Timedelta.max
-        else:
-            gap = (site_checks["_dt"] - this_dt).abs().min()
-        if gap <= window:
-            continue  # real activity nearby - not a candidate
+        closest_before = closest_after = None
+        times, ids = site_times.get(this_site), site_ids.get(this_site)
+        # No other timed check at this site, or this check's own time is
+        # unusable: nothing nearby to compare with, so it is always a candidate.
+        if times is not None and not pd.isna(this_dt):
+            low = bisect.bisect_left(times, this_dt)
+            high = bisect.bisect_right(times, this_dt)
+            if any(ids[i] != check_id for i in range(low, high)):
+                continue  # another check at exactly this time - real activity nearby
+            i = low - 1
+            while i >= 0 and ids[i] == check_id:
+                i -= 1
+            if i >= 0:
+                closest_before = times[i]
+            i = high
+            while i < len(times) and ids[i] == check_id:
+                i += 1
+            if i < len(times):
+                closest_after = times[i]
+            gaps = [abs(other - this_dt) for other in (closest_before, closest_after) if other is not None]
+            if gaps and min(gaps) <= window:
+                continue  # real activity nearby - not a candidate
 
-        before = site_checks[site_checks["_dt"] < this_dt].sort_values("_dt")
-        after = site_checks[site_checks["_dt"] > this_dt].sort_values("_dt")
         candidates.append({
             "Check ID": check_id,
             "Trap ID": row["Trap ID"],
@@ -2837,11 +2903,21 @@ def find_data_quality_candidates(data: Dict[str, pd.DataFrame], window_minutes: 
             "Finding": row["Finding"],
             "Window Closed": row.get("Window Closed", ""),
             "Visit ID": row.get("Visit ID", ""),
-            "closest_before": before.iloc[-1]["_dt"] if not before.empty else None,
-            "closest_after": after.iloc[0]["_dt"] if not after.empty else None,
+            "closest_before": closest_before,
+            "closest_after": closest_after,
         })
     candidates.sort(key=lambda c: c["Check Time"], reverse=True)
     return candidates
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def data_quality_candidate_count(workbook_mtime: float, _data: Dict[str, pd.DataFrame]) -> int:
+    """How many checks the Data quality item's badge should count. Cached on
+    the workbook's modified time only (the `_data` argument is deliberately
+    not hashed), so the work is done at most once after a save instead of on
+    every script run. Callers pass the data loaded for this run, which always
+    matches the file at that modified time."""
+    return len(find_data_quality_candidates(_data))
 
 
 def void_check_as_test_data(data: Dict[str, pd.DataFrame], check_id: str, reason: str) -> None:
@@ -5079,8 +5155,8 @@ with st.container(
         st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
         st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
         st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
-        data_quality_candidate_count = len(find_data_quality_candidates(data))
-        if data_quality_candidate_count:
+        data_quality_badge_count = data_quality_candidate_count(_data_file_mtime(), data)
+        if data_quality_badge_count:
             # The badge's count is baked directly into the CSS content string
             # rather than styled unconditionally, so the highlighted
             # background and count pill only ever render when there really
@@ -5092,7 +5168,7 @@ with st.container(
                     border-radius: 8px;
                 }}
                 [data-testid="stPageLink"]:has(a[href*="data-quality"]) a::after {{
-                    content: "{data_quality_candidate_count}";
+                    content: "{data_quality_badge_count}";
                     background: #775900;
                     color: #FFFFFF;
                     font-size: 10px;
