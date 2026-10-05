@@ -1,4 +1,7 @@
-"""Regression tests for a field-reported bug (2026-08-17 field notes):
+"""Regression tests for a field-reported bug (2026-08-17 field notes). Note:
+the "Check" half of this was later superseded by the speed brief (see
+test_check_button_opens_the_check_page_in_one_step); "Save check" still uses
+the two-phase state described below.
 
 Tapping "Save check" or "Check" gave no visible feedback that anything was
 happening - "tap button not clear anything is happening", "tapping check and
@@ -93,27 +96,24 @@ def local_app_url(tmp_path: Path):
             process.kill()
 
 
-def test_check_button_shows_a_disabled_opening_state_before_navigating(
+def test_check_button_opens_the_check_page_in_one_step(
     page: Page, local_app_url: str
 ) -> None:
+    """Superseded the 2026-08-17 "Opening…" two-phase state for this one
+    button (FIELD_SPEED_PHASE1_BRIEF.md Part B): opening a trap is pure
+    navigation, so it now changes page in an on_click callback and the check
+    page renders in a single script run - the destination appearing is the
+    feedback, and the arm-run + 0.3 s dwell it used to cost are gone. Save
+    check below keeps its two-phase state (it does real work)."""
     page.goto(local_app_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Start checking", exact=False).first.click()
     expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
 
-    check_button = page.get_by_role("button", name="Check", exact=True).first
-    check_button.click()
-
-    # This is the actual regression check: before the fix, there was no
-    # intermediate state to see at all - the button click and the page
-    # navigation happened in the same script pass, so this locator would
-    # never resolve. After the fix it's a real, distinct render (backed by a
-    # deliberate short dwell in app.py - unlike Save check, opening a trap
-    # has no slow work of its own to naturally create the gap).
-    expect(page.get_by_role("button", name="Opening…", exact=True)).to_be_visible(timeout=10_000)
-
+    page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    assert page.get_by_role("button", name="Opening…", exact=True).count() == 0
 
 
 def test_save_check_button_shows_a_disabled_saving_state_before_navigating(

@@ -187,13 +187,18 @@ def test_probe_on_logs_each_run_and_shows_the_caption(page: Page, probe_on: Prob
 def test_probe_median_tracks_up_to_ten_samples(page: Page, probe_on: ProbeApp) -> None:
     open_sites(page, probe_on)
     for _ in range(3):
+        # A sample is recorded per tap once that tap's page has settled, so
+        # leave a human-scale gap between taps (a tap landing before the
+        # previous caption loaded is, by design, folded into the same sample).
         page.get_by_role("link", name="Follow-ups", exact=True).click()
         expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
+        page.wait_for_timeout(1_500)
         page.get_by_role("link", name="Trap sites", exact=True).click()
         expect(page.get_by_text("Choose the trap site you are visiting today.", exact=True)).to_be_visible(timeout=30_000)
+        page.wait_for_timeout(1_500)
     text = caption_locator(page).inner_text()
     median_n = int(re.search(r"median of (\d+)", text).group(1))
-    assert 3 <= median_n <= 10
+    assert median_n == 6
 
 
 def test_a_failing_probe_leaves_pages_and_saves_working(page: Page, probe_on_but_broken: ProbeApp) -> None:
@@ -223,6 +228,9 @@ def test_a_failing_probe_leaves_pages_and_saves_working(page: Page, probe_on_but
 
 
 def _normalised_body(page: Page) -> str:
+    # Streamlit keeps the previous page's elements (greyed) until the run
+    # finishes, so let the page settle before reading it.
+    page.wait_for_timeout(2_000)
     text = page.inner_text("body")
     text = re.sub(r"server [\d,]+ ms[^\n]*", "", text)
     text = re.sub(r"\d{1,2} \w{3} \d{4}", "<date>", text)
