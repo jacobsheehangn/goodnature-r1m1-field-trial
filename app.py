@@ -8292,6 +8292,11 @@ elif page == "trap_edit":
                         go("setup")
                     except Exception as exc:
                         st.error(str(exc))
+                        if str(exc).startswith("No trial is running"):
+                            # Trial setup is its own native page, so crossing to the Trap sites section needs switch_page.
+                            if st.button("Start a trial", key=f"start_trial_from_activate_{trap_id}", type="tertiary"):
+                                begin_trial_start(existing["Site ID"])
+                                st.switch_page(PAGE_TRAP_SITES)
 
     st.divider()
     show_move = st.toggle("Move trap", key=f"show_move_{trap_id}")
@@ -8351,6 +8356,10 @@ elif page == "trap_edit":
                     go("setup")
                 except Exception as exc:
                     st.error(str(exc))
+                    if str(exc).startswith("A build can't change inside a trial"):
+                        if st.button("Go to trial", key=f"go_to_trial_from_build_{trap_id}", type="tertiary"):
+                            navigate("trial", rerun=False, site_id=existing["Site ID"])
+                            st.switch_page(PAGE_TRAP_SITES)
         else:
             st.caption("No other available builds.")
 
@@ -8385,6 +8394,9 @@ elif page == "setup":
                     # Same refusal activate_trap() would give each trap, shown once up front
                     # instead of after the operator has filled the whole form in.
                     st.error(no_open_trial_message(data, site_filter))
+                    if st.button("Start a trial", key="bulkact_start_trial", type="tertiary"):
+                        begin_trial_start(site_filter)
+                        st.switch_page(PAGE_TRAP_SITES)
                 else:
                     pending = st.session_state.get("bulkact_pending")
                     # UX-audit fix (2026-08-13): the selection checkboxes and time
