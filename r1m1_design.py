@@ -138,21 +138,24 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-cardlist_"]{{gap:0}}
 .stApp [data-testid="stMainBlockContainer"]>div>[data-testid="stVerticalBlock"]{{gap:10px}}
 
+/* A form is just a grouping here, not a second card. */
+.stApp [data-testid="stForm"]{{border:0;padding:0;background:transparent}}
+
 /* ---- Buttons ---- */
 .stApp div.stButton button,.stApp div.stFormSubmitButton button{{
   border-radius:var(--r-pill);border:0;box-shadow:none;display:inline-flex;align-items:center;justify-content:center;gap:8px;
   padding:0 24px;transition:none}}
 .stApp div.stButton button p{{font-size:15px;line-height:20px;font-weight:700}}
-.stApp button[kind="primary"],.stApp [data-testid="stBaseButton-primary"]{{
+.stApp :is(button[kind="primary"],button[kind="primaryFormSubmit"]){{
   background:var(--orange);color:#fff;min-height:48px;height:48px}}
-.stApp button[kind="primary"] p,.stApp [data-testid="stBaseButton-primary"] p{{font-size:16px;color:#fff}}
-.stApp button[kind="primary"]:hover:not(:disabled){{background:#e9621c;color:#fff}}
-.stApp button[kind="primary"]:active:not(:disabled){{background:#cf5515;color:#fff}}
-.stApp button[kind="primary"]:disabled{{background:var(--orange-50);color:#fff;opacity:1;cursor:not-allowed}}
-.stApp button[kind="secondary"],.stApp [data-testid="stBaseButton-secondary"]{{
+.stApp :is(button[kind="primary"],button[kind="primaryFormSubmit"]) p{{font-size:16px;color:#fff}}
+.stApp :is(button[kind="primary"],button[kind="primaryFormSubmit"]):hover:not(:disabled){{background:#e9621c;color:#fff}}
+.stApp :is(button[kind="primary"],button[kind="primaryFormSubmit"]):active:not(:disabled){{background:#cf5515;color:#fff}}
+.stApp :is(button[kind="primary"],button[kind="primaryFormSubmit"]):disabled{{background:var(--orange-50);color:#fff;opacity:1;cursor:not-allowed}}
+.stApp :is(button[kind="secondary"],button[kind="secondaryFormSubmit"]){{
   background:var(--ink-05);color:var(--orange-ink);min-height:44px;height:44px}}
-.stApp button[kind="secondary"] p,.stApp [data-testid="stBaseButton-secondary"] p{{color:var(--orange-ink)}}
-.stApp button[kind="secondary"]:hover,.stApp button[kind="secondary"]:active{{background:var(--ink-10);color:var(--orange-ink)}}
+.stApp :is(button[kind="secondary"],button[kind="secondaryFormSubmit"]) p{{color:var(--orange-ink)}}
+.stApp :is(button[kind="secondary"],button[kind="secondaryFormSubmit"]):hover,.stApp :is(button[kind="secondary"],button[kind="secondaryFormSubmit"]):active{{background:var(--ink-10);color:var(--orange-ink)}}
 .stApp div.stButton button[kind="tertiary"]{{
   background:transparent;color:var(--orange-ink);min-height:44px;height:44px;padding:0;justify-content:flex-start}}
 .stApp button[kind="tertiary"] p{{color:var(--orange-ink)}}
@@ -219,6 +222,29 @@ COMPONENT_CSS = f"""
 /* Needs-a-choice: a 2px orange ring AND (written by the page) the words "Choose a build". */
 [class*="st-key-seg_choose"] [role="radiogroup"]:not(:has(button[aria-checked="true"])){{box-shadow:inset 0 0 0 2px var(--orange)}}
 .r1-need{{color:var(--orange-ink);font-weight:700;font-size:14px;line-height:20px}}
+/* Inside a form the words cannot be written by the page (nothing re-runs until submit), so CSS shows them
+   until a segment is chosen. */
+[class*="st-key-seg_choosef"] [data-testid="stButtonGroup"]:not(:has(button[aria-checked="true"]))::after{{
+  content:"Choose a build";display:block;color:var(--orange-ink);font-weight:700;font-size:14px;line-height:20px;margin-top:6px}}
+/* A build row on Set up step 1: a white card holding the checkbox. */
+[class*="st-key-card_build"]{{padding:14px 15px}}
+.r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
+.r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
+@media (max-width:700px){{
+  .stApp div.stButton:has(button[kind="primary"]),.stApp div.stFormSubmitButton:has(button[kind="primaryFormSubmit"]){{width:100%}}
+  .stApp div.stButton button[kind="primary"],.stApp div.stFormSubmitButton button[kind="primaryFormSubmit"]{{width:100%}}
+}}
+[class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
+[class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
+.r1-titlerow{{display:flex;justify-content:space-between;align-items:flex-end;gap:12px}}
+.r1-title{{font-size:34px;line-height:40px;font-weight:700}}
+@media (min-width:701px){{.r1-title{{font-size:48px;line-height:54px}}}}
+.r1-chips{{display:flex;gap:10px;flex-wrap:wrap}}
+.r1-chip{{flex:1 1 140px;background:var(--ink-05);border-radius:var(--r-panel);padding:10px 14px}}
+.r1-chip b{{display:block;font-size:17px;line-height:22px}} .r1-chip span{{font-size:14px;line-height:20px;color:var(--ink-70)}}
+.r1-kv{{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05);font-size:16px;line-height:22px}}
+.r1-kv:last-child{{border-bottom:0}} .r1-kv .k{{color:var(--ink-70)}} .r1-kv .v{{font-weight:700;text-align:right}}
+.r1-rowicon{{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--ink-05);display:flex;align-items:center;justify-content:center}}
 
 /* ---- List row: text left, action right, one line even on a phone ---- */
 .stApp [class*="st-key-listrow_"]{{border-bottom:1px solid var(--ink-05);padding:12px 0;gap:0}}
@@ -315,3 +341,143 @@ def count_badge_css(href_suffix: str, count: int, scope: str = ".st-key-app_nav"
 def design_css(extra: str = "") -> str:
     """Everything, as one <style> block (static string; nothing computed per run)."""
     return "<style>" + FONT_FACE_CSS + TOKENS_CSS + TYPE_CSS + COMPONENT_CSS + NAV_CSS + extra + "</style>"
+
+
+# ---------------------------------------------------------------- scoping ---
+# The journey screens (Phases 2, 6) are built in these components while the rest of the
+# app still wears the old look until each 7b PR. So their CSS is scoped to one container
+# (`st.container(key="r1_screen")`): nothing outside it changes.
+
+SCREEN_KEY = "r1_screen"
+SCREEN_SCOPE = f".st-key-{SCREEN_KEY}"
+
+
+def _split_top_level(text: str, sep: str = ",") -> list:
+    parts, depth, current = [], 0, ""
+    for ch in text:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == sep and depth == 0:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    parts.append(current)
+    return parts
+
+
+def _split_declarations(body: str) -> list:
+    """Split `a:b;c:url(x;y);d:e` on top-level semicolons (not inside parens or quotes)."""
+    parts, depth, quote, current = [], 0, "", ""
+    for ch in body:
+        if quote:
+            if ch == quote:
+                quote = ""
+        elif ch in "\"'":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == ";" and depth == 0 and not quote:
+            parts.append(current)
+            current = ""
+        else:
+            current += ch
+    if current.strip():
+        parts.append(current)
+    return parts
+
+
+def _important(body: str) -> str:
+    out = []
+    for decl in _split_declarations(body):
+        decl = decl.strip()
+        if not decl:
+            continue
+        name = decl.split(":", 1)[0].strip()
+        out.append(decl if "!important" in decl or name.startswith("--") or name == "content" else f"{decl}!important")
+    return ";".join(out)
+
+
+def scope_css(css: str, scope: str, important: bool = False) -> str:
+    """Prefix every selector in `css` with `scope`. `.stApp` becomes the scope itself,
+    `:root`, `@font-face`, `@keyframes` and portal rules (`body …`, the popover menu) are
+    left alone, and `@media` blocks are scoped inside."""
+    out, i, n = [], 0, len(css)
+    while i < n:
+        brace = css.find("{", i)
+        if brace == -1:
+            out.append(css[i:])
+            break
+        prelude = css[i:brace].strip()
+        depth, j = 1, brace + 1
+        while j < n and depth:
+            depth += {"{": 1, "}": -1}.get(css[j], 0)
+            j += 1
+        body = css[brace + 1:j - 1]
+        i = j
+        if prelude.startswith("/*"):  # a comment glued to the next rule
+            end = prelude.find("*/")
+            prelude = prelude[end + 2:].strip() if end != -1 else prelude
+        if prelude.startswith("@media") or prelude.startswith("@supports"):
+            out.append(f"{prelude}{{{scope_css(body, scope, important)}}}")
+        elif prelude.startswith("@") or prelude.startswith(":root"):
+            out.append(f"{prelude}{{{body}}}")
+        else:
+            selectors = []
+            for sel in _split_top_level(prelude):
+                sel = sel.strip()
+                if not sel:
+                    continue
+                if sel.startswith("body ") or "stPopoverBody" in sel:
+                    selectors.append(sel)
+                elif sel.startswith(".stApp"):
+                    selectors.append(scope + sel[len(".stApp"):])
+                else:
+                    selectors.append(f"{scope} {sel}")
+            if selectors:
+                out.append(f"{','.join(selectors)}{{{_important(body) if important else body}}}")
+    return "".join(out)
+
+
+def _component_css_only() -> str:
+    # `important`: the legacy sheet restyles buttons, radios and labels with !important, so the
+    # journey screens' components must outrank it (inside their own scope only).
+    return FONT_FACE_CSS + TOKENS_CSS + scope_css(TYPE_CSS + COMPONENT_CSS, SCREEN_SCOPE, important=True)
+
+
+# One static string, built once at import (no per-run work).
+SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
+
+# The journey screens that follow the Set up / End trial pattern show no top navigation, and read as a
+# single column (a form is not stretched across a desktop).
+HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation{display:none!important}</style>"
+NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
+
+
+def stepper_html(current: int, done_through: int = 0) -> str:
+    """Set up · Checking · End trial. `current` is 1-3; steps before it are done (a check),
+    the current one is orange, later ones are grey. Appears only on the four trial-level
+    screens, never on the visit or check pages."""
+    names = ("Set up", "Checking", "End trial")
+    parts = []
+    for idx, name in enumerate(names, start=1):
+        if idx < current:
+            parts.append(f'<span class="s done"><span class="d">{icon("check", 11)}</span>{name}</span>')
+        elif idx == current:
+            parts.append(f'<span class="s now"><span class="d">{idx}</span>{name}</span>')
+        else:
+            parts.append(f'<span class="s"><span class="d">{idx}</span>{name}</span>')
+        if idx < len(names):
+            parts.append(f'<span class="j{" done" if idx < current else ""}"></span>')
+    return f'<div class="r1-stepper">{"".join(parts)}</div>'
+
+
+def message_html(kind: str, title: str, detail: str = "") -> str:
+    """Message panel: warn / error / success / info, icon + bold title + 15px detail."""
+    icon_name = {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
+    body = f'<div class="d">{detail}</div>' if detail else ""
+    return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div><div class="t">{title}</div>{body}</div></div>'

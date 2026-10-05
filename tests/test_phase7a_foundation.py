@@ -67,8 +67,20 @@ def test_every_icon_the_css_uses_exists_and_the_set_is_line_icons_without_emoji(
     assert 'width="22" height="22"' in design.icon("check-circle", 22)
 
 
-def test_phase_7a_changes_no_real_screen() -> None:
-    assert "r1m1_design" not in (ROOT / "app.py").read_text(), "7a is foundation and spike only; screens adopt it in 7b / Phases 2-6"
+def test_the_journey_screens_scope_the_new_look_to_their_own_container() -> None:
+    """7a itself changed no screen. From Phase 2 the trial-journey screens adopt the module, scoped to one
+    container so nothing else in the app changes look."""
+    css = design.SCREEN_CSS
+    assert ".stApp" not in css, "every selector is rewritten under the scope"
+    assert design.SCREEN_SCOPE == ".st-key-r1_screen"
+    # Every rule outside @font-face / @keyframes / :root / the portal menu starts with the scope.
+    body = re.sub(r"@font-face\{[^}]*\}", "", css.replace("<style>", "").replace("</style>", ""))
+    body = re.sub(r"@keyframes [a-z0-9]+\{.*?\}\}", "", body)
+    body = re.sub(r":root\{[^}]*\}", "", body)
+    preludes = [p.strip() for p in re.findall(r"(?:^|\})([^{}@]+)\{", body)]
+    stray = [p for p in preludes if p and not all(sel.strip().startswith(design.SCREEN_SCOPE) or sel.strip().startswith("body ") for sel in design._split_top_level(p) if sel.strip())]
+    assert stray == [], stray[:5]
+    assert design.scope_css(".stApp h1{a:b} .x,.y{c:d}", ".s") == ".s h1{a:b}.s .x,.s .y{c:d}"
 
 
 # ----------------------------------------------------------------- the spike in a browser ---
