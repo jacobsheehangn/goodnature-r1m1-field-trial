@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from time import perf_counter as _probe_perf_counter
+
+_PROBE_T0 = _probe_perf_counter()
+
+import functools
 import uuid
 import hashlib
 import hmac
@@ -43,6 +48,113 @@ from photo_integrity import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# Speed probe (FIELD_SPEED_PHASE1_BRIEF.md, Part A). Measurement only, and
+# off unless SPEED_PROBE=1 is set on the service. Everything below is
+# failure-isolated: a probe problem must never change a page, a save, a
+# return value or an ordering - it can only lose a log line or the caption.
+# Per-run totals live in st.session_state (not module globals) because
+# widget callbacks run before the script and belong to the *previous* run's
+# module namespace.
+SPEED_PROBE = os.environ.get("SPEED_PROBE", "").strip() == "1"
+_PROBE_RUN_KEY = "_sp_run"
+_PROBE_CB_KEY = "_sp_cb"
+_PROBE_IN_CB_KEY = "_sp_in_cb"
+
+
+def _probe_test_hook() -> None:
+    if os.environ.get("SPEED_PROBE_TEST_RAISE") == "1":
+        raise RuntimeError("SPEED_PROBE_TEST_RAISE (test-only)")
+
+
+def _probe_add(kind: str, ms: float, bucket_key: str = "") -> None:
+    try:
+        _probe_test_hook()
+        key = bucket_key or (_PROBE_CB_KEY if st.session_state.get(_PROBE_IN_CB_KEY) else _PROBE_RUN_KEY)
+        acc = st.session_state.setdefault(key, {})
+        acc[kind] = acc.get(kind, 0.0) + ms
+    except Exception:
+        pass
+
+
+def _probe_timed(kind: str, fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        started = _probe_perf_counter()
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _probe_add(kind, (_probe_perf_counter() - started) * 1000.0)
+    return wrapper
+
+
+def _probe_callback(fn):
+    """Marks a widget callback so its wall time, and any load/save it does,
+    is attributed to the script run that follows it."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        started = _probe_perf_counter()
+        try:
+            st.session_state[_PROBE_IN_CB_KEY] = True
+        except Exception:
+            pass
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            _probe_add("cb", (_probe_perf_counter() - started) * 1000.0, _PROBE_CB_KEY)
+            try:
+                st.session_state[_PROBE_IN_CB_KEY] = False
+            except Exception:
+                pass
+    return wrapper
+
+
+def _probe_begin_run() -> None:
+    try:
+        _probe_test_hook()
+        callback_totals = st.session_state.pop(_PROBE_CB_KEY, None) or {}
+        st.session_state[_PROBE_RUN_KEY] = dict(callback_totals)
+    except Exception:
+        pass
+
+
+def _probe_totals(data=None) -> dict:
+    """Snapshot for the current run: script wall time, callback wall time
+    (before the script started), load/save totals across both phases, and
+    the Windows row count."""
+    run_ms = (_probe_perf_counter() - _PROBE_T0) * 1000.0
+    acc = st.session_state.get(_PROBE_RUN_KEY, {}) or {}
+    try:
+        windows_rows = len(data["Windows"])
+    except Exception:
+        windows_rows = -1
+    return {
+        "page": str(st.session_state.get("page", "")),
+        "run_ms": run_ms,
+        "cb_ms": float(acc.get("cb", 0.0)),
+        "load_ms": float(acc.get("load", 0.0)),
+        "save_ms": float(acc.get("save", 0.0)),
+        "windows_rows": windows_rows,
+    }
+
+
+def _probe_log(kind: str, data=None) -> dict:
+    try:
+        _probe_test_hook()
+        t = _probe_totals(data)
+        print(
+            f"SPEEDPROBE page={t['page']} kind={kind} run_ms={t['run_ms']:.0f} "
+            f"load_ms={t['load_ms']:.0f} save_ms={t['save_ms']:.0f} "
+            f"windows_rows={t['windows_rows']} cb_ms={t['cb_ms']:.0f}",
+            flush=True,
+        )
+        return t
+    except Exception:
+        return {}
+
+
+if SPEED_PROBE:
+    _probe_begin_run()
 
 APP_TITLE = "R1/M1 Field Trial — v8.7.6.7 Photo Integrity Corrections"
 APP_DIR = Path(__file__).resolve().parent
@@ -766,6 +878,11 @@ def load_data() -> Dict[str, pd.DataFrame]:
     return _load_data_cached(_data_file_mtime())
 
 
+if SPEED_PROBE:
+    save_data = _probe_timed("save", save_data)
+    load_data = _probe_timed("load", load_data)
+
+
 def site_name(data, site_id):
     r = data["Sites"][data["Sites"]["Site ID"] == site_id]
     return r.iloc[0]["Site Name"] if not r.empty else site_id
@@ -1427,6 +1544,8 @@ def navigate(page: str, rerun: bool = True, **kwargs):
         st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
     sync_workflow_query_params(page)
     if rerun:
+        if SPEED_PROBE:
+            _probe_log("navigate", globals().get("data"))
         st.rerun()
 
 
@@ -1485,6 +1604,28 @@ def set_page(page: str, **kwargs):
     navigate(page, rerun=False, **kwargs)
 
 
+def start_checking_callback(site_id: str) -> None:
+    """on_click handler for "Start checking": creates the visit (which saves)
+    and navigates in the same step, so the destination renders in a single
+    script run. Callbacks have no access to the page's locals, so it loads
+    the workbook itself. If the workbook changed since this page rendered,
+    save_data()'s guard would st.stop() - which, inside a callback, aborts
+    the run and leaves a blank page - so that case is caught here first,
+    flashes the same message, and lets the page simply re-render fresh."""
+    data = load_data()
+    expected_mtime = st.session_state.get(DATA_LOADED_MTIME_KEY)
+    if expected_mtime is not None and DATA_FILE.exists() and _data_file_mtime() != expected_mtime:
+        set_flash("error", "This page was out of date.", ["The Trap sites list has been refreshed - tap Start checking again."])
+        return
+    visit_id = start_visit_now(data, site_id, st.session_state.field_operator)
+    navigate("visit", rerun=False, site_id=site_id, visit_id=visit_id)
+
+
+if SPEED_PROBE:
+    set_page = _probe_callback(set_page)
+    start_checking_callback = _probe_callback(start_checking_callback)
+
+
 def request_scroll_to_top():
     st.session_state.scroll_to_top_once = True
 
@@ -1528,6 +1669,8 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     )
     if clicked and not armed and not disabled:
         st.session_state[lock_key] = True
+        if SPEED_PROBE:
+            _probe_log("rerun", globals().get("data"))
         st.rerun()
     if armed:
         st.session_state.pop(lock_key, None)
@@ -1592,6 +1735,81 @@ def scroll_to_top_once():
         height=0,
         width=0,
     )
+
+
+def speed_probe_caption(totals: dict) -> None:
+    """One small grey line at the very end of the page (SPEED_PROBE=1 only).
+
+    Same components.html + window.parent mechanism scroll_to_top_once() uses.
+    tap->render is measured against the *parent's* performance clock (an
+    iframe's own performance.now() has a different time origin). The nonce
+    makes every run's srcdoc unique so the iframe really reloads and
+    re-measures instead of React reusing the previous one."""
+    try:
+        _probe_test_hook()
+        server_text = f"{totals.get('run_ms', 0.0) + totals.get('cb_ms', 0.0):,.0f}"
+        load_text = f"{totals.get('load_ms', 0.0):,.0f}"
+        save_text = f"{totals.get('save_ms', 0.0):,.0f}"
+        components.html(
+            f"""
+<div id="r1m1-probe" style="font:10.5px/1.5 Inter,system-ui,sans-serif;color:#6F7178;text-align:center;padding:8px 4px 0;background:transparent;">&mdash;</div>
+<script>
+(() => {{
+  // run {time.time_ns()}
+  const p = window.parent;
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+  // The listener is installed with the parent's own eval so it belongs to
+  // the parent page: a handler created inside this iframe would stop firing
+  // the moment the next run unmounts the iframe.
+  if (!p.__r1m1) {{
+    p.eval(
+      "window.__r1m1 = {{samples: [], lastTap: null, tapId: 0, sampledTapId: -1}};" +
+      "document.addEventListener('pointerdown', function () {{" +
+      "  var s = window.__r1m1; s.lastTap = performance.now(); s.tapId += 1;" +
+      "}}, true);"
+    );
+  }}
+  const state = p.__r1m1;
+  let tapPart = '\u2014';
+  if (state.lastTap !== null) {{
+    const elapsed = p.performance.now() - state.lastTap;
+    tapPart = fmt(elapsed) + ' ms';
+    if (state.sampledTapId === state.tapId) {{
+      state.samples[state.samples.length - 1] = elapsed;
+    }} else {{
+      state.samples.push(elapsed);
+      state.sampledTapId = state.tapId;
+    }}
+    while (state.samples.length > 10) state.samples.shift();
+  }}
+  let medianPart = '\u2014';
+  if (state.samples.length) {{
+    const sorted = state.samples.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    medianPart = fmt(median) + ' ms';
+  }}
+  const label = 'median of ' + (state.samples.length || 10);
+  document.getElementById('r1m1-probe').textContent =
+    'server {server_text} ms \u00b7 tap\u2192render ' + tapPart +
+    ' \u00b7 ' + label + ': ' + medianPart +
+    ' \u00b7 load {load_text} ms \u00b7 save {save_text} ms';
+}})();
+</script>
+""",
+            height=30,
+        )
+    except Exception:
+        pass
+
+
+def speed_probe_finish(data) -> None:
+    try:
+        totals = _probe_log("complete", data)
+        if totals:
+            speed_probe_caption(totals)
+    except Exception:
+        pass
 
 
 def connection_status_watcher():
@@ -2968,17 +3186,16 @@ def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_
         # need loader state there within button too" - a plain button here
         # gave zero feedback between tap and the page actually changing, on
         # a field connection where that round trip is far from instant.
-        if two_phase_button("Check", f"visit_check_{visit_id}_{trap_id}", "Opening…", use_container_width=True):
-            # Unlike Save check, opening a trap has no inherent slow work of
-            # its own to naturally create a gap between "disabled button
-            # drawn" and "next rerun starts" - confirmed live (Playwright,
-            # even with the connection throttled) that without one, the two
-            # deltas can go out together and the disabled state is never
-            # actually observed at all, not just briefly. A short, deliberate
-            # dwell is the standard fix for an action too fast to otherwise
-            # register as "something happened" - not a workaround, the point.
-            time.sleep(0.3)
-            go("check", site_id=site_id, visit_id=visit_id, trap_id=trap_id)
+        # Speed brief Part B: this used to be a two-phase button (arm run,
+        # 0.3 s dwell, then go() and a second render - three script runs per
+        # tap). Opening a trap is pure navigation, so it now changes page in
+        # an on_click callback and the check page renders in one run; the
+        # destination appearing is the feedback.
+        st.button(
+            "Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True,
+            on_click=set_page, args=("check",),
+            kwargs={"site_id": site_id, "visit_id": visit_id, "trap_id": trap_id},
+        )
 
 
 def workflow_context(rows):
@@ -4903,8 +5120,7 @@ with st.container(
 # already carries that context, so a line above this button was showing the
 # same name twice.
 if st.session_state.page in WORKFLOW_PAGES:
-    if st.button("← Exit to Trap sites", key="exit_workflow_to_sites"):
-        go("sites")
+    st.button("← Exit to Trap sites", key="exit_workflow_to_sites", on_click=set_page, args=("sites",))
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
 page = st.session_state.page
@@ -4967,12 +5183,15 @@ if page == "sites":
                 unsafe_allow_html=True,
             )
             if active is not None:
-                if st.button("Resume checking", key=f"resume_{sid}", type="primary"):
-                    go("visit", site_id=sid, visit_id=active["Visit ID"])
+                st.button(
+                    "Resume checking", key=f"resume_{sid}", type="primary",
+                    on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": active["Visit ID"]},
+                )
             else:
-                if st.button("Start checking", key=f"open_{sid}", type="primary"):
-                    vid = start_visit_now(data, sid, st.session_state.field_operator)
-                    go("visit", site_id=sid, visit_id=vid)
+                st.button(
+                    "Start checking", key=f"open_{sid}", type="primary",
+                    on_click=start_checking_callback, args=(sid,),
+                )
 
 elif page == "site":
     sid = st.session_state.site_id
@@ -5154,8 +5373,7 @@ elif page == "visit":
             set_flash("success", f"{site_name(data, sid)} site check completed", [f"All {total_traps} traps were checked."])
             st.session_state.completed_site_id = sid
             go("sites")
-        if st.button("Pause and return to Trap sites", use_container_width=True):
-            go("sites")
+        st.button("Pause and return to Trap sites", use_container_width=True, on_click=set_page, args=("sites",))
         if checked_count == 0:
             # Only offered while nothing has been recorded under this visit
             # yet — the moment a single trap is checked, there's real field
@@ -5186,8 +5404,10 @@ elif page == "check":
     # fix on its own.
     def _render_check_page():
         just_restored_draft = seed_check_draft(vid, trap_id)
-        if st.button("← Back to trap selector"):
-            go("visit", site_id=sid, visit_id=vid)
+        st.button(
+            "← Back to trap selector",
+            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": vid},
+        )
 
         header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
 
@@ -7825,3 +8045,5 @@ elif page == "data_management":
 
 # Navigation scroll reset runs last so the destination DOM is already mounted.
 scroll_to_top_once()
+if SPEED_PROBE:
+    speed_probe_finish(data)
