@@ -2674,6 +2674,65 @@ def correct_kill_to_no_carcass(data, window_id: str) -> dict:
     return {"window_id": window_id, "bag_id": bag_id, "tasks_resolved": len(task_rows)}
 
 
+STRAY_WINDOW_END_REASON = "Stray window closed (trap Inactive)"
+STRAY_WINDOW_EXCLUSION_REASON = "Opened on an Inactive trap by a build or site change (since fixed); no monitoring took place"
+
+
+def stray_window_candidates(data) -> pd.DataFrame:
+    """Open windows that belong to an Inactive trap. An Inactive trap is not
+    being monitored, so any open window on it is a leftover (moving or
+    re-building an Inactive trap used to open one). Nothing here changes data."""
+    inactive = set(data["Traps"][data["Traps"]["Status"] == "Inactive"]["Trap ID"].astype(str))
+    windows = data["Windows"]
+    return windows[(windows["Status"] == "Open") & windows["Trap ID"].astype(str).isin(inactive)].copy()
+
+
+def close_stray_window(data, window_id: str) -> dict:
+    """One-time repair: closes a stray open window on an Inactive trap with a
+    zero-length period (End Time = Start Time) and marks it excluded, so it
+    keeps its history in the workbook but never appears in results (open
+    windows are ignored by Trial performance, closed ones are not). Refuses if
+    the window is not open, the trap is not Inactive, or any check, follow-up
+    or photo refers to it - those mean it was really used. Staged and saved
+    once, with one audit entry."""
+    matches = data["Windows"].index[data["Windows"]["Window ID"] == window_id].tolist()
+    if not matches:
+        raise ValueError("That window could not be found.")
+    widx = matches[0]
+    window = data["Windows"].loc[widx]
+    if window["Status"] != "Open":
+        raise ValueError("This window is not open.")
+    trap_matches = data["Traps"][data["Traps"]["Trap ID"] == window["Trap ID"]]
+    if trap_matches.empty or trap_matches.iloc[0]["Status"] != "Inactive":
+        raise ValueError("This window's trap is not Inactive, so the window is not a stray.")
+    refs = {
+        "checks": int((data["Checks"]["Window Closed"] == window_id).sum() + (data["Checks"]["New Window"] == window_id).sum()),
+        "follow-ups": int((data["Followups"]["Window ID"] == window_id).sum()),
+        "photos": int((data["Photos"]["Window ID"] == window_id).sum()),
+    }
+    used = {name: n for name, n in refs.items() if n}
+    if used:
+        raise ValueError("This window has been used (" + ", ".join(f"{n} {name}" for name, n in used.items()) + "), so it cannot be closed as a stray.")
+    start_time = str(window["Start Time"])
+
+    staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+    staged["Windows"].at[widx, "End Time"] = start_time
+    staged["Windows"].at[widx, "Status"] = "Closed"
+    staged["Windows"].at[widx, "End Reason"] = STRAY_WINDOW_END_REASON
+    staged["Windows"].at[widx, "Review Status"] = "Not required"
+    staged["Windows"].at[widx, "Excluded"] = "Yes"
+    staged["Windows"].at[widx, "Exclusion Reason"] = STRAY_WINDOW_EXCLUSION_REASON
+    audit_change(
+        staged, "Window", window_id, "Stray open window", f"Open since {start_time} on Inactive trap {window['Trap ID']}",
+        "Closed (zero length) and excluded",
+        "One-time repair confirmed by the owner: a window left open on an Inactive trap, with no checks, follow-ups or photos",
+    )
+    save_data(staged)
+    for name in data:
+        data[name] = staged[name]
+    return {"window_id": window_id, "trap_id": str(window["Trap ID"]), "started": start_time}
+
+
 def recreate_followup(data, window_id: str, followup_type: str, reason: str):
     """Recreate a Camera review or Necropsy review follow-up for a window whose Review
     Status shows 'Needs recreation' - the only path back once a genuinely-warranted task
@@ -7721,7 +7780,7 @@ elif page == "data_management":
         st.write("The corrected value and why the original entry was wrong.")
         st.markdown("#### What the app will update")
         st.write("The linked record, any affected Performance figures, and a permanent audit-log entry.")
-        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit", "Kill with no carcass"])
+        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit", "Kill with no carcass", "Stray window on an Inactive trap"])
         search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
 
         if record_type == "Follow-up task":
@@ -8105,6 +8164,52 @@ elif page == "data_management":
                             [f"{kill_row['Trap ID']} is now recorded as a kill with no carcass.",
                              f"{corrected['tasks_resolved']} necropsy task closed" + (f" and bag {corrected['bag_id']} cleared." if corrected['bag_id'] else "."),
                              "It still counts as a kill and is not in the humane rate. Recorded in the audit log."],
+                        )
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+        elif record_type == "Stray window on an Inactive trap":
+            st.caption(
+                "For an Inactive trap that was left with an open window (moving or re-building an Inactive trap used to "
+                "open one). It is closed with a zero-length period and excluded from results, so it can't be mistaken for "
+                "real monitoring and activating the trap later opens only one window. Nothing is changed unless you confirm a specific record."
+            )
+            stray_candidates = stray_window_candidates(data)
+            if search_text:
+                mask = stray_candidates[["Window ID", "Trap ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
+                stray_candidates = stray_candidates[mask]
+            if stray_candidates.empty:
+                st.success("No Inactive trap has an open window.")
+            else:
+                st.caption(f"{len(stray_candidates)} Inactive trap{'s' if len(stray_candidates) != 1 else ''} with an open window.")
+                stray_options = stray_candidates["Window ID"].tolist()
+                selected_stray = st.selectbox(
+                    "Select window",
+                    stray_options,
+                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · open since {human_dt(r['Start Time'], include_year=True)} · {wid}")(stray_candidates[stray_candidates["Window ID"] == wid].iloc[0]),
+                    key="stray_window_selected",
+                )
+                stray_row = stray_candidates[stray_candidates["Window ID"] == selected_stray].iloc[0]
+                workflow_context([
+                    ("Trap", stray_row["Trap ID"]),
+                    ("Site", site_name(data, stray_row["Site ID"])),
+                    ("Build", stray_row["Build Version"]),
+                    ("Window open since", human_dt(stray_row["Start Time"], include_year=True)),
+                ])
+                confirm_stray = st.checkbox(
+                    "This window is a leftover - the trap was not being monitored",
+                    key=f"confirm_stray_window_{selected_stray}",
+                )
+                if two_phase_button(
+                    "Close this stray window", f"close_stray_window_{selected_stray}", "Closing…",
+                    type="primary", disabled=not confirm_stray,
+                ):
+                    try:
+                        repaired = close_stray_window(data, selected_stray)
+                        set_flash(
+                            "success", "Stray window closed.",
+                            [f"{repaired['trap_id']}'s leftover window was closed (zero length) and excluded from results.",
+                             "No check, follow-up or photo referred to it. Recorded in the audit log."],
                         )
                         st.rerun()
                     except ValueError as exc:
