@@ -2367,6 +2367,11 @@ def scroll_to_top_once():
     """Reset Streamlit's current page after navigation and rerender settling."""
     if not st.session_state.pop("scroll_to_top_once", False):
         return
+    # Streamlit 1.60 scrolls section[data-testid="stMain"], which none of the long-standing targets below name, so on the
+    # existing pages this reset has no effect (measured on origin/main). That is left exactly as it was: the check page's
+    # resume-to-camera scroll and the forms on Data & records were built and tested around it. The trial journey screens
+    # are new, and they need the reset to work (a step opens at its top), so only they get the real target.
+    main_target = "doc.querySelector('section[data-testid=\"stMain\"]')," if st.session_state.get("page") in TRIAL_JOURNEY_PAGES else ""
     components.html(
         """
         <script>
@@ -2387,8 +2392,7 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
-              // Streamlit 1.60 scrolls this element; the three selectors below it are from older versions.
-              doc.querySelector('section[data-testid="stMain"]'),
+              /*MAIN_TARGET*/
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -2418,7 +2422,7 @@ def scroll_to_top_once():
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
         })();
         </script>
-        """,
+        """.replace("/*MAIN_TARGET*/", main_target),
         height=0,
         width=0,
     )

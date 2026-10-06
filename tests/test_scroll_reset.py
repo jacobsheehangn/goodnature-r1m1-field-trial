@@ -1,8 +1,10 @@
-"""QA brief step 3 (first viewport): navigating opens a page at its top.
+"""QA brief step 3 (first viewport): the trial journey screens open at their top.
 
 The reset in scroll_to_top_once() never targeted the element Streamlit 1.60 actually scrolls
 (section[data-testid="stMain"]), so a page opened from a scrolled page opened part-way down: on origin/main too.
-Steps inside a journey flow (Set up's Preview after a long list, End trial's list -> task -> preview) ask for the top as well."""
+Only the journey screens get the real target (the check page's resume-to-camera scroll and the Data & records forms were built
+around the old behaviour: test_resume_scrolls_to_camera_check.py). Steps inside a journey flow (Set up's Preview after a long
+list, End trial's list -> task -> preview) ask for the top as well."""
 from __future__ import annotations
 
 import sys
@@ -12,7 +14,7 @@ from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
 from journey_seed import END_SEED, JOURNEY_SEED  # noqa: E402
-from test_trial_model_ui import _SEED_TRIALS_EVERYWHERE, _serve  # noqa: E402
+from test_trial_model_ui import _serve  # noqa: E402
 from test_trial_screens import _decide_unresolvable, _home, _open_set_up, _to_end_trial_from_the_visit  # noqa: E402
 
 PHONE = {"width": 414, "height": 896}
@@ -25,16 +27,16 @@ def _scroll_to_bottom(page: Page) -> int:
     return page.evaluate(MAIN_TOP)
 
 
-def test_a_page_opened_from_a_scrolled_page_opens_at_its_top(page: Page, tmp_path: Path) -> None:
+def test_a_journey_screen_opened_from_a_scrolled_page_opens_at_its_top(page: Page, tmp_path: Path) -> None:
     data_dir = tmp_path / "d"; data_dir.mkdir()
     page.set_viewport_size(PHONE)
-    with _serve(data_dir, _SEED_TRIALS_EVERYWHERE) as url:
+    with _serve(data_dir, JOURNEY_SEED) as url:
         _home(page, url)
         assert _scroll_to_bottom(page) > 0, "the Trap sites page must be scrolled for this to prove anything"
-        page.get_by_role("button", name="Start checking").last.click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        page.get_by_role("button", name="Track as a trial", exact=True).click()
+        expect(page.get_by_text("Builds currently running", exact=True)).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1500)
-        assert page.evaluate(MAIN_TOP) == 0, "the visit page opens at its top"
+        assert page.evaluate(MAIN_TOP) == 0, "Track as a trial opens at its top"
 
 
 def test_the_end_trial_decision_list_opens_with_its_title_and_first_decision_on_screen(page: Page, tmp_path: Path) -> None:
