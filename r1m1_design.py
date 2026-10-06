@@ -231,8 +231,14 @@ COMPONENT_CSS = f"""
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
 @media (max-width:700px){{
+  /* Primary buttons fill the phone. The element container around a button is itself fit-content, so it has to widen too. */
+  .stApp [data-testid="stElementContainer"]:has(button[kind="primary"]),
+  .stApp [data-testid="stElementContainer"]:has(button[kind="primaryFormSubmit"]),
+  .stApp [data-testid="stElementContainer"]:has(button[kind="primaryFormSubmit"]) > div{{width:100%}}
   .stApp div.stButton:has(button[kind="primary"]),.stApp div.stFormSubmitButton:has(button[kind="primaryFormSubmit"]){{width:100%}}
   .stApp div.stButton button[kind="primary"],.stApp div.stFormSubmitButton button[kind="primaryFormSubmit"]{{width:100%}}
+  /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
 }}
 [class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
 [class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}

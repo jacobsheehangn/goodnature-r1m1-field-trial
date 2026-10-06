@@ -235,7 +235,7 @@ def test_end_trial_from_a_partial_visit_resolves_everything_in_one_atomic_save(p
         assert page.get_by_role("button", name="Continue to preview").is_disabled()
         expect(page.get_by_text("Make a decision on 2 reviews to continue.", exact=True)).to_be_visible()
         # Final-period camera review: ticked by default for the unchecked camera trap; the no-camera trap only gets a note.
-        expect(page.get_by_role("checkbox", name=re.compile(r"R1-MAN-005 · last checked"))).to_be_checked()
+        expect(page.get_by_role("checkbox", name="R1-MAN-005 · never checked", exact=True)).to_be_checked()
         expect(page.get_by_text("no camera, so a physical check is the only review", exact=False)).to_be_visible()
         before = {n: _sheet(data_dir, n) for n in ("Traps", "Windows", "Followups", "Trials", "Visits")}
 

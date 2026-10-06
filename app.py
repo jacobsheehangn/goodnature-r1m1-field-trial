@@ -1850,6 +1850,18 @@ def set_up_default_build(trap, declared) -> str:
     return label if label in declared else ""
 
 
+def unused_declared_builds_message(declared, rows) -> str:
+    """Set up's Preview warning (warn, never block) when a declared build ends up with no trap, e.g.
+    "Build 4.2 has no traps. This trial will only record Build 4.3." Names come from the plan; "" if none apply."""
+    used = [b for b in declared if any(r["Build"] == b for r in rows)]
+    unused = [b for b in declared if b not in used]
+    if not unused or not used:
+        return ""
+    names = [r1_short_build(b) for b in unused]
+    lead = f"{names[0]} has no traps." if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]} have no traps."
+    return f"{lead} This trial will only record {' and '.join(r1_short_build(b) for b in used)}."
+
+
 def plan_set_up(data, site_id, declared_builds, effective_time, assignments) -> dict:
     """Validates a Set up and describes what confirming would do. Writes nothing.
     `assignments` maps each selected trap ID to a declared build label ("" = not chosen).
@@ -6948,7 +6960,7 @@ elif page == "trial_start":
                         picks[label] = st.checkbox(r1_short_build(label), value=(label in ts.get("declared", default_labels)), key=f"ts_build_{label}")
                 with st.container(key="pair_ts"):
                     date_col, time_col = st.columns(2)
-                    start_date = date_col.date_input("Effective date", value=ts.get("effective", now()).date(), key="ts_date")
+                    start_date = date_col.date_input("Effective date", value=ts.get("effective", now()).date(), key="ts_date", format="DD/MM/YYYY")
                     start_time = time_col.time_input("Effective time", value=ts.get("effective", now().replace(second=0, microsecond=0)).time(), key="ts_time")
                 with st.expander("Add a note (optional)", expanded=bool(ts.get("note"))):
                     note = st.text_area("Note", value=ts.get("note", ""), key="ts_note", label_visibility="collapsed")
@@ -6987,12 +6999,17 @@ elif page == "trial_start":
                         trap_id = str(trap["Trap ID"])
                         inherited = set_up_default_build(trap, declared)
                         previous = r1_short_build(trial_build_label(trap["Product"], trap["Build Version"]))
+                        # Every pre-selected build says where it came from: the trap's own stored build, shown only
+                        # as the default when the trial declares it. Otherwise the line says so and nothing is selected.
+                        not_declared = "" if inherited else " — not in this trial"
                         if group_name == "Relocated":
-                            sub = f"From {site_name(data, trap['Site ID'])}"
+                            sub = f"From {site_name(data, trap['Site ID'])} · {previous}{not_declared}"
                         elif group_name == "Carried over":
-                            sub = f"Previously {previous}" + ("" if inherited else " — not in this trial")
+                            sub = f"Previously {previous}{not_declared}"
+                        elif (data["Windows"]["Trap ID"].astype(str) == trap_id).any():
+                            sub = f"Previously {previous}{not_declared}"
                         else:
-                            sub = f"Previously {previous}" if (data["Windows"]["Trap ID"].astype(str) == trap_id).any() else "New trap"
+                            sub = f"New trap · added as {previous}{not_declared}"
                         default_on = (trap_id in prior_selected) if prior_selected is not None else (group_name != "Relocated")
                         with st.container(key=f"card_trap_{trap_id}"):
                             selected[trap_id] = st.checkbox(trap_id, value=default_on, key=f"ts_sel_{trap_id}")
@@ -7038,6 +7055,9 @@ elif page == "trial_start":
                 {"Trap": r["Trap ID"], "Build": r1_short_build(r["Build"]), "Change": _what_happens(r)} for r in plan["rows"]
             ])
             st.dataframe(preview, use_container_width=True, hide_index=True)
+            unused_note = unused_declared_builds_message(plan["declared"], plan["rows"])
+            if unused_note:
+                st.markdown(design.message_html("warn", html.escape(unused_note)), unsafe_allow_html=True)
             if ts.get("error3"):
                 st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ts["error3"])), unsafe_allow_html=True)
             if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {len(plan['rows'])} traps…", type="primary"):
@@ -7080,7 +7100,7 @@ elif page == "trial_adopt":
         st.markdown('<div class="r1-label">Trial started</div>', unsafe_allow_html=True)
         with st.container(key="pair_ta"):
             date_col, time_col = st.columns(2)
-            adopt_date = date_col.date_input("Start date", value=base_plan["default_start"].date(), key="ta_date", label_visibility="collapsed")
+            adopt_date = date_col.date_input("Start date", value=base_plan["default_start"].date(), key="ta_date", label_visibility="collapsed", format="DD/MM/YYYY")
             adopt_time = time_col.time_input("Start time", value=base_plan["default_start"].time(), key="ta_time", label_visibility="collapsed")
         st.markdown('<div class="r1-meta">Defaults to when the earliest of these builds began at this site. Windows from this time onward are tagged to the trial.</div>', unsafe_allow_html=True)
         plan = adoption_plan(data, sid, datetime.combine(adopt_date, adopt_time))
@@ -7182,11 +7202,11 @@ elif page == "trial_end":
                     st.markdown('<div class="r1-card-title">Not checked this visit</div><div class="r1-meta">Tick a trap to queue a camera review for its final period. It is created when the trial ends and stays open in Follow-ups.</div>', unsafe_allow_html=True)
                     for _, trap in unchecked.iterrows():
                         trap_id = str(trap["Trap ID"])
-                        last_checked = r1_short_date(trap["Last checked"]) if trap["Last checked"] else "never"
+                        last_checked = f"last checked {r1_short_date(trap['Last checked'])}" if trap["Last checked"] else "never checked"
                         if trap["Has camera"]:
-                            final_period_ticks[trap_id] = st.checkbox(f"{trap_id} · last checked {last_checked}", value=te.get("final_period", {}).get(trap_id, True), key=f"te_final_{trap_id}")
+                            final_period_ticks[trap_id] = st.checkbox(f"{trap_id} · {last_checked}", value=te.get("final_period", {}).get(trap_id, True), key=f"te_final_{trap_id}")
                         else:
-                            st.markdown(f'<div class="r1-meta"><b>{html.escape(trap_id)}</b> · last checked {last_checked} · no camera, so a physical check is the only review</div>', unsafe_allow_html=True)
+                            st.markdown(f'<div class="r1-meta"><b>{html.escape(trap_id)}</b> · {last_checked} · no camera, so a physical check is the only review</div>', unsafe_allow_html=True)
                 te["final_period"] = final_period_ticks
                 st.button("Back and check more traps", key="te_back_check", on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": visit_id})
             blocked = not undecided.empty
@@ -7237,7 +7257,7 @@ elif page == "trial_end":
             r1_title("Confirm trial end", site_name(data, sid))
             with st.container(key="pair_te"):
                 date_col, time_col = st.columns(2)
-                end_date = date_col.date_input("Effective date", value=te.get("effective", now()).date(), key="te_date")
+                end_date = date_col.date_input("Effective date", value=te.get("effective", now()).date(), key="te_date", format="DD/MM/YYYY")
                 end_time = time_col.time_input("Effective time", value=te.get("effective", now().replace(second=0, microsecond=0)).time(), key="te_time")
             with st.expander("Add a note (optional)", expanded=bool(te.get("note"))):
                 end_note = st.text_area("Note", value=te.get("note", ""), key="te_note", label_visibility="collapsed")
