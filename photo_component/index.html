@@ -14,7 +14,7 @@ body { margin:0; background:#fff; color:#25262d; }
 .hint { font-size:14px; color:#737780; }
 input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; }
 .summary { min-height:24px; margin:12px 0 8px; color:#737780; font-size:14px; }
-.summary:empty { display:none; }  /* no empty 44px strip under the uploader (necropsy page gap) */
+.fit .summary:empty { display:none; }  /* fit_content callers only (necropsy): no empty 44px strip under the uploader */
 .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; align-items:start; }
 .card { min-width:0; border:1px solid #e1e2e5; border-radius:10px; padding:8px; background:#fff; overflow:hidden; }
 .thumb { width:100%; aspect-ratio:1/1; border-radius:8px; background:#f3f3f0; display:flex; align-items:center; justify-content:center; overflow:hidden; }
@@ -66,9 +66,12 @@ input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; }
 
   const post = (type, payload={}) => window.parent.postMessage({isStreamlitMessage:true, type, ...payload}, '*');
   const ready = () => post('streamlit:componentReady', {apiVersion:1});
-  // body, not documentElement: inside an iframe documentElement.scrollHeight never drops below the frame's own
-  // height, so a 150px floor plus that feedback left a blank strip under the uploader.
-  const setHeight = () => post('streamlit:setFrameHeight', {height: Math.max(48, Math.ceil(document.body.getBoundingClientRect().height))});
+  // Callers that pass fit_content (the necropsy pages) size the frame to its content: inside an iframe
+  // documentElement.scrollHeight never drops below the frame's own height, so the 150px floor plus that feedback
+  // left a blank strip under the uploader. Every other caller (the check form) keeps the original sizing exactly.
+  const setHeight = () => post('streamlit:setFrameHeight', {height: renderArgs.fit_content
+    ? Math.max(48, Math.ceil(document.body.getBoundingClientRect().height))
+    : Math.max(150, document.documentElement.scrollHeight)});
   const emit = (value) => post('streamlit:setComponentValue', {value});
   const uid = () => `PHOTO-${Date.now()}-${Math.random().toString(16).slice(2,10).toUpperCase()}`;
   const retryDelays = () => Array.isArray(renderArgs.retry_delays_ms) && renderArgs.retry_delays_ms.length === 3 ? renderArgs.retry_delays_ms : [1000,2000,4000];
@@ -408,6 +411,7 @@ input[type=file] { position:absolute; left:-9999px; width:1px; height:1px; }
   window.addEventListener('message', e=>{
     if (!e.data || e.data.type!=='streamlit:render') return;
     renderArgs=e.data.args||{};
+    document.body.classList.toggle('fit', !!renderArgs.fit_content);
     render();
     setHeight();
   });

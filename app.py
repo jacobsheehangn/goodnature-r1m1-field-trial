@@ -2838,7 +2838,7 @@ def followup_photo_transaction_context(item) -> dict:
     }
 
 
-def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: str, photo_kind: str = "Check evidence") -> dict:
+def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: str, photo_kind: str = "Check evidence", fit_content: bool = False) -> dict:
     """Prepare photos in-browser and persist each selected image before a final save.
 
     Shared by the check flow and the necropsy follow-up flow: same component,
@@ -2855,6 +2855,7 @@ def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: st
         retry_delays_ms=[1000, 2000, 4000],
         max_raw_bytes=MAX_RAW_PHOTO_BYTES,
         max_prepared_bytes=MAX_SAVED_PHOTO_BYTES,
+        fit_content=fit_content,
         key=widget_key,
         default=None,
     )
@@ -2958,6 +2959,7 @@ def render_followup_photo_capture(item) -> dict:
         widget_key=f"critical_photo_upload_followup_{fid}",
         event_key=f"photo_component_event_followup_{fid}",
         photo_kind="Necropsy evidence",
+        fit_content=True,
     )
     return {**result, "follow_up_id": fid}
 
@@ -2989,6 +2991,7 @@ def render_correction_necropsy_photo_capture(window_id: str, trap_id: str, site_
         widget_key=f"critical_photo_upload_corrnec_{window_id}",
         event_key=f"photo_component_event_corrnec_{window_id}",
         photo_kind="Necropsy evidence",
+        fit_content=True,
     )
     return {**result, "follow_up_id": context["follow_up_id"]}
 
@@ -4451,9 +4454,6 @@ def render_necropsy_task(data, item) -> None:
         with st.container(key="card_nec_context"):
             st.markdown(r1_kv(context), unsafe_allow_html=True)
 
-        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Attach photos of the animal. You can choose several.</div>', unsafe_allow_html=True)
-        photo_gate = render_followup_photo_capture(item)
-
         guess_species = str(window["Field-Recorded Species"]).strip() or str(window["Species"]).strip() if window is not None else ""
         guess_rat = str(window["Field-Recorded Rat Type"]).strip() or str(window["Rat Type"]).strip() if window is not None else ""
         current_species = str(window["Species"]).strip() if window is not None else ""
@@ -4465,6 +4465,9 @@ def render_necropsy_task(data, item) -> None:
         if species == "Rat":
             current_rat = str(window["Rat Type"]).strip() if window is not None else ""
             rat_type = st.segmented_control("Rat type", RAT_TYPES, default=current_rat if current_rat in RAT_TYPES else None, key=f"seg_rat_nec_{fid}", selection_mode="single") or ""
+
+        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Attach photos of the animal. You can choose several.</div>', unsafe_allow_html=True)
+        photo_gate = render_followup_photo_capture(item)
 
         # ONE FORM: the species is chosen above, so the weight scale below is always the right one.
         with st.form(f"{prefix}_form", border=False):

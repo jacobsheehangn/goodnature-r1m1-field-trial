@@ -153,10 +153,23 @@ def test_the_first_part_of_the_necropsy_page_has_no_blank_strip_under_the_upload
     with _serve(data_dir, NECROPSY_SEED) as url:
         _open_task(page, url, "Necropsy review")
         page.wait_for_timeout(1200)
-        gap = page.evaluate("""() => { const frame = [...document.querySelectorAll('iframe')].find(f => f.getBoundingClientRect().height > 50); const species = [...document.querySelectorAll('label')].find(l => l.innerText.trim() === 'Species');
+        gap = page.evaluate("""() => { const frame = [...document.querySelectorAll('iframe')].find(f => f.getBoundingClientRect().height > 50); const species = [...document.querySelectorAll('label')].find(l => l.innerText.trim() === 'Necropsy status');
           const card = frame.getBoundingClientRect(); const next = species.getBoundingClientRect(); return {frame_h: Math.round(card.height), gap: Math.round(next.top - card.bottom)}; }""")
         assert gap["frame_h"] <= 140, f"the uploader frame is sized to its content: {gap}"
-        assert gap["gap"] <= 60, f"nothing blank between the uploader and the species question: {gap}"
+        assert gap["gap"] <= 60, f"nothing blank between the uploader and the next question: {gap}"
+
+
+def test_species_comes_before_photos_and_is_fully_on_the_first_phone_screen(page: Page, tmp_path: Path) -> None:
+    """QA brief Q5: species is the first decision, so it sits above Photos and its tiles (labels included) fit 390x844."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size({"width": 390, "height": 844})
+    with _serve(data_dir, NECROPSY_SEED) as url:
+        _open_task(page, url, "Necropsy review")
+        page.wait_for_timeout(1200)
+        box = page.evaluate("""() => { const tiles = document.querySelector('[class*="st-key-species_nec"]').getBoundingClientRect(); const photos = [...document.querySelectorAll('.r1-label')].find(e => e.innerText.trim() === 'Photos').getBoundingClientRect();
+          return {tiles_bottom: Math.round(tiles.bottom), tiles_top: Math.round(tiles.top), photos_top: Math.round(photos.top)}; }""")
+        assert box["tiles_top"] < box["photos_top"], f"species above photos: {box}"
+        assert box["tiles_bottom"] <= 844, f"the species tiles, labels included, fit the first phone screen: {box}"
 
 
 def test_trial_performance_shows_confirmed_coverage_on_rat_type_and_rodent_weight(page: Page, tmp_path: Path) -> None:
@@ -204,3 +217,25 @@ def test_the_correction_form_shows_the_preserved_field_guess_beside_the_confirme
                 page.wait_for_timeout(500)
         target.click()
         expect(page.get_by_text("Field-recorded: Mouse · confirmed at necropsy", exact=True)).to_be_visible(timeout=30_000)
+
+
+def test_the_check_forms_uploader_keeps_its_original_sizing(page: Page, tmp_path: Path) -> None:
+    """QA brief Q1: the uploader sizing change is scoped to the necropsy pages. The check form's frame must keep the
+    original 150px floor (it measures the same on origin/main), so the field-critical path is untouched."""
+    from test_trial_model_ui import _SEED_TRIALS_EVERYWHERE  # noqa: PLC0415
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size({"width": 390, "height": 844})
+    with _serve(data_dir, _SEED_TRIALS_EVERYWHERE) as url:
+        _home(page, url)
+        page.get_by_role("button", name="Start checking").first.click()
+        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        page.get_by_role("button", name="Check", exact=True).nth(2).click()
+        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("radio", name="Dead animal found").check(force=True)
+        expect(page.get_by_text("Carcass collected?", exact=False)).to_be_visible(timeout=20_000)
+        page.get_by_role("radio", name="Yes").first.check(force=True)  # a collected carcass is photographed
+        page.wait_for_function("() => [...document.querySelectorAll('iframe')].some(f => f.getBoundingClientRect().height > 50)", timeout=20_000)
+        page.wait_for_timeout(1500)
+        height = page.evaluate("() => Math.round([...document.querySelectorAll('iframe')].map(f => f.getBoundingClientRect().height).filter(h => h > 0).sort((a, b) => b - a)[0])")
+        print("CHECK_FORM_UPLOADER_FRAME_HEIGHT", height)
+        assert height >= 150, f"the check form's uploader frame must keep the original 150px floor, got {height}"
