@@ -1704,6 +1704,9 @@ def _trial_action_test_failure(action: str, step: int) -> None:
     spec = os.environ.get("R1M1_TEST_FAIL_TRIAL_ACTION", "")
     if spec == f"{action}:{step}":
         raise RuntimeError(f"forced failure in {action} at step {step} (test-only)")
+    delay = os.environ.get("R1M1_TEST_TRIAL_ACTION_DELAY_MS", "")
+    if delay.isdigit() and step == 0:
+        time.sleep(int(delay) / 1000)  # test-only: holds a long confirm open so its "Saving…" state can be captured
 
 
 def _audit_ids_since(staged, start_row_count: int) -> list:
@@ -2046,6 +2049,26 @@ def not_checked_this_visit(data, site_id, visit_id) -> pd.DataFrame:
     return traps.sort_values(["_route", "Trap ID"])
 
 
+def trial_end_floor(data, site_id, visit_id=""):
+    """The earliest time a trial can end here: not before a window about to close was opened, a check in the visit being
+    finished was saved, or that visit began. The time inputs work in whole minutes, so a trial ended within a minute of the
+    last check would otherwise close windows (and the visit) before they started. None when there is nothing to order against."""
+    active = set(data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]["Trap ID"].astype(str))
+    windows = data["Windows"]
+    times = [parse_dt(t) for t in windows[windows["Trap ID"].astype(str).isin(active) & (windows["Status"] == "Open")]["Start Time"]]
+    if visit_id:
+        times += [parse_dt(t) for t in data["Visits"][data["Visits"]["Visit ID"] == visit_id]["Start Time"]]
+        times += [parse_dt(t) for t in data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Check Time"]]
+    times = [t for t in times if t is not None]
+    return max(times) if times else None
+
+
+def ceil_to_minute(moment):
+    """The next whole minute (the time inputs have no seconds); an exact minute is returned as it is."""
+    floored = moment.replace(second=0, microsecond=0)
+    return floored if floored == moment else floored + timedelta(minutes=1)
+
+
 def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id="", final_period_traps=()) -> dict:
     """Validates End trial and describes it. Writes nothing. Raises ValueError with the
     message the operator should see."""
@@ -2060,6 +2083,9 @@ def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id=
         v = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
         if v.empty or str(v.iloc[0]["Site ID"]) != str(site_id) or str(v.iloc[0]["Status"]) != "In progress":
             raise ValueError("That visit is no longer in progress.")
+    floor = trial_end_floor(data, site_id, visit_id)
+    if floor is not None and effective_time < floor:
+        raise ValueError(f"The end time can't be earlier than the latest check or window at this site ({ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')}). Choose that time or later.")
     evidence_ids = set(gate["evidence"]["Follow-up ID"].astype(str))
     unresolvable = {str(x) for x in unresolvable_ids} & evidence_ids
     undecided = gate["evidence"][~gate["evidence"]["Follow-up ID"].astype(str).isin(unresolvable)]
@@ -2231,6 +2257,7 @@ def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
     if kind not in ("set_up", "adopt", "end"):
         raise ValueError("Unknown action.")
     cannot = "Undo isn't possible any more: "
+    _trial_action_test_failure("undo", 0)
     staged = _staged_copy(data)
     audit = staged["Audit Log"]
     ids = [str(c) for c in change_ids]
@@ -2518,6 +2545,11 @@ def scroll_to_top_once():
     """Reset Streamlit's current page after navigation and rerender settling."""
     if not st.session_state.pop("scroll_to_top_once", False):
         return
+    # Streamlit 1.60 scrolls section[data-testid="stMain"], which none of the long-standing targets below name, so on the
+    # existing pages this reset has no effect (measured on origin/main). That is left exactly as it was: the check page's
+    # resume-to-camera scroll and the forms on Data & records were built and tested around it. The trial journey screens
+    # are new, and they need the reset to work (a step opens at its top), so only they get the real target.
+    main_target = "doc.querySelector('section[data-testid=\"stMain\"]')," if st.session_state.get("page") in TRIAL_JOURNEY_PAGES else ""
     components.html(
         """
         <script>
@@ -2538,6 +2570,7 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
+              /*MAIN_TARGET*/
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -2567,7 +2600,7 @@ def scroll_to_top_once():
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
         })();
         </script>
-        """,
+        """.replace("/*MAIN_TARGET*/", main_target),
         height=0,
         width=0,
     )
@@ -4356,8 +4389,20 @@ def r1_kv(rows) -> str:
     )
 
 
+def r1_count(n: int, noun: str) -> str:
+    """"1 trap", "5 traps"."""
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
 def r1_short_date(value) -> str:
     return value.strftime("%d %b").lstrip("0") if value else "—"
+
+
+def r1_step(flow: str, **updates) -> None:
+    """Move a journey flow to another step and ask for the top of the page, as navigation does. Without it a step
+    entered from the bottom of a long list (Preview after the traps) opens part-way down."""
+    st.session_state[flow].update(updates)
+    st.session_state.scroll_to_top_once = True
 
 
 def begin_trial_start(site_id: str) -> None:
@@ -4387,7 +4432,7 @@ if SPEED_PROBE:
     begin_trial_end = _probe_callback(begin_trial_end)
 
 
-def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids) -> bool:
+def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids, busy_label: str = "Undoing…") -> bool:
     """The Undo card on a result screen. It lasts only while the operator stays on that screen
     (leaving the flow drops its state). Returns True once the action has been undone."""
     state = st.session_state[state_key]
@@ -4398,7 +4443,7 @@ def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids) -> boo
         st.markdown('<div class="r1-card-title">Undo</div><div class="r1-meta">Undo ends when you leave this screen or lock your phone.</div>', unsafe_allow_html=True)
         if state.get("undo_error"):
             st.markdown(design.message_html("error", "Nothing was changed.", html.escape(state["undo_error"])), unsafe_allow_html=True)
-        if two_phase_button("Undo this action", f"undo_{kind}", "Undoing…"):
+        if two_phase_button("Undo this action", f"undo_{kind}", busy_label):
             try:
                 undo_trial_action(data, kind, trial_id, change_ids)
                 state.update({"undone": True, "undo_error": ""})
@@ -7252,10 +7297,11 @@ elif page == "trial_start":
             result = ts["result"]
             if not ts.get("undone"):
                 st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
-            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"])
+            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['trap_count'], 'trap')}…")
             if not undone:
                 st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ts_done", on_click=leave_trial_flow, args=("ts",))
+            scroll_to_top_once()  # a result screen stops the script before the end-of-page reset runs
             st.stop()
         if open_trial(data, sid) is not None:
             st.markdown(design.message_html("info", "This site already has a trial running."), unsafe_allow_html=True)
@@ -7264,9 +7310,9 @@ elif page == "trial_start":
         if step == 1:
             st.button("Trap sites", key="back_ts_1", on_click=leave_trial_flow, args=("ts",))
         elif step == 2:
-            st.button("Back to builds", key="back_ts_2", on_click=lambda: st.session_state["ts"].update({"step": 1}))
+            st.button("Back to builds", key="back_ts_2", on_click=r1_step, args=("ts",), kwargs={"step": 1})
         else:
-            st.button("Back to traps", key="back_ts_3", on_click=lambda: st.session_state["ts"].update({"step": 2}))
+            st.button("Back to traps", key="back_ts_3", on_click=r1_step, args=("ts",), kwargs={"step": 2})
         r1_stepper(1)
 
         if step == 1:
@@ -7303,7 +7349,7 @@ elif page == "trial_start":
                 chosen = [label for label, on in picks.items() if on]
                 try:
                     declared = validate_declared_builds(data, chosen)
-                    ts.update({"declared": declared, "effective": datetime.combine(start_date, start_time), "note": note, "step": 2, "error1": ""})
+                    r1_step("ts", declared=declared, effective=datetime.combine(start_date, start_time), note=note, step=2, error1="")
                 except ValueError as exc:
                     ts["error1"] = str(exc)
                 st.rerun()
@@ -7357,7 +7403,7 @@ elif page == "trial_start":
                 assignments = {t: (choice.get(t) or helper_choice or "") for t, on in selected.items() if on}
                 try:
                     ts["plan"] = plan_set_up(data, sid, declared, ts["effective"], assignments)
-                    ts.update({"assign": assignments, "selected": [t for t, on in selected.items() if on], "step": 3, "error2": "", "error_traps": []})
+                    r1_step("ts", assign=assignments, selected=[t for t, on in selected.items() if on], step=3, error2="", error_traps=[])
                 except ValueError as exc:
                     ts.update({"error2": str(exc), "error_traps": [t for t, label in assignments.items() if not label], "assign": assignments,
                                "selected": [t for t, on in selected.items() if on]})
@@ -7392,10 +7438,10 @@ elif page == "trial_start":
                 st.markdown(design.message_html("warn", html.escape(unused_note)), unsafe_allow_html=True)
             if ts.get("error3"):
                 st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ts["error3"])), unsafe_allow_html=True)
-            if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {len(plan['rows'])} traps…", type="primary"):
+            if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {r1_count(len(plan['rows']), 'trap')}…", type="primary"):
                 try:
                     ts["result"] = commit_set_up(data, sid, ts["declared"], ts["effective"], ts["assign"], ts.get("note", ""))
-                    ts.update({"step": 4, "error3": ""})
+                    r1_step("ts", step=4, error3="")
                 except Exception as exc:
                     _logger.exception("Trial Set up failed")
                     ts["error3"] = "The trial has not started and every trap is as it was. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
@@ -7410,10 +7456,11 @@ elif page == "trial_adopt":
             result = ta["result"]
             if not ta.get("undone"):
                 st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
-            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"])
+            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['windows_tagged'], 'window')}…")
             if not undone:
                 st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ta_done", on_click=leave_trial_flow, args=("ta",))
+            scroll_to_top_once()
             st.stop()
         st.button("Trap sites", key="back_ta", on_click=leave_trial_flow, args=("ta",))
         r1_stepper(1)
@@ -7457,10 +7504,10 @@ elif page == "trial_adopt":
             st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ta["error"])), unsafe_allow_html=True)
         if plan["windows_to_tag"] == 0:
             st.markdown('<div class="r1-meta">No existing windows fall in this period; the trial will start with the next window.</div>', unsafe_allow_html=True)
-        if two_phase_button("Track as trial", "ta_confirm", "Tracking…", type="primary"):
+        if two_phase_button("Track as trial", "ta_confirm", f"Tracking — {r1_count(plan['windows_to_tag'], 'window')}…", type="primary"):
             try:
                 ta["result"] = commit_adoption(data, sid, datetime.combine(adopt_date, adopt_time))
-                ta.update({"step": 3, "error": ""})
+                r1_step("ta", step=3, error="")
             except Exception as exc:
                 _logger.exception("Trial adoption failed")
                 ta["error"] = "The site is not tracked and nothing was written. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
@@ -7478,8 +7525,9 @@ elif page == "trial_end":
             result = te["result"]
             if not te.get("undone"):
                 st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
-            r1_undo_section("te", "end", result["trial_id"], result["change_ids"])
+            r1_undo_section("te", "end", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['traps_deactivated'], 'trap')}…")
             st.button("Trap sites", key="te_done", type="primary", on_click=leave_trial_flow, args=("te",))
+            scroll_to_top_once()
             st.stop()
         if trial is None:
             st.markdown(design.message_html("info", "This site has no trial running."), unsafe_allow_html=True)
@@ -7516,7 +7564,7 @@ elif page == "trial_end":
                                 unsafe_allow_html=True,
                             )
                             if button_col.button("Decide", key=f"te_decide_{fid}"):
-                                te.update({"step": "task", "task": fid})
+                                r1_step("te", step="task", task=fid)
                                 st.rerun()
             if decided:
                 st.markdown('<div class="r1-label">Marked unresolvable</div>', unsafe_allow_html=True)
@@ -7548,7 +7596,7 @@ elif page == "trial_end":
                 st.button("Back and check more traps", key="te_back_check", on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": visit_id})
             blocked = not undecided.empty
             if st.button("Continue to preview", key="te_continue", type="primary", disabled=blocked):
-                te["step"] = "preview"
+                r1_step("te", step="preview")
                 st.rerun()
             if blocked:
                 n = len(undecided)
@@ -7558,7 +7606,7 @@ elif page == "trial_end":
             fid = te["task"]
             rows = gate["evidence"][gate["evidence"]["Follow-up ID"].astype(str) == fid]
             if rows.empty:
-                te["step"] = "list"
+                r1_step("te", step="list")
                 st.rerun()
             task = rows.iloc[0]
             order = gate["evidence"]["Follow-up ID"].astype(str).tolist()
@@ -7571,9 +7619,9 @@ elif page == "trial_end":
                 st.session_state["return_to"] = {"page": "trial_end", "site_id": sid, "reset": ("te", "step", "list")}
                 st.switch_page(PAGE_FOLLOWUPS)
             if st.button("Mark unresolvable…", key="te_mark_unresolvable", type="tertiary"):
-                te["step"] = "confirm_unresolvable"
+                r1_step("te", step="confirm_unresolvable")
                 st.rerun()
-            st.button("Back to list", key="te_task_back", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Back to list", key="te_task_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
         elif step == "confirm_unresolvable":
             fid = te["task"]
@@ -7584,18 +7632,23 @@ elif page == "trial_end":
             understood = st.checkbox("I understand this evidence will not be assessed.", key=f"te_understand_{fid}")
             if two_phase_button("Mark unresolvable", f"te_confirm_unresolvable_{fid}", "Saving…", type="primary", disabled=not understood):
                 te["unresolvable"] = sorted(set(te.get("unresolvable", [])) | {fid})
-                te["step"] = "list"
+                r1_step("te", step="list")
                 st.rerun()
             if not understood:
                 st.markdown('<div class="r1-meta">Tick the box to continue.</div>', unsafe_allow_html=True)
-            st.button("Cancel", key="te_cancel_unresolvable", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Cancel", key="te_cancel_unresolvable", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
         elif step == "preview":
             r1_title("Confirm trial end", site_name(data, sid))
+            # Default: now, to the minute, but never earlier than the latest check or window it has to come after.
+            default_end = now().replace(second=0, microsecond=0)
+            end_floor = trial_end_floor(data, sid, visit_id)
+            if end_floor is not None and default_end < end_floor:
+                default_end = ceil_to_minute(end_floor)
             with st.container(key="pair_te"):
                 date_col, time_col = st.columns(2)
-                end_date = date_col.date_input("Effective date", value=te.get("effective", now()).date(), key="te_date", format="DD/MM/YYYY")
-                end_time = time_col.time_input("Effective time", value=te.get("effective", now().replace(second=0, microsecond=0)).time(), key="te_time")
+                end_date = date_col.date_input("Effective date", value=te.get("effective", default_end).date(), key="te_date", format="DD/MM/YYYY")
+                end_time = time_col.time_input("Effective time", value=te.get("effective", default_end).time(), key="te_time")
             with st.expander("Add a note (optional)", expanded=bool(te.get("note"))):
                 end_note = st.text_area("Note", value=te.get("note", ""), key="te_note", label_visibility="collapsed")
             effective = datetime.combine(end_date, end_time)
@@ -7604,7 +7657,7 @@ elif page == "trial_end":
                 plan = plan_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked)
             except ValueError as exc:
                 st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
-                st.button("Back to list", key="te_preview_back_err", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+                st.button("Back to list", key="te_preview_back_err", on_click=r1_step, args=("te",), kwargs={"step": "list"})
                 st.stop()
             preview = pd.DataFrame([{"Trap": t, "Window": "Closes", "Status": "Active → Inactive"} for t in plan["trap_ids"]])
             st.dataframe(preview, use_container_width=True, hide_index=True)
@@ -7616,16 +7669,16 @@ elif page == "trial_end":
                 st.markdown('<div class="r1-card-title">What ending does</div>' + r1_kv(rows), unsafe_allow_html=True)
             if te.get("error"):
                 st.markdown(design.message_html("error", "Nothing was changed.", html.escape(te["error"])), unsafe_allow_html=True)
-            if two_phase_button("Confirm trial end", "te_confirm", f"Ending trial — {len(plan['trap_ids'])} traps…", type="primary"):
+            if two_phase_button("Confirm trial end", "te_confirm", f"Ending trial — {r1_count(len(plan['trap_ids']), 'trap')}…", type="primary"):
                 te["note"] = end_note
                 try:
                     te["result"] = commit_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked, end_note)
-                    te.update({"step": "result", "error": ""})
+                    r1_step("te", step="result", error="")
                 except Exception as exc:
                     _logger.exception("Trial end failed")
                     te["error"] = "The trial is still open and every trap is still active. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
                 st.rerun()
-            st.button("Back to list", key="te_preview_back", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Back to list", key="te_preview_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
 elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
