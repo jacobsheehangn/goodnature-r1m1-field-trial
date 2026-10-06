@@ -563,3 +563,29 @@ def test_hub_values_are_derived_from_data_including_an_adopted_trial() -> None:
     assert out["last_traps"] == 5 and out["last"].startswith("2026-09-02")
     assert out["open_followups"] == 4, "camera review + necropsy review + trap not ready + camera issue, counted site-wide"
     assert out["necropsy"] == 1 and out["camera"] == 1 and out["in_progress"] is True
+
+
+def test_a_trial_cannot_end_before_the_latest_check_and_the_floor_rounds_up_to_a_whole_minute() -> None:
+    """QA brief step 4.7: the time inputs have no seconds, so ending a trial straight after the last check could close
+    windows and the visit before they started. Now the end time has a floor, and a refused time names the one to use."""
+    out = _run(
+        _END_SCENARIO
+        + """
+        floor = app.trial_end_floor(data, SITE, vid)
+        res = {"floor": app.dtstr(floor), "no_visit_floor": app.dtstr(app.trial_end_floor(data, SITE, ""))}
+        res["a_minute_early"] = attempt(app.plan_trial_end, data, SITE, floor - dt.timedelta(minutes=1), (nec, cam), vid)
+        res["at_the_floor"] = attempt(app.plan_trial_end, data, SITE, floor, (nec, cam), vid)
+        res["well_after"] = attempt(app.plan_trial_end, data, SITE, floor + dt.timedelta(hours=3), (nec, cam), vid)
+        res["ceil"] = [app.dtstr(app.ceil_to_minute(D(2026, 9, 5, 9, 0, 30))), app.dtstr(app.ceil_to_minute(D(2026, 9, 5, 9, 1, 0)))]
+        # a check seconds into the minute: ending at that minute (seconds dropped) is refused, the next minute is fine
+        data["Checks"].loc[data["Checks"]["Visit ID"] == vid, "Check Time"] = app.dtstr(D(2026, 9, 5, 9, 0, 30))
+        res["same_minute_as_a_check_30s_in"] = attempt(app.plan_trial_end, data, SITE, D(2026, 9, 5, 9, 0), (nec, cam), vid)
+        res["next_minute"] = attempt(app.plan_trial_end, data, SITE, D(2026, 9, 5, 9, 1), (nec, cam), vid)
+        print(json.dumps(res))
+        """
+    )
+    assert out["floor"] == "2026-09-05 09:00:00" and out["no_visit_floor"] == "2026-09-01 08:00:00"
+    assert out["a_minute_early"] == "The end time can't be earlier than the latest check or window at this site (05/09/2026 09:00). Choose that time or later."
+    assert out["at_the_floor"] == "ok" and out["well_after"] == "ok"
+    assert out["ceil"] == ["2026-09-05 09:01:00", "2026-09-05 09:01:00"]
+    assert out["same_minute_as_a_check_30s_in"].endswith("(05/09/2026 09:01). Choose that time or later.") and out["next_minute"] == "ok"
