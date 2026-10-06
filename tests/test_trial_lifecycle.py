@@ -589,3 +589,38 @@ def test_a_trial_cannot_end_before_the_latest_check_and_the_floor_rounds_up_to_a
     assert out["at_the_floor"] == "ok" and out["well_after"] == "ok"
     assert out["ceil"] == ["2026-09-05 09:01:00", "2026-09-05 09:01:00"]
     assert out["same_minute_as_a_check_30s_in"].endswith("(05/09/2026 09:01). Choose that time or later.") and out["next_minute"] == "ok"
+
+
+def test_a_trial_cannot_start_before_the_previous_one_ended_or_before_a_trap_it_brings_in_was_last_closed() -> None:
+    """Set up has the same protection as End trial: a start time earlier than the data allows is refused with the time to use.
+    The floor is derived (the site's last trial End Time, a selected trap's latest closed window), never a fixed offset."""
+    out = _run(
+        _SET_UP_SCENARIO
+        + """
+        pool = app.set_up_pool(data, SITE, product="R1")
+        new = pool["new"]["Trap ID"].tolist(); rel = pool["relocated"]["Trap ID"].tolist()
+        a_end = T0 + dt.timedelta(days=5)          # trial A ended here
+        floor, why = app.trial_set_up_floor(data, SITE)
+        res = {"site_floor": [app.dtstr(floor), why], "no_site_trial_floor": app.trial_set_up_floor(data, OTHER)[0] is None}
+        assign = {new[0]: L43}
+        res["a_minute_before_trial_a_ended"] = attempt(app.plan_set_up, data, SITE, [L43], a_end - dt.timedelta(minutes=1), assign)
+        res["exactly_when_it_ended"] = attempt(app.plan_set_up, data, SITE, [L43], a_end, assign)
+        # a trap relocating in whose latest window closed after trial A ended
+        mover = rel[0]
+        add_window(mover, "R1 Build 4.3", D(2026, 9, 28, 8), D(2026, 9, 30, 8))
+        app.save_data(data); data = app.load_data()
+        tf = app.trial_set_up_floor(data, SITE, [mover])
+        res["trap_floor"] = [app.dtstr(tf[0]), tf[1]]
+        res["before_the_trap_window_closed"] = attempt(app.plan_set_up, data, SITE, [L43], D(2026, 9, 29, 9, 0), {mover: L43})
+        res["after_it_closed"] = attempt(app.plan_set_up, data, SITE, [L43], D(2026, 9, 30, 9, 0), {mover: L43})
+        res["mover"] = mover
+        print(json.dumps(res))
+        """
+    )
+    assert out["site_floor"] == ["2026-09-06 08:00:00", "the last trial at " + out["site_floor"][1].split("at ", 1)[1]] and out["site_floor"][1].endswith(" ended")
+    assert out["no_site_trial_floor"], "a site that never had a trial has nothing to order against"
+    assert out["a_minute_before_trial_a_ended"].startswith("The start can't be earlier than 06/09/2026 08:00 (the last trial at ") and out["a_minute_before_trial_a_ended"].endswith("ended). Choose that time or later.")
+    assert out["exactly_when_it_ended"] == "ok", "starting at the moment the last trial ended is fine (End then Start with the same time)"
+    assert out["trap_floor"] == ["2026-09-30 08:00:00", f"{out['mover']}'s last window closed"]
+    assert out["before_the_trap_window_closed"] == f"The start can't be earlier than 30/09/2026 08:00 ({out['mover']}'s last window closed). Choose that time or later."
+    assert out["after_it_closed"] == "ok"
