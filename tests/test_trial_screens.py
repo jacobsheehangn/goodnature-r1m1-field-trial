@@ -361,18 +361,18 @@ def test_the_required_actions_are_in_the_first_viewport(page: Page, tmp_path: Pa
         expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=20_000)
         for button in ("Resume checking",):
             box = page.get_by_role("button", name=button, exact=True).bounding_box()
-            assert box and box["y"] + box["height"] <= viewport["height"], f"hub: {button} must be on the first screen"
+            assert box and 0 <= box["y"] and box["y"] + box["height"] <= viewport["height"], f"hub: {button} must be on the first screen"
         page.get_by_role("button", name="Resume checking", exact=True).click()
         expect(page.get_by_text("Site check actions", exact=True)).to_be_visible(timeout=20_000)
         page.get_by_role("button", name=re.compile("Finish visit and end trial")).click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=20_000)
         decide = page.get_by_role("button", name="Decide").first.bounding_box()
-        assert decide and decide["y"] + decide["height"] <= viewport["height"], "End trial: the decision list is on the first screen"
+        assert decide and 0 <= decide["y"] and decide["y"] + decide["height"] <= viewport["height"], "End trial: the decision list is on the first screen (not scrolled past)"
     data_dir2 = tmp_path / "d2"; data_dir2.mkdir()
     with _serve(data_dir2, JOURNEY_SEED) as url:
         _open_set_up(page, url)
         nxt = page.get_by_role("button", name="Next: choose traps").bounding_box()
-        assert nxt and nxt["y"] + nxt["height"] <= viewport["height"], "Set up step 1: Next is on the first screen"
+        assert nxt and 0 <= nxt["y"] and nxt["y"] + nxt["height"] <= viewport["height"], "Set up step 1: Next is on the first screen"
 
 
 # --- Undo (Phase 3) ----------------------------------------------------------------------------------------
