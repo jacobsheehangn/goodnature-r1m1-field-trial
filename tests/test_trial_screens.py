@@ -6,8 +6,11 @@ visit page's new action and landing, and the return path from a review opened in
 Data is local test data only (see journey_seed.py)."""
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pandas as pd
@@ -434,3 +437,36 @@ def test_undo_from_the_end_trial_result_screen_reopens_the_trial(page: Page, tmp
         expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
         for name, frame in before.items():
             pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} after undo")
+
+
+def _save_a_check_from_another_phone(data_dir: Path, site_id: str) -> None:
+    """What another operator's check does at a site: close a trap's window, open the next one (stamped by start_window)."""
+    script = f"""
+        import datetime as dt, app
+        data = app.load_data()
+        trap = data["Traps"][(data["Traps"]["Site ID"] == "{site_id}") & (data["Traps"]["Status"] == "Active")].iloc[0]["Trap ID"]
+        when = dt.datetime.now()
+        app.close_window(data, trap, when, "Trap still set, no animal", "")
+        app.start_window(data, trap, when)
+        app.save_data(data)
+    """
+    env = dict(os.environ, R1M1_ENVIRONMENT="local", R1M1_ALLOW_NO_AUTH="true", R1M1_SEED_MODE="clean", R1M1_DATA_DIR=str(data_dir))
+    done = subprocess.run([sys.executable, "-c", textwrap.dedent(script)], cwd=Path(__file__).resolve().parents[1], env=env, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr[-2000:]
+
+
+def test_undo_of_track_as_a_trial_says_why_when_another_phone_has_saved_a_check_since(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED) as url:
+        _home(page, url)
+        _card(page, "Kaitoke Shed").get_by_role("button", name="Track as a trial", exact=True).click()
+        expect(page.get_by_text("Builds currently running", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Track as trial", exact=True).click()
+        expect(page.get_by_text("Undo ends when you leave this screen or lock your phone.", exact=True)).to_be_visible(timeout=60_000)
+        _save_a_check_from_another_phone(data_dir, "KAI")
+        state = {n: _sheet(data_dir, n) for n in ("Trials", "Traps", "Windows", "Followups", "Visits", "Checks", "Audit Log")}
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_text("Nothing was changed.", exact=True)).to_be_visible(timeout=60_000)
+        expect(page.get_by_text("Undo isn't possible any more: a check has been recorded at this site since it was tracked as a trial.", exact=True)).to_be_visible()
+        for name, frame in state.items():
+            pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} (a refused Undo writes nothing)")

@@ -2243,6 +2243,24 @@ def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
     expected_status = TRIAL_STATUS_ENDED if kind == "end" else TRIAL_STATUS_OPEN
     if str(trial_rows.iloc[0]["Status"]) != expected_status:
         raise ValueError(cannot + "the trial has changed since.")
+    site_id = str(trial_rows.iloc[0]["Site ID"])
+    stamped = staged["Windows"][staged["Windows"]["Trial ID"] == trial_id]
+    stamped_per_trap = stamped.groupby(stamped["Trap ID"].astype(str)).size().to_dict()
+
+    if kind == "end":
+        # Reopening this trial next to a newer one would leave two open at the site.
+        if not staged["Trials"][(staged["Trials"]["Site ID"] == site_id) & (staged["Trials"]["Status"] == TRIAL_STATUS_OPEN)].empty:
+            raise ValueError(cannot + "another trial has started at this site since.")
+    elif kind == "adopt":
+        # Adoption wrote one stamp per tagged window and said how many per trap. Any other window that now carries
+        # this Trial ID (a check saved since opened a new one) is not this action's to undo.
+        wrote = {}
+        for _, entry in rows.iterrows():
+            if str(entry["Record Type"]) == "Trap" and str(entry["Field"]) == "Windows tagged to trial":
+                match = re.search(r":\s*(\d+) window", str(entry["New Value"]))
+                wrote[str(entry["Record ID"])] = int(match.group(1)) if match else -1
+        if stamped_per_trap != wrote:
+            raise ValueError(cannot + "a check has been recorded at this site since it was tracked as a trial.")
 
     created_windows = set()
     if kind == "set_up":
@@ -2257,6 +2275,10 @@ def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
         )
         if referenced:
             raise ValueError(cannot + "a check has been recorded since this trial started.")
+        # Set up opened exactly one window per trap it activated. A trap activated, or a window opened, since is not its to remove.
+        brought_in = {str(e["Record ID"]) for _, e in rows.iterrows() if str(e["Record Type"]) == "Trap" and str(e["Field"]) == "Status" and str(e["New Value"]) == "Active"}
+        if set(stamped_per_trap) != brought_in or any(n != 1 for n in stamped_per_trap.values()):
+            raise ValueError(cannot + "a trap or window has been added to this trial since it started.")
 
     problems, undone, delete_trial = [], 0, False
     for _, entry in rows.iloc[::-1].iterrows():
