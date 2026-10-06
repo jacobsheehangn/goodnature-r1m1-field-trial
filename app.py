@@ -2067,18 +2067,29 @@ def not_checked_this_visit(data, site_id, visit_id) -> pd.DataFrame:
     return traps.sort_values(["_route", "Trap ID"])
 
 
-def trial_end_floor(data, site_id, visit_id=""):
-    """The earliest time a trial can end here: not before a window about to close was opened, a check in the visit being
-    finished was saved, or that visit began. The time inputs work in whole minutes, so a trial ended within a minute of the
-    last check would otherwise close windows (and the visit) before they started. None when there is nothing to order against."""
+def trial_end_floor_and_reason(data, site_id, visit_id=""):
+    """The earliest time a trial can end here, and what sets it: the latest of this trial's own start, the start of a window
+    about to close, the start of the visit being finished, and each check saved in it. The time inputs work in whole minutes,
+    so a trial ended within a minute of the last check would otherwise close windows (and the visit) before they started; and
+    with no window open (every trap awaiting service) the trial's own start is all there is to order against.
+    Returns (moment, reason), or (None, "") when there is nothing to order against."""
+    candidates = []
+    trial = open_trial(data, site_id)
+    if trial is not None and parse_dt(trial["Start Time"]) is not None:
+        candidates.append((parse_dt(trial["Start Time"]), "this trial started"))
     active = set(data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]["Trap ID"].astype(str))
     windows = data["Windows"]
-    times = [parse_dt(t) for t in windows[windows["Trap ID"].astype(str).isin(active) & (windows["Status"] == "Open")]["Start Time"]]
+    opened = [parse_dt(t) for t in windows[windows["Trap ID"].astype(str).isin(active) & (windows["Status"] == "Open")]["Start Time"]]
+    candidates += [(t, "the latest window at this site opened") for t in opened if t is not None]
     if visit_id:
-        times += [parse_dt(t) for t in data["Visits"][data["Visits"]["Visit ID"] == visit_id]["Start Time"]]
-        times += [parse_dt(t) for t in data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Check Time"]]
-    times = [t for t in times if t is not None]
-    return max(times) if times else None
+        candidates += [(parse_dt(t), "this visit began") for t in data["Visits"][data["Visits"]["Visit ID"] == visit_id]["Start Time"] if parse_dt(t) is not None]
+        candidates += [(parse_dt(t), "the latest check in this visit") for t in data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Check Time"] if parse_dt(t) is not None]
+    return max(candidates, key=lambda c: c[0]) if candidates else (None, "")
+
+
+def trial_end_floor(data, site_id, visit_id=""):
+    """The moment alone (see trial_end_floor_and_reason)."""
+    return trial_end_floor_and_reason(data, site_id, visit_id)[0]
 
 
 def ceil_to_minute(moment):
@@ -2101,9 +2112,9 @@ def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id=
         v = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
         if v.empty or str(v.iloc[0]["Site ID"]) != str(site_id) or str(v.iloc[0]["Status"]) != "In progress":
             raise ValueError("That visit is no longer in progress.")
-    floor = trial_end_floor(data, site_id, visit_id)
+    floor, floor_reason = trial_end_floor_and_reason(data, site_id, visit_id)
     if floor is not None and effective_time < floor:
-        raise ValueError(f"The end time can't be earlier than the latest check or window at this site ({ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')}). Choose that time or later.")
+        raise ValueError(f"The end time can't be earlier than {ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')} ({floor_reason}). Choose that time or later.")
     evidence_ids = set(gate["evidence"]["Follow-up ID"].astype(str))
     unresolvable = {str(x) for x in unresolvable_ids} & evidence_ids
     undecided = gate["evidence"][~gate["evidence"]["Follow-up ID"].astype(str).isin(unresolvable)]
