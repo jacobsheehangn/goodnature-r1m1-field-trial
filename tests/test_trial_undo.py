@@ -167,3 +167,77 @@ def test_undo_set_up_is_refused_once_a_check_hangs_off_one_of_its_windows_and_tw
     assert out["check_recorded"] == "Undo isn't possible any more: a check has been recorded since this trial started."
     assert out["unchanged"] and out["first"] == "ok"
     assert out["second"].startswith("Undo isn't possible any more:")
+
+
+# --- QA brief F2: Undo meets a later action ----------------------------------------------------
+
+def test_undo_adopt_is_refused_once_a_check_has_opened_a_stamped_window_and_writes_nothing() -> None:
+    out = _run(
+        _ADOPT_SCENARIO
+        + """
+        plan = app.adoption_plan(data, OTHER)
+        result = app.commit_adoption(data, OTHER, plan["start_time"])
+        # What a real check does after adoption: close the trap's window, open the next one (stamped by start_window).
+        data = app.load_data()
+        later = D(2026, 10, 2, 9, 0)
+        app.close_window(data, a, later, "Trap still set, no animal", "")
+        app.start_window(data, a, later)
+        app.save_data(data)
+        data = app.load_data()
+        trial = result["trial_id"]
+        carried = data["Windows"][(data["Windows"]["Trap ID"] == a) & (data["Windows"]["Trial ID"] == trial)]
+        state = workbook_state()
+        audit = app.load_data()["Audit Log"]
+        wrote = audit[(audit["Record ID"] == a) & (audit["Field"] == "Windows tagged to trial")]["New Value"].iloc[0]
+        res = {"wrote_for_a": int(wrote.split(": ")[1].split(" ")[0]), "stamped_for_a_now": int(len(carried)),
+               "refused": attempt(app.undo_trial_action, app.load_data(), "adopt", trial, result["change_ids"])}
+        res["unchanged"] = all(state[n].equals(app.load_data()[n]) for n in state)
+        res["trial_still_open"] = app.open_trial(app.load_data(), OTHER) is not None
+        print(json.dumps(res))
+        """
+    )
+    assert out["refused"] == "Undo isn't possible any more: a check has been recorded at this site since it was tracked as a trial."
+    assert out["unchanged"] and out["trial_still_open"], "a refused Undo writes nothing"
+    assert out["stamped_for_a_now"] == out["wrote_for_a"] + 1, "the check's new window carries the Trial ID, and the adoption did not write it"
+
+
+def test_undo_set_up_is_refused_once_a_trap_has_been_activated_into_the_trial_since() -> None:
+    out = _run(
+        _SET_UP_SCENARIO
+        + """
+        pool = app.set_up_pool(data, SITE, product="R1")
+        ids = pool["new"]["Trap ID"].tolist()
+        assert len(ids) >= 2, ids
+        result = app.commit_set_up(data, SITE, [L43], EFFECTIVE, {t: L43 for t in ids[:1]})
+        # A second trap is activated into the open trial afterwards; its window is stamped and unreferenced.
+        data = app.load_data()
+        app.activate_trap(data, ids[1], EFFECTIVE + dt.timedelta(days=1), "added later")
+        data = app.load_data()
+        state = workbook_state()
+        res = {"refused": attempt(app.undo_trial_action, app.load_data(), "set_up", result["trial_id"], result["change_ids"])}
+        res["unchanged"] = all(state[n].equals(app.load_data()[n]) for n in state)
+        res["later_trap_still_has_its_window"] = int(((data["Windows"]["Trap ID"] == ids[1]) & (data["Windows"]["Status"] == "Open")).sum())
+        print(json.dumps(res))
+        """
+    )
+    assert out["refused"] == "Undo isn't possible any more: a trap or window has been added to this trial since it started."
+    assert out["unchanged"] and out["later_trap_still_has_its_window"] == 1
+
+
+def test_undo_end_trial_is_refused_once_another_trial_has_started_at_the_site() -> None:
+    out = _run(
+        _END_SCENARIO
+        + """
+        done = app.commit_trial_end(data, SITE, END, unresolvable_ids=(nec, cam), visit_id=vid)
+        data = app.load_data()
+        app.create_trial(data, SITE, [L43], END + dt.timedelta(hours=2))
+        app.save_data(data)
+        state = workbook_state()
+        res = {"refused": attempt(app.undo_trial_action, app.load_data(), "end", done["trial_id"], done["change_ids"])}
+        res["unchanged"] = all(state[n].equals(app.load_data()[n]) for n in state)
+        res["open_trials"] = int(((app.load_data()["Trials"]["Site ID"] == SITE) & (app.load_data()["Trials"]["Status"] == "Open")).sum())
+        print(json.dumps(res))
+        """
+    )
+    assert out["refused"] == "Undo isn't possible any more: another trial has started at this site since."
+    assert out["unchanged"] and out["open_trials"] == 1, "never two open trials at one site"
