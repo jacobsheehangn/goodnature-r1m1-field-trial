@@ -2387,6 +2387,8 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
+              // Streamlit 1.60 scrolls this element; the three selectors below it are from older versions.
+              doc.querySelector('section[data-testid="stMain"]'),
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -4204,6 +4206,13 @@ def r1_kv(rows) -> str:
 
 def r1_short_date(value) -> str:
     return value.strftime("%d %b").lstrip("0") if value else "—"
+
+
+def r1_step(flow: str, **updates) -> None:
+    """Move a journey flow to another step and ask for the top of the page, as navigation does. Without it a step
+    entered from the bottom of a long list (Preview after the traps) opens part-way down."""
+    st.session_state[flow].update(updates)
+    st.session_state.scroll_to_top_once = True
 
 
 def begin_trial_start(site_id: str) -> None:
@@ -6924,6 +6933,7 @@ elif page == "trial_start":
             st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
             st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ts_done", on_click=leave_trial_flow, args=("ts",))
+            scroll_to_top_once()  # a result screen stops the script before the end-of-page reset runs
             st.stop()
         if open_trial(data, sid) is not None:
             st.markdown(design.message_html("info", "This site already has a trial running."), unsafe_allow_html=True)
@@ -6932,9 +6942,9 @@ elif page == "trial_start":
         if step == 1:
             st.button("Trap sites", key="back_ts_1", on_click=leave_trial_flow, args=("ts",))
         elif step == 2:
-            st.button("Back to builds", key="back_ts_2", on_click=lambda: st.session_state["ts"].update({"step": 1}))
+            st.button("Back to builds", key="back_ts_2", on_click=r1_step, args=("ts",), kwargs={"step": 1})
         else:
-            st.button("Back to traps", key="back_ts_3", on_click=lambda: st.session_state["ts"].update({"step": 2}))
+            st.button("Back to traps", key="back_ts_3", on_click=r1_step, args=("ts",), kwargs={"step": 2})
         r1_stepper(1)
 
         if step == 1:
@@ -6971,7 +6981,7 @@ elif page == "trial_start":
                 chosen = [label for label, on in picks.items() if on]
                 try:
                     declared = validate_declared_builds(data, chosen)
-                    ts.update({"declared": declared, "effective": datetime.combine(start_date, start_time), "note": note, "step": 2, "error1": ""})
+                    r1_step("ts", declared=declared, effective=datetime.combine(start_date, start_time), note=note, step=2, error1="")
                 except ValueError as exc:
                     ts["error1"] = str(exc)
                 st.rerun()
@@ -7025,7 +7035,7 @@ elif page == "trial_start":
                 assignments = {t: (choice.get(t) or helper_choice or "") for t, on in selected.items() if on}
                 try:
                     ts["plan"] = plan_set_up(data, sid, declared, ts["effective"], assignments)
-                    ts.update({"assign": assignments, "selected": [t for t, on in selected.items() if on], "step": 3, "error2": "", "error_traps": []})
+                    r1_step("ts", assign=assignments, selected=[t for t, on in selected.items() if on], step=3, error2="", error_traps=[])
                 except ValueError as exc:
                     ts.update({"error2": str(exc), "error_traps": [t for t, label in assignments.items() if not label], "assign": assignments,
                                "selected": [t for t, on in selected.items() if on]})
@@ -7063,7 +7073,7 @@ elif page == "trial_start":
             if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {len(plan['rows'])} traps…", type="primary"):
                 try:
                     ts["result"] = commit_set_up(data, sid, ts["declared"], ts["effective"], ts["assign"], ts.get("note", ""))
-                    ts.update({"step": 4, "error3": ""})
+                    r1_step("ts", step=4, error3="")
                 except Exception as exc:
                     _logger.exception("Trial Set up failed")
                     ts["error3"] = "The trial has not started and every trap is as it was. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
@@ -7079,6 +7089,7 @@ elif page == "trial_adopt":
             st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
             st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ta_done", on_click=leave_trial_flow, args=("ta",))
+            scroll_to_top_once()
             st.stop()
         st.button("Trap sites", key="back_ta", on_click=leave_trial_flow, args=("ta",))
         r1_stepper(1)
@@ -7125,7 +7136,7 @@ elif page == "trial_adopt":
         if two_phase_button("Track as trial", "ta_confirm", "Tracking…", type="primary"):
             try:
                 ta["result"] = commit_adoption(data, sid, datetime.combine(adopt_date, adopt_time))
-                ta.update({"step": 3, "error": ""})
+                r1_step("ta", step=3, error="")
             except Exception as exc:
                 _logger.exception("Trial adoption failed")
                 ta["error"] = "The site is not tracked and nothing was written. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
@@ -7143,6 +7154,7 @@ elif page == "trial_end":
             result = te["result"]
             st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
             st.button("Trap sites", key="te_done", type="primary", on_click=leave_trial_flow, args=("te",))
+            scroll_to_top_once()
             st.stop()
         if trial is None:
             st.markdown(design.message_html("info", "This site has no trial running."), unsafe_allow_html=True)
@@ -7179,7 +7191,7 @@ elif page == "trial_end":
                                 unsafe_allow_html=True,
                             )
                             if button_col.button("Decide", key=f"te_decide_{fid}"):
-                                te.update({"step": "task", "task": fid})
+                                r1_step("te", step="task", task=fid)
                                 st.rerun()
             if decided:
                 st.markdown('<div class="r1-label">Marked unresolvable</div>', unsafe_allow_html=True)
@@ -7211,7 +7223,7 @@ elif page == "trial_end":
                 st.button("Back and check more traps", key="te_back_check", on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": visit_id})
             blocked = not undecided.empty
             if st.button("Continue to preview", key="te_continue", type="primary", disabled=blocked):
-                te["step"] = "preview"
+                r1_step("te", step="preview")
                 st.rerun()
             if blocked:
                 n = len(undecided)
@@ -7221,7 +7233,7 @@ elif page == "trial_end":
             fid = te["task"]
             rows = gate["evidence"][gate["evidence"]["Follow-up ID"].astype(str) == fid]
             if rows.empty:
-                te["step"] = "list"
+                r1_step("te", step="list")
                 st.rerun()
             task = rows.iloc[0]
             order = gate["evidence"]["Follow-up ID"].astype(str).tolist()
@@ -7234,9 +7246,9 @@ elif page == "trial_end":
                 st.session_state["return_to"] = {"page": "trial_end", "site_id": sid, "reset": ("te", "step", "list")}
                 st.switch_page(PAGE_FOLLOWUPS)
             if st.button("Mark unresolvable…", key="te_mark_unresolvable", type="tertiary"):
-                te["step"] = "confirm_unresolvable"
+                r1_step("te", step="confirm_unresolvable")
                 st.rerun()
-            st.button("Back to list", key="te_task_back", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Back to list", key="te_task_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
         elif step == "confirm_unresolvable":
             fid = te["task"]
@@ -7247,11 +7259,11 @@ elif page == "trial_end":
             understood = st.checkbox("I understand this evidence will not be assessed.", key=f"te_understand_{fid}")
             if two_phase_button("Mark unresolvable", f"te_confirm_unresolvable_{fid}", "Saving…", type="primary", disabled=not understood):
                 te["unresolvable"] = sorted(set(te.get("unresolvable", [])) | {fid})
-                te["step"] = "list"
+                r1_step("te", step="list")
                 st.rerun()
             if not understood:
                 st.markdown('<div class="r1-meta">Tick the box to continue.</div>', unsafe_allow_html=True)
-            st.button("Cancel", key="te_cancel_unresolvable", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Cancel", key="te_cancel_unresolvable", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
         elif step == "preview":
             r1_title("Confirm trial end", site_name(data, sid))
@@ -7267,7 +7279,7 @@ elif page == "trial_end":
                 plan = plan_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked)
             except ValueError as exc:
                 st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
-                st.button("Back to list", key="te_preview_back_err", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+                st.button("Back to list", key="te_preview_back_err", on_click=r1_step, args=("te",), kwargs={"step": "list"})
                 st.stop()
             preview = pd.DataFrame([{"Trap": t, "Window": "Closes", "Status": "Active → Inactive"} for t in plan["trap_ids"]])
             st.dataframe(preview, use_container_width=True, hide_index=True)
@@ -7283,12 +7295,12 @@ elif page == "trial_end":
                 te["note"] = end_note
                 try:
                     te["result"] = commit_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked, end_note)
-                    te.update({"step": "result", "error": ""})
+                    r1_step("te", step="result", error="")
                 except Exception as exc:
                     _logger.exception("Trial end failed")
                     te["error"] = "The trial is still open and every trap is still active. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
                 st.rerun()
-            st.button("Back to list", key="te_preview_back", on_click=lambda: st.session_state["te"].update({"step": "list"}))
+            st.button("Back to list", key="te_preview_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
 elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
