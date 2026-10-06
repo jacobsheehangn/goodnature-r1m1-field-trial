@@ -2045,6 +2045,26 @@ def not_checked_this_visit(data, site_id, visit_id) -> pd.DataFrame:
     return traps.sort_values(["_route", "Trap ID"])
 
 
+def trial_end_floor(data, site_id, visit_id=""):
+    """The earliest time a trial can end here: not before a window about to close was opened, a check in the visit being
+    finished was saved, or that visit began. The time inputs work in whole minutes, so a trial ended within a minute of the
+    last check would otherwise close windows (and the visit) before they started. None when there is nothing to order against."""
+    active = set(data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]["Trap ID"].astype(str))
+    windows = data["Windows"]
+    times = [parse_dt(t) for t in windows[windows["Trap ID"].astype(str).isin(active) & (windows["Status"] == "Open")]["Start Time"]]
+    if visit_id:
+        times += [parse_dt(t) for t in data["Visits"][data["Visits"]["Visit ID"] == visit_id]["Start Time"]]
+        times += [parse_dt(t) for t in data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Check Time"]]
+    times = [t for t in times if t is not None]
+    return max(times) if times else None
+
+
+def ceil_to_minute(moment):
+    """The next whole minute (the time inputs have no seconds); an exact minute is returned as it is."""
+    floored = moment.replace(second=0, microsecond=0)
+    return floored if floored == moment else floored + timedelta(minutes=1)
+
+
 def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id="", final_period_traps=()) -> dict:
     """Validates End trial and describes it. Writes nothing. Raises ValueError with the
     message the operator should see."""
@@ -2059,6 +2079,9 @@ def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id=
         v = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
         if v.empty or str(v.iloc[0]["Site ID"]) != str(site_id) or str(v.iloc[0]["Status"]) != "In progress":
             raise ValueError("That visit is no longer in progress.")
+    floor = trial_end_floor(data, site_id, visit_id)
+    if floor is not None and effective_time < floor:
+        raise ValueError(f"The end time can't be earlier than the latest check or window at this site ({ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')}). Choose that time or later.")
     evidence_ids = set(gate["evidence"]["Follow-up ID"].astype(str))
     unresolvable = {str(x) for x in unresolvable_ids} & evidence_ids
     undecided = gate["evidence"][~gate["evidence"]["Follow-up ID"].astype(str).isin(unresolvable)]
@@ -7271,10 +7294,15 @@ elif page == "trial_end":
 
         elif step == "preview":
             r1_title("Confirm trial end", site_name(data, sid))
+            # Default: now, to the minute, but never earlier than the latest check or window it has to come after.
+            default_end = now().replace(second=0, microsecond=0)
+            end_floor = trial_end_floor(data, sid, visit_id)
+            if end_floor is not None and default_end < end_floor:
+                default_end = ceil_to_minute(end_floor)
             with st.container(key="pair_te"):
                 date_col, time_col = st.columns(2)
-                end_date = date_col.date_input("Effective date", value=te.get("effective", now()).date(), key="te_date", format="DD/MM/YYYY")
-                end_time = time_col.time_input("Effective time", value=te.get("effective", now().replace(second=0, microsecond=0)).time(), key="te_time")
+                end_date = date_col.date_input("Effective date", value=te.get("effective", default_end).date(), key="te_date", format="DD/MM/YYYY")
+                end_time = time_col.time_input("Effective time", value=te.get("effective", default_end).time(), key="te_time")
             with st.expander("Add a note (optional)", expanded=bool(te.get("note"))):
                 end_note = st.text_area("Note", value=te.get("note", ""), key="te_note", label_visibility="collapsed")
             effective = datetime.combine(end_date, end_time)

@@ -18,7 +18,7 @@ from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
 from journey_seed import END_SEED, JOURNEY_SEED  # noqa: E402
-from test_trial_model_ui import _serve  # noqa: E402
+from test_trial_model_ui import _serve, _sheet  # noqa: E402
 from test_trial_screens import _card, _decide_unresolvable, _home, _open_set_up, _tick, _to_end_trial_from_the_visit  # noqa: E402
 
 PHONE, DESKTOP = {"width": 390, "height": 844}, {"width": 1280, "height": 900}
@@ -159,3 +159,28 @@ def test_set_up_preview_warns_about_an_empty_declared_build_but_never_blocks(pag
         page.get_by_role("button", name="Preview activation").click()
         expect(page.get_by_text("This trial", exact=True)).to_be_visible(timeout=20_000)
         expect(page.get_by_text(warning, exact=True)).to_have_count(0)
+
+
+# --- found in the QA brief's complete small trial: a trial ended straight after the last check ---------------------------
+
+# The visit and its checks are stamped 30 seconds ahead of now, so the minute-truncated default end time is *always* earlier than the
+# latest check (what happens when a trial is ended within a minute of the last check), whichever second the test runs in.
+NOW_CHECKS_SEED = END_SEED.replace("app.dtstr(D(2026, 10, 5, 8))", "app.dtstr(app.now() + dt.timedelta(seconds=30))").replace("app.dtstr(D(2026, 10, 5, 9))", "app.dtstr(app.now() + dt.timedelta(seconds=30))")
+
+
+def test_ending_a_trial_straight_after_the_last_check_never_ends_the_visit_before_it_started(page: Page, tmp_path: Path) -> None:
+    import pandas as pd  # noqa: PLC0415
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, NOW_CHECKS_SEED) as url:
+        _to_end_trial_from_the_visit(page, url)
+        _decide_unresolvable(page)
+        expect(page.get_by_text("Marked unresolvable", exact=True)).to_be_visible(timeout=20_000)
+        _decide_unresolvable(page)
+        page.get_by_role("button", name="Continue to preview").click()
+        expect(page.get_by_text("What ending does", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Confirm trial end").click()
+        expect(page.get_by_text("Trial ended at Mangaroa Farm", exact=True)).to_be_visible(timeout=60_000)
+        visits = _sheet(data_dir, "Visits"); visit = visits[visits["Status"] == "Partial"].iloc[0]
+        assert pd.to_datetime(visit["End Time"]) >= pd.to_datetime(visit["Start Time"]), f"the visit ended before it started: {visit['Start Time']} -> {visit['End Time']}"
+        windows = _sheet(data_dir, "Windows"); closed = windows[(windows["Site ID"] == "MAN") & (windows["End Time"] != "")]
+        assert (pd.to_datetime(closed["End Time"]) >= pd.to_datetime(closed["Start Time"])).all(), "a window was closed before it opened"
