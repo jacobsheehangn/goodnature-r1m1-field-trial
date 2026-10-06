@@ -585,10 +585,10 @@ def test_a_trial_cannot_end_before_the_latest_check_and_the_floor_rounds_up_to_a
         """
     )
     assert out["floor"] == "2026-09-05 09:00:00" and out["no_visit_floor"] == "2026-09-01 08:00:00"
-    assert out["a_minute_early"] == "The end time can't be earlier than the latest check or window at this site (05/09/2026 09:00). Choose that time or later."
+    assert out["a_minute_early"] == "The end time can't be earlier than 05/09/2026 09:00 (the latest check in this visit). Choose that time or later."
     assert out["at_the_floor"] == "ok" and out["well_after"] == "ok"
     assert out["ceil"] == ["2026-09-05 09:01:00", "2026-09-05 09:01:00"]
-    assert out["same_minute_as_a_check_30s_in"].endswith("(05/09/2026 09:01). Choose that time or later.") and out["next_minute"] == "ok"
+    assert out["same_minute_as_a_check_30s_in"] == "The end time can't be earlier than 05/09/2026 09:01 (the latest check in this visit). Choose that time or later." and out["next_minute"] == "ok"
 
 
 def test_a_trial_cannot_start_before_the_previous_one_ended_or_before_a_trap_it_brings_in_was_last_closed() -> None:
@@ -624,3 +624,32 @@ def test_a_trial_cannot_start_before_the_previous_one_ended_or_before_a_trap_it_
     assert out["trap_floor"] == ["2026-09-30 08:00:00", f"{out['mover']}'s last window closed"]
     assert out["before_the_trap_window_closed"] == f"The start can't be earlier than 30/09/2026 08:00 ({out['mover']}'s last window closed). Choose that time or later."
     assert out["after_it_closed"] == "ok"
+
+
+def test_the_end_floor_includes_the_trials_own_start_when_no_window_is_open() -> None:
+    """With no window open there is no window start to order against; without the trial's own start in the floor a trial could be
+    ended before it began."""
+    out = _run(
+        _END_SCENARIO
+        + """
+        # Every trap is awaiting service: Active, but with no open window and no visit being finished.
+        w = data["Windows"]
+        open_here = (w["Site ID"] == SITE) & (w["Status"] == "Open")
+        data["Windows"].loc[open_here, ["Status", "End Time", "End Reason"]] = ["Closed", app.dtstr(T0 + dt.timedelta(hours=2)), "test"]
+        data["Visits"].loc[data["Visits"]["Visit ID"] == vid, ["Status", "End Time"]] = ["Complete", app.dtstr(D(2026, 9, 5, 10))]   # nothing in progress
+        app.save_data(data); data = app.load_data()
+        trial = app.open_trial(data, SITE)
+        floor, why = app.trial_end_floor_and_reason(data, SITE, "")
+        res = {"trial_start": trial["Start Time"], "open_windows": int(((data["Windows"]["Site ID"] == SITE) & (data["Windows"]["Status"] == "Open")).sum()),
+               "floor": app.dtstr(floor), "why": why,
+               "before_the_trial_began": attempt(app.plan_trial_end, data, SITE, T0 - dt.timedelta(days=1), (nec, cam), ""),
+               "a_minute_before": attempt(app.plan_trial_end, data, SITE, T0 - dt.timedelta(minutes=1), (nec, cam), ""),
+               "at_the_trial_start": attempt(app.plan_trial_end, data, SITE, T0, (nec, cam), "")}
+        print(json.dumps(res))
+        """
+    )
+    assert out["open_windows"] == 0, "the scenario must have no window open"
+    assert out["floor"] == out["trial_start"] == "2026-09-01 08:00:00" and out["why"] == "this trial started"
+    assert out["before_the_trial_began"] == "The end time can't be earlier than 01/09/2026 08:00 (this trial started). Choose that time or later."
+    assert out["a_minute_before"].startswith("The end time can't be earlier than 01/09/2026 08:00 (this trial started)")
+    assert out["at_the_trial_start"] == "ok"
