@@ -1704,6 +1704,9 @@ def _trial_action_test_failure(action: str, step: int) -> None:
     spec = os.environ.get("R1M1_TEST_FAIL_TRIAL_ACTION", "")
     if spec == f"{action}:{step}":
         raise RuntimeError(f"forced failure in {action} at step {step} (test-only)")
+    delay = os.environ.get("R1M1_TEST_TRIAL_ACTION_DELAY_MS", "")
+    if delay.isdigit() and step == 0:
+        time.sleep(int(delay) / 1000)  # test-only: holds a long confirm open so its "Saving…" state can be captured
 
 
 def _audit_ids_since(staged, start_row_count: int) -> list:
@@ -2231,6 +2234,7 @@ def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
     if kind not in ("set_up", "adopt", "end"):
         raise ValueError("Unknown action.")
     cannot = "Undo isn't possible any more: "
+    _trial_action_test_failure("undo", 0)
     staged = _staged_copy(data)
     audit = staged["Audit Log"]
     ids = [str(c) for c in change_ids]
@@ -4353,6 +4357,11 @@ def r1_kv(rows) -> str:
     )
 
 
+def r1_count(n: int, noun: str) -> str:
+    """"1 trap", "5 traps"."""
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
 def r1_short_date(value) -> str:
     return value.strftime("%d %b").lstrip("0") if value else "—"
 
@@ -4384,7 +4393,7 @@ if SPEED_PROBE:
     begin_trial_end = _probe_callback(begin_trial_end)
 
 
-def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids) -> bool:
+def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids, busy_label: str = "Undoing…") -> bool:
     """The Undo card on a result screen. It lasts only while the operator stays on that screen
     (leaving the flow drops its state). Returns True once the action has been undone."""
     state = st.session_state[state_key]
@@ -4395,7 +4404,7 @@ def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids) -> boo
         st.markdown('<div class="r1-card-title">Undo</div><div class="r1-meta">Undo ends when you leave this screen or lock your phone.</div>', unsafe_allow_html=True)
         if state.get("undo_error"):
             st.markdown(design.message_html("error", "Nothing was changed.", html.escape(state["undo_error"])), unsafe_allow_html=True)
-        if two_phase_button("Undo this action", f"undo_{kind}", "Undoing…"):
+        if two_phase_button("Undo this action", f"undo_{kind}", busy_label):
             try:
                 undo_trial_action(data, kind, trial_id, change_ids)
                 state.update({"undone": True, "undo_error": ""})
@@ -7098,7 +7107,7 @@ elif page == "trial_start":
             result = ts["result"]
             if not ts.get("undone"):
                 st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
-            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"])
+            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['trap_count'], 'trap')}…")
             if not undone:
                 st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ts_done", on_click=leave_trial_flow, args=("ts",))
@@ -7238,7 +7247,7 @@ elif page == "trial_start":
                 st.markdown(design.message_html("warn", html.escape(unused_note)), unsafe_allow_html=True)
             if ts.get("error3"):
                 st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ts["error3"])), unsafe_allow_html=True)
-            if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {len(plan['rows'])} traps…", type="primary"):
+            if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {r1_count(len(plan['rows']), 'trap')}…", type="primary"):
                 try:
                     ts["result"] = commit_set_up(data, sid, ts["declared"], ts["effective"], ts["assign"], ts.get("note", ""))
                     ts.update({"step": 4, "error3": ""})
@@ -7256,7 +7265,7 @@ elif page == "trial_adopt":
             result = ta["result"]
             if not ta.get("undone"):
                 st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
-            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"])
+            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['windows_tagged'], 'window')}…")
             if not undone:
                 st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
             st.button("Trap sites", key="back_ta_done", on_click=leave_trial_flow, args=("ta",))
@@ -7303,7 +7312,7 @@ elif page == "trial_adopt":
             st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ta["error"])), unsafe_allow_html=True)
         if plan["windows_to_tag"] == 0:
             st.markdown('<div class="r1-meta">No existing windows fall in this period; the trial will start with the next window.</div>', unsafe_allow_html=True)
-        if two_phase_button("Track as trial", "ta_confirm", "Tracking…", type="primary"):
+        if two_phase_button("Track as trial", "ta_confirm", f"Tracking — {r1_count(plan['windows_to_tag'], 'window')}…", type="primary"):
             try:
                 ta["result"] = commit_adoption(data, sid, datetime.combine(adopt_date, adopt_time))
                 ta.update({"step": 3, "error": ""})
@@ -7324,7 +7333,7 @@ elif page == "trial_end":
             result = te["result"]
             if not te.get("undone"):
                 st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
-            r1_undo_section("te", "end", result["trial_id"], result["change_ids"])
+            r1_undo_section("te", "end", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['traps_deactivated'], 'trap')}…")
             st.button("Trap sites", key="te_done", type="primary", on_click=leave_trial_flow, args=("te",))
             st.stop()
         if trial is None:
@@ -7462,7 +7471,7 @@ elif page == "trial_end":
                 st.markdown('<div class="r1-card-title">What ending does</div>' + r1_kv(rows), unsafe_allow_html=True)
             if te.get("error"):
                 st.markdown(design.message_html("error", "Nothing was changed.", html.escape(te["error"])), unsafe_allow_html=True)
-            if two_phase_button("Confirm trial end", "te_confirm", f"Ending trial — {len(plan['trap_ids'])} traps…", type="primary"):
+            if two_phase_button("Confirm trial end", "te_confirm", f"Ending trial — {r1_count(len(plan['trap_ids']), 'trap')}…", type="primary"):
                 te["note"] = end_note
                 try:
                     te["result"] = commit_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked, end_note)

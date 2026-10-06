@@ -470,3 +470,88 @@ def test_undo_of_track_as_a_trial_says_why_when_another_phone_has_saved_a_check_
         expect(page.get_by_text("Undo isn't possible any more: a check has been recorded at this site since it was tracked as a trial.", exact=True)).to_be_visible()
         for name, frame in state.items():
             pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} (a refused Undo writes nothing)")
+
+
+# --- QA brief step 3: every long confirm shows what it is doing, with a count, while it works ---------------------
+
+DELAY = {"R1M1_TEST_TRIAL_ACTION_DELAY_MS": "2500"}
+
+
+def test_each_long_confirm_shows_a_busy_label_with_its_count(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED, DELAY) as url:
+        # Start trial (Set up)
+        _open_set_up(page, url)
+        page.get_by_role("button", name="Next: choose traps").click()
+        expect(page.get_by_text("Set all unassigned to", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("radio", name="Build 4.3").first.click(); page.wait_for_timeout(400)
+        page.get_by_role("button", name="Preview activation").click()
+        expect(page.get_by_text("This trial", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Start trial", exact=True).click()
+        expect(page.get_by_role("button", name="Starting trial — 7 traps…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_role("button", name="Starting trial — 7 traps…", exact=True)).to_be_disabled()
+        expect(page.get_by_text("Undo ends when you leave this screen or lock your phone.", exact=True)).to_be_visible(timeout=60_000)
+        # Undo (of Set up)
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_role("button", name="Undoing — 7 traps…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
+        # Track as trial
+        page.get_by_role("button", name="Trap sites", exact=True).click()
+        _card(page, "Kaitoke Shed").get_by_role("button", name="Track as a trial", exact=True).click()
+        expect(page.get_by_text("Builds currently running", exact=True)).to_be_visible(timeout=20_000)
+        planned = int(re.match(r"(\d+) across", page.get_by_text(re.compile(r"^\d+ across \d+ traps?$")).first.inner_text()).group(1))
+        page.get_by_role("button", name="Track as trial", exact=True).click()
+        noun = "window" if planned == 1 else "windows"
+        expect(page.get_by_role("button", name=f"Tracking — {planned} {noun}…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("is tracked as a trial", exact=False)).to_be_visible(timeout=60_000)
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_role("button", name=f"Undoing — {planned} {noun}…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
+
+
+def test_confirm_trial_end_shows_its_trap_count_while_it_works(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, END_SEED, DELAY) as url:
+        _to_end_trial_from_the_visit(page, url)
+        _decide_unresolvable(page)
+        expect(page.get_by_text("Marked unresolvable", exact=True)).to_be_visible(timeout=20_000)
+        _decide_unresolvable(page)
+        page.get_by_role("button", name="Continue to preview").click()
+        expect(page.get_by_text("What ending does", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Confirm trial end").click()
+        expect(page.get_by_role("button", name="Ending trial — 5 traps…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("Trial ended at Mangaroa Farm", exact=True)).to_be_visible(timeout=60_000)
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_role("button", name="Undoing — 5 traps…", exact=True)).to_be_visible(timeout=10_000)
+        expect(page.get_by_text("Everything this action changed has been put back.", exact=True)).to_be_visible(timeout=60_000)
+
+
+def test_a_failed_track_as_a_trial_says_nothing_was_changed_and_writes_nothing(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED, {"R1M1_TEST_FAIL_TRIAL_ACTION": "adopt:0"}) as url:
+        before = {n: _sheet(data_dir, n) for n in ("Trials", "Traps", "Windows", "Audit Log")}
+        _home(page, url)
+        _card(page, "Kaitoke Shed").get_by_role("button", name="Track as a trial", exact=True).click()
+        expect(page.get_by_text("Builds currently running", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Track as trial", exact=True).click()
+        expect(page.get_by_text("Nothing was changed.", exact=True)).to_be_visible(timeout=60_000)
+        expect(page.get_by_text("The site is not tracked and nothing was written.", exact=False)).to_be_visible()
+        for name, frame in before.items():
+            pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} (a failed Track as a trial writes nothing)")
+
+
+def test_a_failed_undo_says_nothing_was_changed_and_leaves_the_trial_in_place(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, JOURNEY_SEED, {"R1M1_TEST_FAIL_TRIAL_ACTION": "undo:0"}) as url:
+        _home(page, url)
+        _card(page, "Kaitoke Shed").get_by_role("button", name="Track as a trial", exact=True).click()
+        expect(page.get_by_text("Builds currently running", exact=True)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Track as trial", exact=True).click()
+        expect(page.get_by_text("Undo ends when you leave this screen or lock your phone.", exact=True)).to_be_visible(timeout=60_000)
+        after_adopt = {n: _sheet(data_dir, n) for n in ("Trials", "Traps", "Windows", "Audit Log")}
+        page.get_by_role("button", name="Undo this action").click()
+        expect(page.get_by_text("Nothing was changed.", exact=True)).to_be_visible(timeout=60_000)
+        expect(page.get_by_text("Check your signal and try again.", exact=True)).to_be_visible()
+        for name, frame in after_adopt.items():
+            pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} (a failed Undo writes nothing)")
+        assert page.get_by_role("button", name="Undo this action").count() == 1, "Undo is still offered after a failure"
