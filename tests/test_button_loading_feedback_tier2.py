@@ -156,16 +156,19 @@ def test_necropsy_correction_save_shows_a_disabled_saving_state_before_navigatin
 
     reason_box = page.locator('textarea[aria-label="Correction reason"]')
     reason_box.fill("Regression test: two-phase save feedback")
+    # The same settle the sibling tests below use, for the same documented reason (see _click_until_busy_or_done): a click
+    # issued right after committing the text_area's edit can be swallowed with no server response at all. Without it this
+    # test failed about one run in four when the whole file ran (and in the full suite), never as a single test.
+    page.wait_for_timeout(1_500)
 
     save_button = page.get_by_role("button", name="Save correction", exact=True)
-    save_button.click()
 
     # The point of this test: before the two_phase_button fix, this button did
     # its work (including a workbook write) in the same script pass that
     # detected the click, so there was no real intermediate disabled render to
     # observe here at all.
-    expect(page.get_by_role("button", name="Saving…", exact=True)).to_be_visible(timeout=10_000)
-    expect(page.get_by_role("button", name="Saving…", exact=True)).to_be_disabled()
+    saw_busy = _click_until_busy_or_done(page, save_button, "Saving", "Correction saved.")
+    assert saw_busy, "the busy 'Saving…' state was never observed"
 
     expect(page.get_by_text("Correction saved.", exact=True)).to_be_visible(timeout=30_000)
 
