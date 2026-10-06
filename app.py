@@ -1866,6 +1866,25 @@ def unused_declared_builds_message(declared, rows) -> str:
     return f"{lead} This trial will only record {' and '.join(r1_short_build(b) for b in used)}."
 
 
+def trial_set_up_floor(data, site_id, trap_ids=()):
+    """The earliest time a new trial can start here: not before this site's last trial ended, and not before the latest
+    window of a trap being brought in closed (a window opening earlier would overlap it). Derived from the data, no fixed
+    offset. Returns (moment, reason), or (None, "") when there is nothing to order against."""
+    candidates = []
+    last = latest_ended_trial(data, site_id)
+    if last is not None and parse_dt(last["End Time"]) is not None:
+        candidates.append((parse_dt(last["End Time"]), f"the last trial at {site_name(data, site_id)} ended"))
+    wanted = {str(t) for t in trap_ids}
+    if wanted:
+        windows = data["Windows"]
+        closed = windows[windows["Trap ID"].astype(str).isin(wanted) & (windows["End Time"].astype(str).str.strip() != "")]
+        for trap_id, group in closed.groupby(closed["Trap ID"].astype(str)):
+            ends = [t for t in group["End Time"].apply(parse_dt) if t is not None]
+            if ends:
+                candidates.append((max(ends), f"{trap_id}'s last window closed"))
+    return max(candidates, key=lambda c: c[0]) if candidates else (None, "")
+
+
 def plan_set_up(data, site_id, declared_builds, effective_time, assignments) -> dict:
     """Validates a Set up and describes what confirming would do. Writes nothing.
     `assignments` maps each selected trap ID to a declared build label ("" = not chosen).
@@ -1888,6 +1907,9 @@ def plan_set_up(data, site_id, declared_builds, effective_time, assignments) -> 
     not_available = sorted(t for t in assignments if str(t) not in eligible_ids)
     if not_available:
         raise ValueError(f"Not available for this trial: {', '.join(not_available)}. Only Inactive traps of {product} can be brought in.")
+    floor, floor_reason = trial_set_up_floor(data, site_id, assignments.keys())
+    if floor is not None and effective_time < floor:
+        raise ValueError(f"The start can't be earlier than {ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')} ({floor_reason}). Choose that time or later.")
     rows = []
     for trap_id in sorted(assignments):
         tr = trap_row(data, trap_id)
@@ -7184,8 +7206,14 @@ elif page == "trial_start":
                         picks[label] = st.checkbox(r1_short_build(label), value=(label in ts.get("declared", default_labels)), key=f"ts_build_{label}")
                 with st.container(key="pair_ts"):
                     date_col, time_col = st.columns(2)
-                    start_date = date_col.date_input("Effective date", value=ts.get("effective", now()).date(), key="ts_date", format="DD/MM/YYYY")
-                    start_time = time_col.time_input("Effective time", value=ts.get("effective", now().replace(second=0, microsecond=0)).time(), key="ts_time")
+                    # Default: now, to the minute, but never before the previous trial here ended (End -> Start is two guided
+                    # steps, and the End default can sit up to a minute ahead of now). Trap-level limits are checked at Preview.
+                    default_start = now().replace(second=0, microsecond=0)
+                    start_floor, _why = trial_set_up_floor(data, sid)
+                    if start_floor is not None and default_start < start_floor:
+                        default_start = ceil_to_minute(start_floor)
+                    start_date = date_col.date_input("Effective date", value=ts.get("effective", default_start).date(), key="ts_date", format="DD/MM/YYYY")
+                    start_time = time_col.time_input("Effective time", value=ts.get("effective", default_start).time(), key="ts_time")
                 with st.expander("Add a note (optional)", expanded=bool(ts.get("note"))):
                     note = st.text_area("Note", value=ts.get("note", ""), key="ts_note", label_visibility="collapsed")
                 if ts.get("error1"):

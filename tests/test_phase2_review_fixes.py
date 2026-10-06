@@ -184,3 +184,24 @@ def test_ending_a_trial_straight_after_the_last_check_never_ends_the_visit_befor
         assert pd.to_datetime(visit["End Time"]) >= pd.to_datetime(visit["Start Time"]), f"the visit ended before it started: {visit['Start Time']} -> {visit['End Time']}"
         windows = _sheet(data_dir, "Windows"); closed = windows[(windows["Site ID"] == "MAN") & (windows["End Time"] != "")]
         assert (pd.to_datetime(closed["End Time"]) >= pd.to_datetime(closed["Start Time"])).all(), "a window was closed before it opened"
+
+
+# --- Set up after a trial that ended up to a minute ahead of now (the End default is rounded up to clear the last check) ----------
+
+ENDED_AHEAD_SEED = JOURNEY_SEED + """
+    d = app.load_data()
+    ended = app.now() + dt.timedelta(seconds=30)
+    d["Trials"].loc[d["Trials"]["Site ID"] == "MAN", "End Time"] = app.dtstr(ended)
+    app.save_data(d)
+"""
+
+
+def test_set_up_defaults_to_a_start_no_earlier_than_the_previous_trial_ended(page: Page, tmp_path: Path) -> None:
+    from datetime import datetime  # noqa: PLC0415
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, ENDED_AHEAD_SEED) as url:
+        ended = datetime.strptime(str(_sheet(data_dir, "Trials").query("`Site ID` == 'MAN'").iloc[0]["End Time"]), "%Y-%m-%d %H:%M:%S")
+        _open_set_up(page, url)
+        clock = re.search(r"\d{2}:\d{2}", page.locator('[data-testid="stTimeInput"]').first.inner_text()).group(0)
+        start = datetime.strptime(page.locator('[data-testid="stDateInput"] input').first.input_value() + " " + clock, "%d/%m/%Y %H:%M")
+        assert start >= ended, f"Set up proposes {start} but the previous trial ended {ended}"
