@@ -113,6 +113,11 @@ have been fixed. See Medium/Low below for what's left.
 - Every save is a full-workbook rewrite, cost scaling with total historical data —
   fine now, won't scale gracefully over months.
 - Single shared password, no per-operator identity or session timeout.
+- Confirm before starting a second visit the same day. Tapping Start checking at a site that was already checked today starts a
+  new visit at once and saves it (`start_checking_callback` -> `start_visit_now`), with no question asked. On Trap sites that card now
+  shows the button as secondary (7b, 2026-10-07), but a stray tap still writes a second visit. Wanted: a short confirm ("This site was
+  already checked today at 3:41 pm. Start another visit?") before the visit is created. Not built; raised by the owner during the
+  Trap sites review.
 
 ## Low severity — polish
 
