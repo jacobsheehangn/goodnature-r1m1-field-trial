@@ -5765,87 +5765,6 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 }
 </style>
 
-<style>
-/* v8.7.6.4 — one responsive navigation flow */
-.st-key-app_top_navigation {
-  width: 100%;
-}
-
-/* No space before [data-testid] deliberately: stHorizontalBlock is a
-   data-testid on .st-key-app_top_navigation itself, not a descendant of
-   it — the previous descendant-combinator selector here could never match
-   anything (confirmed via devtools: zero matched rules), so this row was
-   silently running on Streamlit's own default 1rem gap the whole time.
-   That extra width was enough to overflow the row at normal desktop
-   widths, forcing Administration onto its own second line — which is what
-   was actually behind the "Administration sits lower" symptom, not a
-   same-row height mismatch between stPageLink and stPopover. */
-.st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
-  width: 100%;
-  flex-wrap: wrap !important;
-  align-items: center !important;
-  column-gap: .4rem !important;
-  row-gap: .42rem !important;
-}
-
-/* [data-testid="stPopoverButton"] here, not "[stPopover] > button": the
-   real button sits behind an extra unnamed wrapper div (stPopover > div >
-   button), so the old "> button" direct-child selector never matched
-   anything either (confirmed via devtools — zero matched rules, same
-   failure mode as the stHorizontalBlock gap selector above). The
-   Administration pill's visible styling up to now came entirely from
-   broader app-wide button rules, not from this nav-specific block, which
-   is why its padding/height never quite matched its siblings. */
-.st-key-app_top_navigation [data-testid="stPageLink"] a,
-.st-key-app_top_navigation [data-testid="stPopoverButton"] {
-  width: auto !important;
-  min-height: 2.55rem !important;
-  padding: .42rem .85rem !important;
-  border: 1px solid #d7d9dd !important;
-  border-radius: 999px !important;
-  background: #ffffff !important;
-  color: #25262d !important;
-  box-shadow: none !important;
-  font-weight: 500 !important;
-  line-height: 1.2 !important;
-  white-space: nowrap !important;
-}
-
-/* Streamlit's react-aria nav-link text sits in a nested span carrying its own
-   hardcoded dark-theme colour, which wins over the <a> rule above through
-   normal inheritance rules regardless of !important. Target it directly. */
-.st-key-app_top_navigation [data-testid="stPageLink"] a *,
-.st-key-app_top_navigation [data-testid="stPopoverButton"] * {
-  color: #25262d !important;
-}
-
-.st-key-app_top_navigation [data-testid="stPageLink"] a:hover,
-.st-key-app_top_navigation [data-testid="stPopoverButton"]:hover {
-  border-color: #b8bcc2 !important;
-  background: #f7f7f5 !important;
-}
-
-.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"],
-.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"] * {
-  background: #f3f3f0 !important;
-  border-color: #b8bcc2 !important;
-  color: #25262d !important;
-  opacity: 1 !important;
-}
-
-@media (max-width: 700px) {
-  .st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
-    column-gap: .32rem !important;
-    row-gap: .38rem !important;
-  }
-
-  .st-key-app_top_navigation [data-testid="stPageLink"] a,
-  .st-key-app_top_navigation [data-testid="stPopoverButton"] {
-    min-height: 2.65rem !important;
-    padding: .43rem .72rem !important;
-  }
-}
-</style>
 
 <style>
 /* Dark-mode leak fix for Streamlit's react-aria-based widgets (popover panel,
@@ -6403,113 +6322,99 @@ NAVIGATION_PAGES = {
 selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
 selected_navigation_page.run()
 
-PRIMARY_SECTION_BY_APP_PAGE = {
-    "sites": "Trap sites",
-    "site": "Trap sites",
-    "start_visit": "Trap sites",
-    "visit": "Trap sites",
-    "check": "Trap sites",
-    "check_confirm": "Trap sites",
-    "trial": "Trap sites",
-    "trial_start": "Trap sites",
-    "trial_adopt": "Trap sites",
-    "trial_end": "Trap sites",
-    "network": "Traps",
-    "trap_detail": "Traps",
-    "followups": "Follow-ups",
-    "results": "Trial performance",
+# Which navigation item an app page belongs to (its "you are here"). Pages not listed show none.
+NAV_KEY_BY_APP_PAGE = {
+    "sites": "sites", "site": "sites", "start_visit": "sites", "visit": "sites", "check": "sites", "check_confirm": "sites",
+    "trial": "sites", "trial_start": "sites", "trial_adopt": "sites", "trial_end": "sites",
+    "followups": "followups", "results": "performance",
+    "network": "traps", "trap_detail": "traps", "setup": "setup", "trap_edit": "setup",
+    "data_management": "records", "windows": "records", "data_quality": "quality",
 }
+NAV_ADMIN_KEYS = ("traps", "setup", "records", "quality")
+# Visit mode has no navigation, only its back pill; the check form and Set up / Track as a trial / End trial are flows.
+NAV_HIDDEN_PAGES = {"visit", "check", "check_confirm", "trial_start", "trial_adopt", "trial_end"}
+current_nav_key = NAV_KEY_BY_APP_PAGE.get(st.session_state.get("page", "sites"), "")
+NAV_PAGE_BY_KEY = {"sites": PAGE_TRAP_SITES, "followups": PAGE_FOLLOWUPS, "performance": PAGE_PERFORMANCE, "traps": PAGE_TRAPS,
+                   "setup": PAGE_TRIAL_SETUP, "records": PAGE_DATA_RECORDS, "quality": PAGE_DATA_QUALITY}
 
-current_primary_section = PRIMARY_SECTION_BY_APP_PAGE.get(
-    st.session_state.get("page", "sites")
-)
 
-# Native Streamlit page links and Administration share one wrapping container.
-# No selection state is stored, so a tap routes immediately.
-with st.container(
-    horizontal=True,
-    horizontal_alignment="left",
-    gap="small",
-    width="stretch",
-    key="app_top_navigation",
-):
-    st.page_link(
-        PAGE_TRAP_SITES,
-        label="Trap sites",
-        disabled=current_primary_section == "Trap sites",
-        width="content",
+def _mirror_operator(source_key: str) -> None:
+    """The Operator box lives in both menus (phone and desktop); whichever is edited sets the one name and the other box."""
+    name = st.session_state.get(source_key, "")
+    st.session_state.field_operator = name
+    for key in ("top_nav_operator_desktop", "top_nav_operator_phone"):
+        st.session_state[key] = name
+
+
+def _sign_out() -> None:
+    clear_workflow_query_params()
+    # The signed access token in the URL is what lets a refresh survive
+    # without re-prompting (see require_authentication) - it must be
+    # cleared here too, or a rerun immediately re-authenticates from the
+    # still-valid URL and Sign out has no effect.
+    st.query_params.pop(AUTH_QUERY_KEY, None)
+    st.session_state.clear()
+
+
+NAV_LABEL_BY_KEY = {"sites": "Trap sites", "followups": "Follow-ups", "performance": "Trial performance", "traps": "Traps",
+                    "setup": "Trial setup", "records": "Data & records", "quality": "Data quality"}
+
+
+def _nav_link(key: str, current: str, width: str = "content") -> None:
+    st.page_link(NAV_PAGE_BY_KEY[key], label=NAV_LABEL_BY_KEY[key], disabled=(key == current), width=width)
+
+
+def _admin_menu_items(current: str, suffix: str) -> None:
+    """Traps, Trial setup, Data & records, Data quality (its count is drawn by CSS from a number already in hand), the
+    Operator name, Sign out."""
+    for key in ("traps", "setup", "records", "quality"):
+        _nav_link(key, current, width="stretch")
+    _operator_box(suffix)
+    st.button("Sign out", key=f"top_nav_sign_out_{suffix}", use_container_width=True, on_click=_sign_out)
+
+
+def _operator_box(suffix: str) -> None:
+    # UX-audit fix (2026-08-13): the only place in the live app that sets the operator name attributed to a visit/check.
+    # Reachable from every page that shows the navigation, same as Sign out.
+    st.text_input("Operator", value=st.session_state.field_operator, key=f"top_nav_operator_{suffix}",
+                  help="Attributed to every visit and check you record until changed.",
+                  on_change=_mirror_operator, args=(f"top_nav_operator_{suffix}",))
+
+
+def draw_top_navigation(current: str) -> None:
+    """The Phase 7 navigation: one row on a phone (Trap sites, Follow-ups with its count, More), four items on desktop.
+    Both layouts are drawn and CSS shows one at 700px. The two counts are numbers the run already has: open follow-ups
+    (exactly what the Follow-ups page lists by default) and the cached Data quality candidates."""
+    open_followups = int((data["Followups"]["Status"] == "Open").sum())
+    st.markdown(
+        design.NAV_APP_CSS + "<style>" + design.count_badge_css("follow-ups", open_followups) + design.count_badge_css("data-quality", data_quality_candidate_count(_data_file_mtime(), data)) + "</style>",
+        unsafe_allow_html=True,
     )
-    st.page_link(
-        PAGE_FOLLOWUPS,
-        label="Follow-ups",
-        disabled=current_primary_section == "Follow-ups",
-        width="content",
-    )
-    st.page_link(
-        PAGE_PERFORMANCE,
-        label="Trial performance",
-        disabled=current_primary_section == "Trial performance",
-        width="content",
-    )
-    # Streamlit doesn't unmount/remount this popover across a rerun triggered
-    # from inside it (its own open/closed state is local, uncontrolled React
-    # state, not tied to session_state) - so a page_link click that navigates
-    # away leaves it sitting open over the new page's content. Keying it to
-    # the current page forces a fresh component identity (and therefore a
-    # fresh, closed popover) on every real navigation, without needing to
-    # track open/closed state ourselves.
-    with st.popover("Administration", key=f"app_top_navigation_admin_popover_{st.session_state.get('page', 'sites')}"):
-        # UX-audit fix (2026-08-13): this was the only place in the live app that
-        # could set the operator name attributed to a visit/check - the sole
-        # <text_input> for it lived in a dead, unreachable page handler, so every
-        # visit was silently attributed to whatever the hardcoded default happened
-        # to be. Reachable from every page via the top nav, same as Sign out below.
-        st.session_state.field_operator = st.text_input(
-            "Operator",
-            value=st.session_state.field_operator,
-            key="top_nav_operator",
-            help="Attributed to every visit and check you record until changed.",
-        )
-        st.divider()
-        st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
-        st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
-        st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
-        data_quality_badge_count = data_quality_candidate_count(_data_file_mtime(), data)
-        if data_quality_badge_count:
-            # The badge's count is baked directly into the CSS content string
-            # rather than styled unconditionally, so the highlighted
-            # background and count pill only ever render when there really
-            # are candidates waiting - nothing to hide/show client-side.
-            st.markdown(
-                f"""<style>
-                [data-testid="stPageLink"]:has(a[href*="data-quality"]) {{
-                    background: #FFF3D9 !important;
-                    border-radius: 8px;
-                }}
-                [data-testid="stPageLink"]:has(a[href*="data-quality"]) a::after {{
-                    content: "{data_quality_badge_count}";
-                    background: #775900;
-                    color: #FFFFFF;
-                    font-size: 10px;
-                    font-weight: 700;
-                    border-radius: 999px;
-                    padding: 1px 6px;
-                    margin-left: 6px;
-                }}
-                </style>""",
-                unsafe_allow_html=True,
-            )
-        st.page_link(PAGE_DATA_QUALITY, label="Data quality", width="stretch")
-        st.divider()
-        if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
-            clear_workflow_query_params()
-            # The signed access token in the URL is what lets a refresh survive
-            # without re-prompting (see require_authentication) - it must be
-            # cleared here too, or a rerun immediately re-authenticates from the
-            # still-valid URL and Sign out has no effect.
-            st.query_params.pop(AUTH_QUERY_KEY, None)
-            st.session_state.clear()
-            st.rerun()
+    page_key = st.session_state.get("page", "sites")
+    with st.container(key="app_nav"):
+        # Desktop (over 700px): Trap sites, Follow-ups, Trial performance, Administration.
+        with st.container(horizontal=True, key="nav_desktop"):
+            for key in ("sites", "followups", "performance"):
+                _nav_link(key, current)
+            with st.container(key="navmore_on_desktop" if current in NAV_ADMIN_KEYS else "navmore_off_desktop"):
+                # Streamlit doesn't unmount/remount a popover across a rerun triggered from inside it (its open state is local,
+                # uncontrolled React state), so a link click that navigates away would leave it open over the new page.
+                # Keying it to the current page forces a fresh, closed popover on every real navigation.
+                with st.popover("Administration", key=f"app_top_navigation_admin_popover_{page_key}"):
+                    _admin_menu_items(current, "desktop")
+        # Phone (700px and under): Trap sites, Follow-ups, More.
+        with st.container(horizontal=True, key="nav_phone"):
+            for key in ("sites", "followups"):
+                _nav_link(key, current)
+            with st.container(key="navmore_on_phone" if (current == "performance" or current in NAV_ADMIN_KEYS) else "navmore_off_phone"):
+                with st.popover("More", key=f"app_top_navigation_more_popover_{page_key}"):
+                    _nav_link("performance", current, width="stretch")
+                    st.markdown('<div class="r1-menu-group">Administration</div>', unsafe_allow_html=True)
+                    _admin_menu_items(current, "phone")
+
+
+if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:
+    draw_top_navigation(current_nav_key)
 
 # Workflow pages retain one explicit escape route while the top navigation
 # remains on the parent Trap sites section. No separate site-name caption
@@ -8150,7 +8055,7 @@ elif page == "followups":
                                 st.session_state.pop("followup_panel",None); st.rerun()
 
 elif page == "windows":
-    if st.button("← Back to Data Management"):
+    if st.button("← Back to Data & records"):
         go("data_management")
     header("Trial periods", "Review active and completed trial periods.")
     controls_left, action_right = st.columns([4, 1], vertical_alignment="bottom")
@@ -8229,7 +8134,7 @@ elif page == "data_quality":
     elif reviewing_id:
         candidate = next(c for c in candidates if c["Check ID"] == reviewing_id)
         position = next(i for i, c in enumerate(candidates) if c["Check ID"] == reviewing_id) + 1
-        if st.button("← Back to list", key="data_quality_back"):
+        if st.button("← Back to Data quality", key="data_quality_back"):
             st.session_state.pop("data_quality_review", None)
             st.rerun()
         st.caption(f"Reviewing candidate {position} of {len(candidates)}")

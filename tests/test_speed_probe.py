@@ -160,7 +160,10 @@ def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: Prob
     open_sites(page, probe_off)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
     expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
-    page.get_by_role("link", name="Follow-ups", exact=True).click()
+    # Visit mode has no top navigation (Phase 7): the way out of the trap list is its own back pill.
+    page.get_by_role("button", name="Pause and return to Trap sites").click()
+    expect(page.get_by_text("Choose the trap site you are visiting today.", exact=True)).to_be_visible(timeout=30_000)
+    page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
     page.wait_for_timeout(1_000)
 
@@ -210,7 +213,7 @@ def test_probe_median_tracks_up_to_ten_samples(page: Page, probe_on: ProbeApp) -
         # A sample is recorded per tap once that tap's page has settled, so
         # leave a human-scale gap between taps (a tap landing before the
         # previous caption loaded is, by design, folded into the same sample).
-        page.get_by_role("link", name="Follow-ups", exact=True).click()
+        page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
         expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1_500)
         page.get_by_role("link", name="Trap sites", exact=True).click()
@@ -280,6 +283,8 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
 @pytest.mark.parametrize("link", ["Follow-ups", "Trial performance"])
 def test_caption_is_visible_on_the_other_top_level_pages(page: Page, probe_on: ProbeApp, link: str) -> None:
     open_sites(page, probe_on, {"width": 390, "height": 844})
-    page.get_by_role("link", name=link, exact=True).click()
+    if link == "Trial performance":
+        page.get_by_role("button", name="More", exact=True).click()  # on a phone it lives in the More menu
+    page.get_by_role("link", name=re.compile(rf"^{re.escape(link)}( \d+)?$")).click()
     expect(page.get_by_text(link, exact=True).last).to_be_visible(timeout=30_000)
     expect_caption_really_visible(page)

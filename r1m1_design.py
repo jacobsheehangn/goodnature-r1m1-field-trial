@@ -347,7 +347,11 @@ body [data-testid="stPopoverBody"] div.stButton button{justify-content:flex-star
 body [data-testid="stPopoverBody"] div.stButton button>div{width:100%;justify-content:flex-start}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a p,body [data-testid="stPopoverBody"] div.stButton button p{font-size:16px;line-height:22px;font-weight:400;color:var(--ink)}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a:is([aria-disabled="true"],[disabled]) p{font-weight:700}
-.r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+/* the Operator name sits in the menu like any other row: same side padding, a 44px field */
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:10px 20px 12px;border-bottom:1px solid var(--ink-05)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"] label p{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"] input{min-height:44px;font-size:16px}
 """
 
 
@@ -477,12 +481,16 @@ def _component_css_only() -> str:
     return FONT_FACE_CSS + TOKENS_CSS + scope_css(TYPE_CSS + COMPONENT_CSS, SCREEN_SCOPE, important=True)
 
 
+# The navigation is on nearly every page, including the existing ones, so it carries what it needs itself: the font, the tokens
+# and its own rules, forced above the legacy sheet (which restyles links and buttons with !important). One static string, built once.
+NAV_APP_CSS = "<style>" + FONT_FACE_CSS + TOKENS_CSS + scope_css(NAV_CSS, ".stApp", important=True) + "</style>"
+
 # One static string, built once at import (no per-run work).
 SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 
 # The journey screens that follow the Set up / End trial pattern show no top navigation, and read as a
 # single column (a form is not stretched across a desktop).
-HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation{display:none!important}</style>"
+HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
 
 
