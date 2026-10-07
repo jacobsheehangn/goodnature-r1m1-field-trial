@@ -5,9 +5,11 @@ from time import perf_counter as _probe_perf_counter
 _PROBE_T0 = _probe_perf_counter()
 
 import bisect
+import filecmp
 import functools
 import uuid
 import hashlib
+import json
 import hmac
 import logging
 import os
@@ -846,6 +848,142 @@ def storage_is_potentially_ephemeral() -> bool:
 DATA_LOADED_MTIME_KEY = "_data_loaded_mtime"
 
 
+# Pinned backups. The automatic backups rotate: every save keeps one and only the newest 20 survive, so on a working day the workbook as
+# it was before a new version first wrote to it is gone within hours. A pin is a byte-for-byte copy of the live file, taken immediately
+# before the first save that writes a layout (the sheets and their columns) the file does not have. It is never overwritten once it
+# exists, and it is keyed by the layout being written, so each version that adds a sheet or columns gets its own pin. Its name does not
+# start with the workbook's name, so the rotation (which globs that prefix) never sees it; available_backups() lists it so the in-app
+# restore can use it. Making it is failure-isolated: nothing here can stop a save.
+PINNED_BACKUP_PREFIX = "pinned_"
+_LAYOUT_VERIFIED: Optional[tuple] = None  # (layout key, mtime_ns, size) of a file this process knows is in the layout it writes
+
+
+def schema_layout() -> Dict[str, tuple]:
+    """The sheets and columns this version of the app writes."""
+    return {name: tuple(cols) for name, cols in SHEETS.items()}
+
+
+def layout_key(layout: Dict[str, tuple]) -> str:
+    return hashlib.sha1(json.dumps([[name, list(cols)] for name, cols in sorted(layout.items())]).encode("utf-8")).hexdigest()[:10]
+
+
+def workbook_layout_of(path: Path) -> Dict[str, tuple]:
+    """The sheets and header rows of a workbook on disk (headers only: read-only, about 12 ms)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        layout = {}
+        for ws in wb.worksheets:
+            header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            cols = ["" if value is None else str(value) for value in header]
+            while cols and cols[-1] == "":
+                cols.pop()
+            layout[ws.title] = tuple(cols)
+        return layout
+    finally:
+        wb.close()
+
+
+def describe_layout_change(old: Dict[str, tuple], new: Dict[str, tuple]) -> str:
+    """What writing `new` over a file laid out as `old` adds and drops, in words."""
+    parts = []
+    added_sheets = [n for n in new if n not in old]
+    dropped_sheets = [n for n in old if n not in new]
+    added_cols = [f"{n}.{c}" for n in new if n in old for c in new[n] if c not in old[n]]
+    dropped_cols = [f"{n}.{c}" for n in new if n in old for c in old[n] if c not in new[n]]
+    for verb, items in (("adds sheet", added_sheets), ("adds column", added_cols), ("drops sheet", dropped_sheets), ("drops column", dropped_cols)):
+        if items:
+            parts.append(f"{verb} " + ", ".join(items[:4]) + (f" and {len(items) - 4} more" if len(items) > 4 else ""))
+    return "; ".join(parts) or "reorders columns"
+
+
+def pinned_backup_path(key: str) -> Path:
+    return BACKUP_DIR / f"{PINNED_BACKUP_PREFIX}{DATA_FILE.stem}_before_layout_{key}.xlsx"
+
+
+def _write_pin(source: Path, final: Path, note: dict) -> bool:
+    """Copy `source` to `final` byte for byte, atomically, and never replace a file that is already there. True when `final` now exists."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    temp = BACKUP_DIR / f".pin_{uuid.uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temp)
+        if not filecmp.cmp(source, temp, shallow=False):
+            raise OSError("the pinned copy does not match the file it was copied from")
+        try:
+            os.link(temp, final)  # fails if `final` exists, so an existing pin is never replaced
+        except FileExistsError:
+            return True
+        except OSError:  # a file system without hard links: the same rule, in two steps
+            if final.exists():
+                return True
+            os.replace(temp, final)
+        try:
+            note = {**note, "sha256": hashlib.sha256(final.read_bytes()).hexdigest(), "bytes": final.stat().st_size}
+            final.with_suffix(".json").write_text(json.dumps(note, indent=1), encoding="utf-8")
+        except Exception:
+            _logger.exception("Pinned backup %s was made but its description could not be written.", final.name)
+        return True
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def pin_backup_before_layout_change() -> Optional[dict]:
+    """Called by save_data immediately before it replaces the workbook. Never raises.
+
+    Returns None when nothing needs pinning or the pin was made; returns what is still owed (`final`, `note`) when a pin was needed
+    but could not be made, so save_data can try once more from the automatic backup it takes in the same save."""
+    try:
+        target = schema_layout()
+        key = layout_key(target)
+        final = pinned_backup_path(key)
+        if final.exists():
+            return None
+        stat = DATA_FILE.stat()
+        if _LAYOUT_VERIFIED == (key, stat.st_mtime_ns, stat.st_size):
+            return None  # this process wrote the file in this layout
+        current = workbook_layout_of(DATA_FILE)
+        if current == target:
+            return None
+        note = {"pinned_at": dtstr(), "change": describe_layout_change(current, target), "layout": key, "left_layout": layout_key(current)}
+        try:
+            if _write_pin(DATA_FILE, final, note):
+                return None
+        except Exception:
+            _logger.exception("Could not pin a backup before the workbook layout changed (%s); trying again from the automatic backup.", note["change"])
+        return {"final": final, "note": note}
+    except Exception:
+        _logger.exception("Could not work out whether the workbook layout is changing; the save goes ahead without a pin.")
+        return None
+
+
+def finish_pin_from_backup(owed: dict, backup_file: Path) -> None:
+    """The second chance: the automatic backup taken in the same save is the same bytes as the live file was. Never raises."""
+    try:
+        _write_pin(backup_file, owed["final"], owed["note"])
+    except Exception:
+        _logger.exception("Could not pin a backup before the workbook layout changed (%s). The automatic backup %s holds the old file until it rotates out.",
+                          owed["note"].get("change", ""), backup_file.name)
+
+
+def pinned_backups() -> list:
+    ensure_storage_ready()
+    return sorted(BACKUP_DIR.glob(f"{PINNED_BACKUP_PREFIX}{DATA_FILE.stem}_*.xlsx"), key=lambda path: path.stat().st_mtime)
+
+
+def backup_label(path: Path) -> str:
+    """How the in-app restore names a backup: a pin says what it was kept for."""
+    path = Path(path)
+    if not path.name.startswith(PINNED_BACKUP_PREFIX):
+        return path.name
+    note = {}
+    try:
+        note = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    kept_for = f"just before the first save that {note['change']} ({note.get('pinned_at', '')})" if note.get("change") else "just before a layout change"
+    return f"PINNED, never rotated out: the workbook {kept_for} · {path.name}"
+
+
 def save_data(data: Dict[str, pd.DataFrame]) -> None:
     """Atomically replace the workbook and retain a timestamped recovery copy.
 
@@ -882,10 +1020,20 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
                     if c not in df.columns:
                         df[c] = ""
                 df[cols].to_excel(writer, sheet_name=name, index=False)
+        pin_owed = None
         if DATA_FILE.exists():
+            pin_owed = pin_backup_before_layout_change()
             backup_file = BACKUP_DIR / f"{DATA_FILE.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:6]}.xlsx"
             shutil.copy2(DATA_FILE, backup_file)
         os.replace(temp_file, DATA_FILE)
+        if pin_owed is not None and backup_file is not None:
+            finish_pin_from_backup(pin_owed, backup_file)
+        try:
+            global _LAYOUT_VERIFIED
+            _stat = DATA_FILE.stat()
+            _LAYOUT_VERIFIED = (layout_key(schema_layout()), _stat.st_mtime_ns, _stat.st_size)
+        except Exception:
+            _LAYOUT_VERIFIED = None
         backups = sorted(BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
         for old_backup in backups[20:]:
             old_backup.unlink(missing_ok=True)
@@ -3242,7 +3390,8 @@ def workbook_summary(path: Path) -> Dict[str, int]:
 
 def available_backups():
     ensure_storage_ready()
-    return sorted(
+    # Pinned backups first (they are the ones that must stay available), then the rotating ones, newest first.
+    return pinned_backups() + sorted(
         BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
@@ -9929,7 +10078,7 @@ elif page == "data_management":
                     selected_backup = st.selectbox(
                         "Backup",
                         backup_options,
-                        format_func=lambda value: f"{Path(value).name} · {workbook_summary(Path(value))}",
+                        format_func=lambda value: f"{backup_label(Path(value))} · {workbook_summary(Path(value))}",
                         key="emergency_recovery_backup",
                     )
                     confirm_restore = st.checkbox(
