@@ -250,12 +250,9 @@ COMPONENT_CSS = f"""
   content:"Choose a build";display:block;color:var(--orange-ink);font-weight:700;font-size:14px;line-height:20px;margin-top:6px}}
 /* A build row on Set up step 1: a white card holding the checkbox. */
 [class*="st-key-card_build"]{{padding:14px 15px}}
-/* A site card on Trap sites: one primary button and a text button under it, both the width of the card (the Main board). */
+/* A site card on Trap sites: a button and a text button under it. On a phone both are the width of the card (the Main board);
+   on desktop they keep their natural width, like every other 7a screen (see the 700px block below). */
 .stApp [class*="st-key-card_site_"]{{gap:8px}}
-.stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(button[kind="primary"]),
-.stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(button[kind="tertiary"]),
-.stApp [class*="st-key-card_site_"] div.stButton:has(button[kind="primary"]),.stApp [class*="st-key-card_site_"] div.stButton:has(button[kind="tertiary"]){{width:100%}}
-.stApp [class*="st-key-card_site_"] button[kind="primary"],.stApp [class*="st-key-card_site_"] button[kind="tertiary"]{{width:100%;justify-content:center}}
 .stApp [class*="st-key-card_site_"] .r1-msg{{margin:2px 0 4px}}
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
@@ -266,6 +263,10 @@ COMPONENT_CSS = f"""
   .stApp [data-testid="stElementContainer"]:has(button[kind="primaryFormSubmit"]) > div{{width:100%}}
   .stApp div.stButton:has(button[kind="primary"]),.stApp div.stFormSubmitButton:has(button[kind="primaryFormSubmit"]){{width:100%}}
   .stApp div.stButton button[kind="primary"],.stApp div.stFormSubmitButton button[kind="primaryFormSubmit"]{{width:100%}}
+  /* A Trap sites card: its button (primary, or the secondary of a site checked today) and its text button, full width, centred. */
+  .stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])),
+  .stApp [class*="st-key-card_site_"] div.stButton:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])){{width:100%}}
+  .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
   .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
 }}

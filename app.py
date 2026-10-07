@@ -6483,8 +6483,9 @@ if page == "sites":
                             on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": c["active"]["Visit ID"]},
                         )
                     else:
+                        # A site already checked today still offers a new visit, but not as the page's loudest button: secondary.
                         st.button(
-                            "Start checking", key=f"open_{sid}", type="primary",
+                            "Start checking", key=f"open_{sid}", type="secondary" if c["status_class"] == "done" else "primary",
                             on_click=start_checking_callback, args=(sid,),
                         )
                     if c["site_trial"] is not None:

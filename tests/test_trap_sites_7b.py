@@ -12,7 +12,7 @@ from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
 from journey_seed import END_SEED  # noqa: E402
-from test_trial_model_ui import _serve  # noqa: E402
+from test_trial_model_ui import _serve, _sheet  # noqa: E402
 from test_trial_screens import _home  # noqa: E402
 
 PHONE, DESKTOP = {"width": 414, "height": 896}, {"width": 1280, "height": 900}
@@ -40,6 +40,14 @@ NOTHING_DUE = END_SEED + """
     d["Visits"] = pd.concat([d["Visits"], pd.DataFrame(rows, columns=app.SHEETS["Visits"])], ignore_index=True)
     app.save_data(d)
 """
+# MAN has a trial and its visit finished a minute ago (Checked today, tracked); KAI is untracked and never visited (Due today); WAI has no active traps.
+CHECKED_TODAY_TRACKED = END_SEED + """
+    d = app.load_data()
+    d["Visits"].loc[d["Visits"]["Visit ID"] == "VIS-WALK-1", ["Status", "End Time"]] = ["Complete", app.dtstr(app.now() - dt.timedelta(minutes=1))]
+    for t in d["Traps"][(d["Traps"]["Site ID"] == "WAI") & (d["Traps"]["Status"] == "Active")]["Trap ID"]:
+        app.deactivate_trap(d, t, app.now() - dt.timedelta(days=30), "stage", commit=False)
+    app.save_data(d)
+"""
 NO_SITES = END_SEED + """
     d = app.load_data()
     d["Sites"]["Status"] = "Inactive"
@@ -61,8 +69,14 @@ CARD = """(k) => {
 TITLE_STAT = """() => { const t = document.querySelector('.st-key-r1_screen .r1-titlerow'); const v = t.querySelector('.r1-stat'); const l = t.querySelector('.r1-stat-label');
   return {stat: v ? v.innerText : null, label: l ? l.innerText : null}; }"""
 BUTTONS = """(k) => { const c = document.querySelector('.st-key-card_site_' + k); const inner = c.querySelector('.r1-titlerow').getBoundingClientRect();
-  const size = (b) => { const r = b.getBoundingClientRect(); return {text: b.innerText.trim(), width: Math.round(r.width), height: Math.round(r.height)}; };
-  return {inner: Math.round(inner.width), primary: [...c.querySelectorAll('button[kind="primary"]')].map(size), tertiary: [...c.querySelectorAll('button[kind="tertiary"]')].map(size)}; }"""
+  const token = (name) => { const d = document.createElement('div'); d.style.background = getComputedStyle(c).getPropertyValue(name).trim();
+    document.body.appendChild(d); const col = getComputedStyle(d).backgroundColor; d.remove(); return col; };
+  const size = (b) => { const r = b.getBoundingClientRect(); const p = b.querySelector('p');
+    return {text: b.innerText.trim(), width: Math.round(r.width), height: Math.round(r.height), left: Math.round(r.left - inner.left),
+            background: getComputedStyle(b).backgroundColor, ink: p ? getComputedStyle(p).color : null}; };
+  const of = (kind) => [...c.querySelectorAll('button[kind="' + kind + '"]')].map(size);
+  return {inner: Math.round(inner.width), primary: of('primary'), secondary: of('secondary'), tertiary: of('tertiary'),
+          tokens: {orange: token('--orange'), ink05: token('--ink-05'), orangeInk: token('--orange-ink')}}; }"""
 
 
 def _open(page: Page, url: str) -> None:
@@ -140,20 +154,44 @@ def test_a_title_and_an_empty_list_when_no_site_is_active(page: Page, tmp_path: 
 
 # --- the buttons -----------------------------------------------------------------------------------------------------------
 
-def test_each_card_has_one_primary_button_that_fills_the_card_and_every_button_is_tappable(page: Page, tmp_path: Path) -> None:
+def test_the_card_buttons_fill_the_card_on_a_phone_and_keep_their_natural_width_on_desktop(page: Page, tmp_path: Path) -> None:
     data_dir = tmp_path / "d"; data_dir.mkdir()
-    with _serve(data_dir, MIXED) as url:
+    with _serve(data_dir, DONE_TODAY) as url:
         for viewport in (PHONE, DESKTOP):
             page.set_viewport_size(viewport)
             _open(page, url)
-            expected = {"MAN": ("Resume checking", ["Trial overview"]), "KAI": ("Start checking", ["Track as a trial"]), "WAI": ("Start trial", [])}
-            for site_id, (primary, tertiary) in expected.items():
+            for site_id in ("MAN", "KAI", "WAI"):
                 b = page.evaluate(BUTTONS, site_id)
+                every = b["primary"] + b["secondary"] + b["tertiary"]
                 where = f"{site_id} at {viewport['width']}: {b}"
-                assert [p["text"] for p in b["primary"]] == [primary], where
-                assert [t["text"] for t in b["tertiary"]] == tertiary, where
-                assert abs(b["primary"][0]["width"] - b["inner"]) <= 2, f"the primary button fills the card. {where}"
-                assert all(x["height"] >= 44 for x in b["primary"] + b["tertiary"]), f"nothing tapped is under 44px. {where}"
+                assert len(b["primary"]) + len(b["secondary"]) == 1 and len(b["tertiary"]) == 1, f"a button and a text button. {where}"
+                assert all(x["height"] >= 44 for x in every), f"nothing tapped is under 44px. {where}"
+                if viewport["width"] <= 700:
+                    assert all(abs(x["width"] - b["inner"]) <= 2 for x in every), f"on a phone every button fills the card. {where}"
+                else:
+                    assert all(x["width"] < b["inner"] / 2 for x in every), f"on desktop a button keeps its natural width. {where}"
+                    assert all(abs(x["left"]) <= 2 for x in every), f"and sits at the card's left edge. {where}"
+
+
+def test_a_site_checked_today_offers_start_checking_as_a_secondary_button_and_nothing_else_changed(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size(PHONE)
+    with _serve(data_dir, CHECKED_TODAY_TRACKED) as url:
+        _open(page, url)
+        man, kai, wai = (page.evaluate(BUTTONS, s) for s in ("MAN", "KAI", "WAI"))
+        t = man["tokens"]
+        # Checked today (a trial is running): no primary at all; Start checking is the grey, orange-ink secondary; Trial overview below
+        assert man["primary"] == [] and [x["text"] for x in man["secondary"]] == ["Start checking"] and [x["text"] for x in man["tertiary"]] == ["Trial overview"], man
+        assert man["secondary"][0]["background"] == t["ink05"] and man["secondary"][0]["ink"] == t["orangeInk"], man["secondary"]
+        # every other state is as it was: an orange primary
+        assert [x["text"] for x in kai["primary"]] == ["Start checking"] and kai["secondary"] == [] and kai["primary"][0]["background"] == t["orange"], kai
+        assert [x["text"] for x in wai["primary"]] == ["Start trial"] and wai["secondary"] == [] and wai["tertiary"] == [], wai
+        # it still does what it did: it starts a new visit and opens the trap list
+        visits_before = _sheet(data_dir, "Visits"); assert (visits_before["Site ID"] == "MAN").sum() == 1
+        page.locator(".st-key-card_site_MAN").get_by_role("button", name="Start checking", exact=True).click()
+        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        visits = _sheet(data_dir, "Visits"); mine = visits[visits["Site ID"] == "MAN"]
+        assert len(mine) == 2 and (mine["Status"] == "In progress").sum() == 1
 
 
 def test_the_card_buttons_still_go_where_they_went(page: Page, tmp_path: Path) -> None:
