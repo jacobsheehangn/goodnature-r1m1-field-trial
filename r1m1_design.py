@@ -536,3 +536,46 @@ def message_html(kind: str, title: str, detail: str = "") -> str:
     body = f'<div class="d">{detail}</div>' if detail else ""
     heading = f'<div class="t">{title}</div>' if title else ""
     return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div>{heading}{body}</div></div>'
+
+# ---------------------------------------------------------------- Visit complete (Phase 7b, 6 of 8) -----
+# The summary shown once, in place of the old one-line "site check completed" message, on the page Finish site check lands on. Its rules are
+# rooted at .r1-vc (not at the screen container) because it is drawn above whichever page that is; it uses only the :root tokens.
+VISIT_COMPLETE_CSS = """<style>
+.r1-vc{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:560px;margin:8px auto 24px;text-align:center;color:var(--ink)}
+.r1-vc-badge{width:92px;height:92px;border-radius:50%;background:var(--green-10);display:flex;align-items:center;justify-content:center;margin-top:4px}
+.r1-vc-badge span{width:64px;height:64px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center}
+.r1-vc-title{font-size:34px;line-height:40px;font-weight:700}
+.r1-vc-site{font-size:17px;line-height:22px;color:var(--ink-70);margin-top:-6px}
+.r1-vc-stats{width:100%;box-sizing:border-box;display:flex;justify-content:space-around;gap:12px;background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:18px 12px;margin-top:4px}
+.r1-vc-stats b{display:block;font-size:30px;line-height:36px;font-weight:700}
+.r1-vc-stats span{display:block;font-size:14px;line-height:20px;color:var(--ink-70)}
+.r1-vc-needs{width:100%;text-align:left}
+.r1-vc-needs h3{font-size:17px;line-height:22px;font-weight:700;margin:8px 0 8px;padding:0}
+.r1-vc-list{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:4px 16px}
+.r1-vc-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}
+.r1-vc-row:last-child{border-bottom:0}
+.r1-vc-row .tile{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--ink-05);display:flex;align-items:center;justify-content:center}
+.r1-vc-row .t{font-size:17px;line-height:22px;font-weight:700}
+.r1-vc-row .d{font-size:14px;line-height:20px;color:var(--ink-70)}
+.r1-vc-next{font-size:15px;line-height:20px;color:var(--ink-70)}
+</style>"""
+
+
+def visit_complete_html(site: str, stats, needs, next_due: str = "") -> str:
+    """The Visit complete summary: a green check, the title and site, a card of numbers, what needs doing next, when the next visit is due.
+    `stats` is [(value, label)]; `needs` is [(icon name, title, caption)]; every string is already escaped by the caller."""
+    stat_html = "".join(f"<div><b>{value}</b><span>{label}</span></div>" for value, label in stats)
+    needs_html = ""
+    if needs:
+        rows = "".join(
+            f'<div class="r1-vc-row"><div class="tile">{icon(name, 22)}</div><div><div class="t">{title}</div><div class="d">{caption}</div></div></div>'
+            for name, title, caption in needs
+        )
+        needs_html = f'<div class="r1-vc-needs"><h3>Needs doing next</h3><div class="r1-vc-list">{rows}</div></div>'
+    next_html = f'<div class="r1-vc-next">Next visit due {next_due}.</div>' if next_due else ""
+    return (
+        f'<div class="r1-vc" role="status">'
+        f'<div class="r1-vc-badge"><span>{icon("check", 36)}</span></div>'
+        f'<div class="r1-vc-title" role="heading" aria-level="1">Visit complete</div><div class="r1-vc-site">{site}</div>'
+        f'<div class="r1-vc-stats">{stat_html}</div>{needs_html}{next_html}</div>'
+    )

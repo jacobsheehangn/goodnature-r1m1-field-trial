@@ -4507,14 +4507,53 @@ def helper(message: str):
     st.markdown(f'<p class="helper-text">{message}</p>', unsafe_allow_html=True)
 
 
-def set_flash(kind: str, title: str, lines=None):
-    st.session_state.flash_message = {"kind": kind, "title": title, "lines": lines or []}
+def set_flash(kind: str, title: str, lines=None, **extra):
+    st.session_state.flash_message = {"kind": kind, "title": title, "lines": lines or [], **extra}
 
 
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
-        message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+        summary = flash.get("visit_complete")
+        if summary:
+            st.markdown(design.VISIT_COMPLETE_CSS, unsafe_allow_html=True)  # its own block: Streamlit hides a markdown block that holds a <style>
+            st.markdown(design.visit_complete_html(summary["site"], summary["stats"], summary["needs"], summary["next_due"]), unsafe_allow_html=True)
+        else:
+            message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+
+
+def visit_complete_summary(data, sid: str, vid: str) -> dict:
+    """What the Visit complete summary says, worked out from the frames this run already holds (nothing is read from disk): how many traps
+    were checked, how many had a kill, how long the visit took, what is still to do because of it, and when the next visit is due."""
+    checks = data["Checks"][data["Checks"]["Visit ID"] == vid]
+    kills = checks[checks["Finding"] == "Dead animal found"]["Trap ID"].astype(str).nunique()
+    stats = [(str(checks["Trap ID"].astype(str).nunique()), "Traps checked"), (str(kills), "Kill" if kills == 1 else "Kills")]
+    visit = data["Visits"][data["Visits"]["Visit ID"] == vid]
+    if not visit.empty:
+        start, end = parse_dt(visit.iloc[0]["Start Time"]), parse_dt(visit.iloc[0]["End Time"])
+        minutes = int(round((end - start).total_seconds() / 60)) if start and end else 0
+        # A visit paused and finished the next day is not time on site, so the figure is only shown for a visit of an ordinary length.
+        if 1 <= minutes <= 12 * 60:
+            stats.append((f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60} min", "On site"))
+    tasks = data["Followups"][(data["Followups"]["Visit ID"] == vid) & (data["Followups"]["Status"] == "Open")]
+    task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
+    needs = []
+    for task_type, rows in sorted(tasks.groupby("Follow-up Type"), key=lambda g: ({"Necropsy review": 0, "Camera review": 1}.get(g[0], 2), g[0])):
+        first, n = rows.iloc[0], len(rows)
+        trap = html.escape(str(first["Trap ID"]))
+        if task_type == "Necropsy review":
+            bag = str(first["Bag ID"]).strip()
+            caption = f"{n} traps" if n > 1 else (f"{trap} · Bag {html.escape(bag)}" if bag else trap)
+        elif task_type == "Camera review":
+            caption = (f"{n} traps" if n > 1 else trap) + " · footage not yet reviewed"
+        else:
+            reason = str(first["Reason"]).strip().lower()
+            caption = f"{n} traps" if n > 1 else (f"{trap} · {html.escape(reason)}" if reason else trap)
+        needs.append((task_icon.get(task_type, "warn-circle"), html.escape(task_type), caption))
+    site = data["Sites"][data["Sites"]["Site ID"] == sid]
+    interval = int(float(site.iloc[0]["Visit Interval Days"] or 3)) if not site.empty else 3
+    due = now() + timedelta(days=interval)
+    return {"site": html.escape(site_name(data, sid)), "stats": stats, "needs": needs, "next_due": f"{due:%a} {due.day} {due:%b}"}
 
 
 # ---- Trial journey screens (Phase 2): shared helpers ------------------------------------
@@ -6757,7 +6796,13 @@ elif page == "visit":
             data["Visits"].at[idx, "End Time"] = dtstr()
             data["Visits"].at[idx, "Status"] = "Complete"
             save_data(data)
-            set_flash("success", f"{site_name(data, sid)} site check completed", [f"All {total_traps} traps were checked."])
+            # Phase 7b (6/8): the confirmation is the Visit complete summary. If working it out ever failed, the plain message still shows.
+            try:
+                summary = visit_complete_summary(data, sid, vid)
+            except Exception:
+                _logger.exception("Could not work out the Visit complete summary; showing the plain message.")
+                summary = None
+            set_flash("success", f"{site_name(data, sid)} site check completed", [] if summary else [f"All {total_traps} traps were checked."], visit_complete=summary)
             st.session_state.completed_site_id = sid
             # At a tracked site the finished visit lands on the trial hub; an untracked site behaves as before.
             if open_trial(data, sid) is not None:

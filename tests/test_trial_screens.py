@@ -332,7 +332,7 @@ def test_finish_site_check_lands_on_the_hub_at_a_tracked_site(page: Page, tmp_pa
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert page.get_by_role("button", name="Finish site check", exact=True).is_enabled()
         page.get_by_role("button", name="Finish site check", exact=True).click()
-        expect(page.get_by_text("site check completed", exact=False)).to_be_visible(timeout=30_000)
+        expect(page.get_by_text("Visit complete", exact=True)).to_be_visible(timeout=30_000)  # Phase 7b: the summary replaced the one-line message
         expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=20_000)
         visit = _sheet(data_dir, "Visits").set_index("Visit ID").loc["VIS-WALK-1"]
         assert visit["Status"] == "Complete"
