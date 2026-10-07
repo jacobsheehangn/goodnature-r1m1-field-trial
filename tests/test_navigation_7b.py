@@ -114,6 +114,53 @@ def test_the_count_is_right_on_the_screen_you_land_on_after_completing_a_task(pa
         assert not (followups["Status"] == "Open").any(), "the task really is complete"
 
 
+def _open_count_is(page: Page, n: int) -> None:
+    """The Follow-ups pill reads "Follow-ups N" exactly: one run behind would read N+1."""
+    expect(page.get_by_role("link", name=re.compile(rf"^Follow-ups {n}$"))).to_be_visible(timeout=15_000)
+    assert page.get_by_role("link", name=re.compile(rf"^Follow-ups {n + 1}$")).count() == 0, f"the count is one run behind (still {n + 1})"
+
+
+def test_the_count_is_right_after_a_camera_review_is_saved_from_the_follow_ups_list(page: Page, tmp_path: Path) -> None:
+    """The second completion path: END_SEED has four open tasks, so a count one run behind would read 4, not 3."""
+    from test_necropsy_species import _open_task  # noqa: PLC0415
+    from test_trial_screens import _choose  # noqa: PLC0415
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size(DESKTOP)
+    with _serve(data_dir, END_SEED) as url:
+        _open_task(page, url, "Camera review")
+        _open_count_is(page, 4)
+        page.wait_for_timeout(1_500)
+        _choose(page, "Camera evidence usable", "No")
+        page.get_by_role("button", name="Save camera review").click()
+        expect(page.get_by_text("Camera review saved", exact=True)).to_be_visible(timeout=60_000)
+        _open_count_is(page, 3)
+        followups = _sheet(data_dir, "Followups")
+        assert (followups["Status"] == "Open").sum() == 3 and followups[followups["Follow-up Type"] == "Camera review"].iloc[0]["Status"] == "Complete"
+
+
+def test_the_count_is_right_after_a_camera_resolution_is_saved_from_the_follow_ups_list(page: Page, tmp_path: Path) -> None:
+    """The third completion path (a hardware task), which also ends on the Follow-ups list."""
+    from test_button_loading_feedback_tier2 import _click_until_busy_or_done  # noqa: PLC0415
+    from test_necropsy_species import _open_task  # noqa: PLC0415
+    from test_trial_screens import _choose  # noqa: PLC0415
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size(DESKTOP)
+    with _serve(data_dir, END_SEED) as url:
+        _open_task(page, url, "Camera issue")
+        _open_count_is(page, 4)
+        page.wait_for_timeout(1_500)
+        _choose(page, "Camera outcome", "Fixed and now working")
+        _choose(page, "Camera now ready and covering the trap", "Yes")
+        _choose(page, "Past test-window evidence", "Still usable")
+        page.get_by_label("Resolution notes").fill("Battery replaced and the angle checked.")
+        page.wait_for_timeout(1_500)
+        _click_until_busy_or_done(page, page.get_by_role("button", name="Save camera resolution"), "Saving…", "Camera resolution saved")
+        expect(page.get_by_text("Camera resolution saved", exact=True)).to_be_visible(timeout=60_000)
+        _open_count_is(page, 3)
+        followups = _sheet(data_dir, "Followups")
+        assert (followups["Status"] == "Open").sum() == 3 and followups[followups["Follow-up Type"] == "Camera issue"].iloc[0]["Status"] == "Complete"
+
+
 # --- the current state ---------------------------------------------------------------------------------------------------
 
 def test_the_current_page_is_shown_and_the_menu_pill_takes_the_state_when_a_page_inside_it_is_current(page: Page, tmp_path: Path) -> None:
