@@ -7,6 +7,8 @@ with no trial, and a real check save that must stamp the open trial - and must
 still save when the trial lookup fails."""
 from __future__ import annotations
 
+import re
+
 import contextlib
 import json
 import os
@@ -198,13 +200,13 @@ def _save_a_routine_check(page: Page, url: str) -> None:
     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Start checking").first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).nth(2).click()  # a trap with no camera
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
     page.get_by_role("radio", name="Trap still set, no animal").check(force=True)
     page.get_by_role("radio", name="Yes").first.check(force=True)
     page.get_by_role("button", name="Save check").click()
-    expect(page.get_by_text("✓ Just saved", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text(re.compile(r"^Just saved \d"))).to_be_visible(timeout=30_000)
 
 
 def _restarted_window_for_the_check(data_dir: Path) -> tuple[pd.Series, pd.Series]:

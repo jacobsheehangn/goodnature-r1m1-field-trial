@@ -189,7 +189,7 @@ def test_a_site_checked_today_offers_start_checking_as_a_secondary_button_and_no
         # it still does what it did: it starts a new visit and opens the trap list
         visits_before = _sheet(data_dir, "Visits"); assert (visits_before["Site ID"] == "MAN").sum() == 1
         page.locator(".st-key-card_site_MAN").get_by_role("button", name="Start checking", exact=True).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         visits = _sheet(data_dir, "Visits"); mine = visits[visits["Site ID"] == "MAN"]
         assert len(mine) == 2 and (mine["Status"] == "In progress").sum() == 1
 
@@ -200,13 +200,13 @@ def test_the_card_buttons_still_go_where_they_went(page: Page, tmp_path: Path) -
     with _serve(data_dir, MIXED) as url:
         _open(page, url)
         page.locator(".st-key-card_site_MAN").get_by_role("button", name="Resume checking", exact=True).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         _open(page, url)
         page.locator(".st-key-card_site_MAN").get_by_role("button", name="Trial overview", exact=True).click()
         expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=30_000)
         _open(page, url)
         page.locator(".st-key-card_site_KAI").get_by_role("button", name="Start checking", exact=True).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         _open(page, url)
         page.locator(".st-key-card_site_KAI").get_by_role("button", name="Track as a trial", exact=True).click()
         # (this seed's Kaitoke runs two products, so the screen is the single-product refusal: the destination is the same page)

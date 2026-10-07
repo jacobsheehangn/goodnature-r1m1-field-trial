@@ -100,13 +100,13 @@ def test_draft_restores_via_a_plain_reopen_not_just_the_resume_dialog(
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
-    # The visit page's own H1 is the site name (header(site_name(...), ...))
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
+    # The visit page's own level-1 heading is the site name
     # - capture it so context2 can target the *same* site by name below,
     # rather than relying on ".first", which isn't guaranteed to pick the
     # same card in a second, independent session (site list ordering can
     # differ run to run).
-    site_name_text = page.locator("h1").first.inner_text()
+    site_name_text = page.get_by_role("heading", level=1).first.inner_text()
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 
@@ -140,7 +140,7 @@ def test_draft_restores_via_a_plain_reopen_not_just_the_resume_dialog(
         # (Streamlit nests several per card, breaking a has-text() filter).
         heading = page2.get_by_text(site_name_text, exact=True)
         heading.locator("xpath=following::button[1]").click()
-        expect(page2.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page2.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         page2.get_by_role("button", name="Check", exact=True).first.click()
         expect(page2.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 

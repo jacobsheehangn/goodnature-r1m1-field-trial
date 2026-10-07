@@ -211,7 +211,7 @@ def test_track_as_a_trial_previews_then_tags_exactly_what_it_showed(page: Page, 
 def _to_end_trial_from_the_visit(page: Page, url: str) -> None:
     _home(page, url)
     _card(page, "Mangaroa Farm").get_by_role("button", name="Resume checking", exact=True).click()
-    expect(page.get_by_text("Site check actions", exact=True)).to_be_visible(timeout=20_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
     page.get_by_role("button", name=re.compile("Finish visit and end trial")).click()
     expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=20_000)
 
@@ -329,7 +329,7 @@ def test_finish_site_check_lands_on_the_hub_at_a_tracked_site(page: Page, tmp_pa
     with _serve(data_dir, ALL_CHECKED_SEED) as url:
         _home(page, url)
         _card(page, "Mangaroa Farm").get_by_role("button", name="Resume checking", exact=True).click()
-        expect(page.get_by_text("Site check actions", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert page.get_by_role("button", name="Finish site check", exact=True).is_enabled()
         page.get_by_role("button", name="Finish site check", exact=True).click()
         expect(page.get_by_text("site check completed", exact=False)).to_be_visible(timeout=30_000)
@@ -343,10 +343,10 @@ def test_the_visit_page_offers_finish_visit_and_end_trial_only_with_a_check_at_a
     with _serve(data_dir, END_SEED) as url:
         _home(page, url)
         _card(page, "Mangaroa Farm").get_by_role("button", name="Resume checking", exact=True).click()
-        expect(page.get_by_text("Site check actions", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert page.get_by_role("button", name="Finish site check", exact=True).is_disabled(), "ordinary visits keep the all-traps rule"
         expect(page.get_by_role("button", name=re.compile("Finish visit and end trial"))).to_be_visible()
-        expect(page.get_by_role("button", name="Pause and return to Trap sites")).to_be_visible()
+        expect(page.get_by_role("button", name="Exit to Trap sites")).to_be_visible()
 
 
 # --- first viewport (field standard 8) -------------------------------------------------------------------
@@ -363,7 +363,7 @@ def test_the_required_actions_are_in_the_first_viewport(page: Page, tmp_path: Pa
             box = page.get_by_role("button", name=button, exact=True).bounding_box()
             assert box and 0 <= box["y"] and box["y"] + box["height"] <= viewport["height"], f"hub: {button} must be on the first screen"
         page.get_by_role("button", name="Resume checking", exact=True).click()
-        expect(page.get_by_text("Site check actions", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         page.get_by_role("button", name=re.compile("Finish visit and end trial")).click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=20_000)
         decide = page.get_by_role("button", name="Decide").first.bounding_box()

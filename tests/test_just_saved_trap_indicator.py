@@ -14,8 +14,8 @@ just done.
 
 The fix adds a second, persistent signal: the just-saved trap's own card
 (session_state["last_saved_trap_{visit_id}"], never popped - only replaced
-by the next save) renders "✓ Just saved" with a bolder border instead of the
-plain "✓ Checked" every other completed card gets, for as long as it stays
+by the next save) renders "Just saved 8:20 pm" on a green row instead of the
+plain "Checked 9:00 am" every other completed row gets (Phase 7b: the time and what was found are in the same line), for as long as it stays
 the most recent one - independent of scroll position, reruns, or whether the
 one-shot flash was ever seen.
 """
@@ -133,7 +133,7 @@ def test_just_saved_trap_gets_a_distinct_persistent_indicator(
     page.goto(local_app_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     first_trap = _do_a_simple_check(page, 0)
     expect(page.get_by_text("Just saved", exact=False)).to_be_visible(timeout=10_000)
@@ -164,5 +164,5 @@ def test_just_saved_trap_gets_a_distinct_persistent_indicator(
 
     just_saved_texts = page.get_by_text("Just saved", exact=False)
     expect(just_saved_texts).to_have_count(1, timeout=10_000)
-    checked_texts = page.get_by_text("✓ Checked", exact=True)
+    checked_texts = page.get_by_text(re.compile(r"^Checked \d"))
     expect(checked_texts).to_have_count(1, timeout=10_000)

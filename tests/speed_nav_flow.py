@@ -17,7 +17,6 @@ from playwright.sync_api import Page, expect, sync_playwright
 sys.path.insert(0, str(Path(__file__).parent))
 from test_speed_probe import ProbeApp, start_app, stop_app  # noqa: E402
 
-SELECTOR_TEXT = "Select the trap you are standing at."
 
 
 def _settle(page: Page) -> None:
@@ -39,7 +38,7 @@ TRAP_SITES_HEADING = "Trap sites"
 def _landing(page: Page):
     return (
         page.get_by_text("Resume checking?", exact=True)
-        .or_(page.get_by_text(SELECTOR_TEXT, exact=True))
+        .or_(page.get_by_role("button", name="Finish site check"))
         .or_(page.get_by_role("heading", name=TRAP_SITES_HEADING, exact=True))
         .or_(page.get_by_text("What did you find?", exact=True))
         .first
@@ -51,7 +50,7 @@ def _where_landed(page: Page) -> str:
         return "resume_prompt"
     if page.get_by_text("What did you find?", exact=True).count():
         return "check_form"
-    if page.get_by_text(SELECTOR_TEXT, exact=True).count():
+    if page.get_by_role("button", name="Finish site check").count():
         return "visit_page"
     return "trap_sites"
 
@@ -62,7 +61,7 @@ def run_flow(page: Page, app: ProbeApp) -> dict:
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     _settle(page)
 
-    selector = page.get_by_text(SELECTOR_TEXT, exact=True)
+    selector = page.get_by_role("button", name="Finish site check")
     check_form = page.get_by_text("What did you find?", exact=True)
     check_buttons = page.get_by_role("button", name="Check", exact=True)
 
@@ -96,7 +95,7 @@ def run_flow(page: Page, app: ProbeApp) -> dict:
         _settle(page)
 
     _tap(page, app, steps, "pause",
-         lambda: page.get_by_role("button", name="Pause and return to Trap sites", exact=True).click(),
+         lambda: page.get_by_role("button", name="Exit to Trap sites", exact=False).click(),
          page.get_by_role("button", name=re.compile(r"^Resume checking$", re.I)).first)
 
     _tap(page, app, steps, "resume_checking",

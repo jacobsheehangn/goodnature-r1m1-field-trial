@@ -159,9 +159,9 @@ def expect_caption_really_visible(page: Page) -> None:
 def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: ProbeApp) -> None:
     open_sites(page, probe_off)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     # Visit mode has no top navigation (Phase 7): the way out of the trap list is its own back pill.
-    page.get_by_role("button", name="Pause and return to Trap sites").click()
+    page.get_by_role("button", name="Exit to Trap sites").click()
     expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
     page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
@@ -184,7 +184,7 @@ def test_probe_on_logs_each_run_and_shows_the_caption(page: Page, probe_on: Prob
     expect_caption_really_visible(page)
 
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     expect(caption_locator(page)).to_have_text(CAPTION, timeout=15_000)
     expect_caption_really_visible(page)
     # A tap happened, so tap->render must now be a real number, not the
@@ -228,7 +228,7 @@ def test_a_failing_probe_leaves_pages_and_saves_working(page: Page, probe_on_but
     app = probe_on_but_broken
     open_sites(page, app)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 
@@ -268,7 +268,7 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
             open_sites(page, app)
             snapshots = {"sites": _normalised_body(page)}
             page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-            expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+            expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
             snapshots["visit"] = _normalised_body(page)
             page.get_by_role("button", name="Check", exact=True).first.click()
             expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)

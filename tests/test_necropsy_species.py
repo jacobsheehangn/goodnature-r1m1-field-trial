@@ -228,7 +228,7 @@ def test_the_check_forms_uploader_keeps_its_original_sizing(page: Page, tmp_path
     with _serve(data_dir, _SEED_TRIALS_EVERYWHERE) as url:
         _home(page, url)
         page.get_by_role("button", name="Start checking").first.click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         page.get_by_role("button", name="Check", exact=True).nth(2).click()
         expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
         page.get_by_role("radio", name="Dead animal found").check(force=True)

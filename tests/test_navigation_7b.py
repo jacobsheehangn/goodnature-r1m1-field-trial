@@ -197,19 +197,19 @@ def test_visit_mode_and_the_flows_have_no_navigation_and_every_other_page_has_it
         expect(page.get_by_text("Evidence waiting", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 1, "the trial hub"
         page.get_by_role("button", name="Resume checking", exact=True).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert nav() == 0, "the trap list (visit mode)"
         page.get_by_role("button", name="Check", exact=True).first.click()
         expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 0, "the check form"
         page.get_by_role("button", name=re.compile("Back to trap")).first.click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         page.get_by_role("button", name=re.compile("Finish visit and end trial")).click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 0, "End trial"
         page.get_by_role("button", name=re.compile("Back to visit")).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=20_000)
-        page.get_by_role("button", name="Pause and return to Trap sites").click()
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Exit to Trap sites").click()
         expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=20_000)
         page.get_by_role("link", name=FOLLOWUPS).click()
         expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=20_000)

@@ -4402,57 +4402,51 @@ def render_compact_card_content(
     )
 
 
-def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_saved: bool = False) -> None:
-    """Compact field card with one checked-state indicator."""
-    trap_id = str(tr["Trap ID"])
-    build_prefix = f"{tr['Product']} Build "
-    build_raw = str(tr["Build Version"] or "—")
-    build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
-    product_build = f"Build: {build_text}"
-    location = trap_location_label(tr)
-    route = str(tr["Route Order"] or "—")
+def visit_time_label(value) -> str:
+    """"2026-10-05 08:55:00" -> "8:55 am" (the check's own time, as the operator reads a clock)."""
+    stamp = parse_dt(value)
+    if stamp is None:
+        return ""
+    return f"{stamp.hour % 12 or 12}:{stamp.minute:02d} {'am' if stamp.hour < 12 else 'pm'}"
 
+
+def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_saved: bool = False, *, is_next: bool = False, is_last: bool = False, show_build: bool = False, check=None) -> None:
+    """One row of the trap list (Phase 7b): a trap still to check (its ID, and its build only when the list compares builds, a Check
+    button that is orange on the next trap and grey on the rest) or a trap already checked (a tile, its ID, when and what was found)."""
+    trap_id = str(tr["Trap ID"])
     if checked:
-        # Field report fix (2026-08-17): "didn't get a success status after
-        # successful trap check", "have to scroll up... just looking at
-        # cards already completed" - the top-of-page flash is a true
-        # one-shot (popped the instant it's shown), so any rerun before the
-        # operator actually looks at the screen loses it for good, and
-        # every checked card looked identical anyway, so even scrolling up
-        # didn't say *which* one was just done. just_saved (set once per
-        # save, keyed to this visit, read fresh every render - not popped)
-        # makes the just-completed card visibly distinct regardless of
-        # scroll position, reruns, or a reconnect in between.
-        status_label = "✓ Just saved" if just_saved else "✓ Checked"
+        # Field report fix (2026-08-17): the top-of-page flash is a true one-shot, so the trap just saved stays visibly distinct on the
+        # list itself (just_saved is set once per save, keyed to this visit, and read fresh on every render).
+        finding = str(check["Finding"]).strip() if check is not None else ""
+        species = str(check["Species"]).strip() if check is not None else ""
+        kill = finding == "Dead animal found"
+        tile = design.icon(species.lower() if kill and species.lower() in design.ICONS else "check", 22)
+        when = visit_time_label(check["Check Time"]) if check is not None else ""
+        detail = " · ".join(part for part in (f"{'Just saved' if just_saved else 'Checked'} {when}".strip(), finding, species if kill else "") if part)
         st.markdown(
-            f'<div class="visit-trap-card is-checked{" is-just-saved" if just_saved else ""}">'
-            '<div class="visit-trap-copy">'
-            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><strong class="visit-trap-status">{status_label}</strong></div>'
-            f'<div class="visit-trap-line"><span>{html.escape(location)}</span><span class="visit-trap-meta">{html.escape(product_build)}</span></div>'
-            '</div>'
+            f'<div class="r1-donerow visit-trap-card is-checked{" is-just-saved" if just_saved else ""}{" is-last" if is_last else ""}">'
+            f'<div class="r1-donebox">{tile}</div>'
+            f'<div><div class="r1-row-title">{html.escape(trap_id)}</div><div class="r1-meta">{html.escape(detail)}</div></div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
 
-    with app_card():
-        render_compact_card_content(
-            title=trap_id,
-            right_label=location,
-            main_line=product_build,
-            meta_line=f"Route {route} · Not checked",
+    build_prefix = f"{tr['Product']} Build "
+    build_raw = str(tr["Build Version"] or "").strip()
+    build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
+    location = trap_location_label(tr)
+    generic = bool(re.fullmatch(r"Trap \d+|No location recorded", location))
+    caption = " · ".join(part for part in (f"Build {build_text}" if show_build and build_text else "", "" if generic else location) if part)
+    with st.container(key=f"listrow_{'next_' if is_next else ''}{'end_' if is_last else ''}visit_{visit_id}_{trap_id}"):
+        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+        text_col.markdown(
+            f'<div class="r1-row-title">{html.escape(trap_id)}</div>' + (f'<div class="r1-meta">{html.escape(caption)}</div>' if caption else ""),
+            unsafe_allow_html=True,
         )
-        # Field report fix (2026-08-17): "tapping check and nothing happens,
-        # need loader state there within button too" - a plain button here
-        # gave zero feedback between tap and the page actually changing, on
-        # a field connection where that round trip is far from instant.
-        # Speed brief Part B: this used to be a two-phase button (arm run,
-        # 0.3 s dwell, then go() and a second render - three script runs per
-        # tap). Opening a trap is pure navigation, so it now changes page in
-        # an on_click callback and the check page renders in one run; the
-        # destination appearing is the feedback.
-        st.button(
-            "Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True,
+        # Opening a trap is pure navigation: it changes page in an on_click callback so the check page renders in one run.
+        button_col.button(
+            "Check", key=f"visit_check_{visit_id}_{trap_id}", type="primary" if is_next else "secondary",
             on_click=set_page, args=("check",),
             kwargs={"site_id": site_id, "visit_id": visit_id, "trap_id": trap_id},
         )
@@ -5473,47 +5467,6 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
 }
 
 
-/* v8.7.4 — stable field completion components */
-.visit-trap-card {
-  display: grid;
-  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 1.7fr) 3.25rem;
-  align-items: center;
-  gap: 1rem;
-  min-height: 7.1rem;
-  margin: 0 0 1rem 0;
-  padding: 1rem 1.1rem;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05);
-  background: #ffffff;
-  box-sizing: border-box;
-}
-.visit-trap-card.is-checked {
-  background: #eef8f1;
-  border-color: #b9ddc5;
-}
-/* Field report fix (2026-08-17): the just-saved trap's own card gets a
-   bolder border on top of the normal "checked" green, on top of its own
-   distinct "Just saved" label - two independent signals (colour weight and
-   text) since it needs to be unmistakable even to a quick glance, not just
-   findable if you already know to look for it. !important + the doubled
-   class selector: a later, more specific .is-checked !important rule
-   further down this stylesheet would otherwise win on source order alone. */
-.visit-trap-card.is-checked.is-just-saved {
-  border-color: #22683d !important;
-  border-width: 2px !important;
-  box-shadow: 0 0 0 1px #22683d, 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
-}
-.visit-trap-meta { color: var(--muted); margin-top: .35rem; }
-.visit-trap-status { color: #22683d; font-weight: 700; margin-top: .35rem; }
-@media (max-width: 700px) {
-  .visit-trap-card {
-    grid-template-columns: minmax(7.5rem, 1fr) minmax(8rem, 1.35fr) 2.5rem;
-    min-height: 6.4rem;
-    gap: .7rem;
-    padding: .9rem;
-  }
-}
 /* v8.7.3 — force one complete light visual system */
 html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"],
 [data-testid="stMain"], [data-testid="stHeader"], [data-testid="stSidebar"],
@@ -5628,15 +5581,9 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 .shared-card-label { color:var(--text); font-size:.88rem; text-align:right; }
 
 /* Field cards use the same neutral base and identical geometry between states. */
-.visit-trap-card,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
   background:var(--card-bg) !important;
 }
-.visit-trap-card.is-checked {
-  background:var(--card-success-bg) !important;
-  border-color:var(--card-success-border) !important;
-}
-.visit-trap-card { padding:15px !important; margin-bottom:.7rem !important; min-height:0 !important; }
 
 /* Compact action spacing inside all shared cards. */
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
@@ -5650,8 +5597,7 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 
 @media (max-width:700px) {
   [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div,
-  .visit-trap-card { padding:15px !important; }
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
   .shared-card-heading { gap:.5rem; }
   .shared-card-main { font-size:.9rem; }
   .shared-card-meta, .shared-card-label { font-size:.82rem; }
@@ -5697,12 +5643,6 @@ input, textarea, select, button,
    Applies on desktop and mobile; never targets generic header buttons. *//* Hide only the two native sidebar-control SVGs. *//* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. *//* Open drawer: left-pointing close chevron. *//* Maintain visible controls without hover-dependent colour changes. */
 
 /* Compact field cards. */
-.visit-trap-card { min-height:0 !important; padding:15px !important; display:block !important; margin-bottom:.7rem !important; }
-.visit-trap-copy { display:grid; gap:.35rem; width:100%; }
-.visit-trap-line { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
-.visit-trap-meta { color:#737780; font-size:.9rem; }
-.visit-trap-status { color:#22683d; white-space:nowrap; }
-.visit-trap-card.is-checked { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) { margin-bottom:.7rem !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
@@ -5715,8 +5655,8 @@ input, textarea, select, button,
 
 @media (max-width:700px) {
   h1 { font-size:2.35rem !important; line-height:1.05 !important; }
-  .visit-trap-line, .site-card-heading { gap:.55rem; }
-  .visit-trap-meta, .site-card-meta { font-size:.82rem; }
+  .site-card-heading { gap:.55rem; }
+  .site-card-meta { font-size:.82rem; }
   [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom:.75rem !important; }
 }/* v8.7.5.3 — controlled single-chevron fix.
    Draw exactly one icon on the actual button only. Container and nested pseudo-elements
@@ -6550,7 +6490,7 @@ if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:
 # here any more (trap-journey-scroll brief) — every workflow page's own H1
 # already carries that context, so a line above this button was showing the
 # same name twice.
-if st.session_state.page in WORKFLOW_PAGES:
+if st.session_state.page in WORKFLOW_PAGES and st.session_state.page != "visit":
     st.button("← Exit to Trap sites", key="exit_workflow_to_sites", on_click=set_page, args=("sites",))
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
@@ -6702,28 +6642,22 @@ elif page == "visit":
             go("sites")
         st.stop()
 
-    traps = data["Traps"][
+    site_traps = data["Traps"][
         (data["Traps"]["Site ID"] == sid)
         & (data["Traps"]["Status"] == "Active")
     ].copy()
+    traps = site_traps.copy()
     checks = data["Checks"][data["Checks"]["Visit ID"] == vid]
     done = set(checks["Trap ID"].astype(str))
+    latest_check = {str(row["Trap ID"]): row for _, row in checks.sort_values("Check Time").iterrows()}
+    # Build is shown on a trap row only when the list compares builds.
+    show_build = site_traps[["Product", "Build Version"]].drop_duplicates().shape[0] > 1
 
-    header(site_name(data, sid), "Select the trap you are standing at.")
     saved = st.session_state.pop("saved_check", None)
-    if saved:
-        photo_count = int(saved.get("photo_count", 0))
-        details = [f"{photo_count} photo{'s' if photo_count != 1 else ''} stored"] if photo_count else []
-        message_panel("success", f"{saved['trap_id']} saved", details)
 
-    # Trap-journey-scroll brief: someone standing at one physical trap is not
-    # usually filtering or searching, so both fields live behind one toggle,
-    # default closed. Read prior widget state directly from session_state
-    # rather than only from the (possibly unrendered) widgets themselves —
-    # Streamlit keeps a widget's value in session_state after it stops being
-    # drawn, so an active filter still applies to the list even while its
-    # controls are hidden, and the toggle label surfaces what's active so it
-    # isn't silently discarded from view.
+    # Trap-journey-scroll brief: someone standing at one physical trap is not usually filtering or searching, so both fields live behind
+    # one toggle, default closed. Prior widget state is read straight from session_state: an active filter still applies to the list
+    # while its controls are hidden, and the toggle label says what is active.
     product_filter_key = f"visit_product_filter_{vid}"
     search_key = f"visit_trap_search_{vid}"
     prior_product_filter = st.session_state.get(product_filter_key, "All")
@@ -6739,81 +6673,85 @@ elif page == "visit":
             active_bits.append(f'"{prior_search_text}"')
         toggle_label += " · " + " · ".join(active_bits)
 
-    # Keyed by vid, not persisted anywhere else, so a new visit always starts
-    # closed — no remembered state across visits or page loads.
-    filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
-    if filter_expanded:
-        filter_col, search_col = st.columns([1, 1.6])
-        product_filter = filter_col.radio(
-            "Trap type",
-            ["All", "R1", "M1"],
-            horizontal=True,
-            key=product_filter_key,
-        )
-        search_text = search_col.text_input(
-            "Find trap",
-            placeholder="Trap ID or location",
-            key=search_key,
-        ).strip().lower()
-    else:
-        product_filter = prior_product_filter
-        search_text = prior_search_text.lower()
-
-    if product_filter != "All":
-        traps = traps[traps["Product"] == product_filter]
-    if search_text:
-        traps = traps[
-            traps.apply(
-                lambda row: search_text in str(row["Trap ID"]).lower()
-                or search_text in trap_location_label(row).lower(),
-                axis=1,
-            )
-        ]
-
-    traps["_checked"] = traps["Trap ID"].astype(str).isin(done)
-    traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
-    traps = traps.sort_values(["_checked", "Product", "_route", "Trap ID"])
-
-    total_traps = len(data['Traps'][(data['Traps']['Site ID']==sid) & (data['Traps']['Status']=='Active')])
+    total_traps = len(site_traps)
     checked_count = len(done)
     progress_value = min(1.0, checked_count / total_traps) if total_traps else 0.0
-    st.progress(progress_value, text=f"{checked_count} of {total_traps} traps checked")
     all_checked = total_traps > 0 and checked_count >= total_traps
-    if all_checked:
-        message_panel("success", f"All {total_traps} traps checked", ["Finish the site check to record completion."])
-    if traps.empty:
-        helper("No traps match this filter.")
-    else:
-        last_saved_trap_id = st.session_state.get(f"last_saved_trap_{vid}")
-        for _, tr in traps.iterrows():
-            trap_id = str(tr["Trap ID"])
-            checked = trap_id in done
-            render_visit_trap_card(tr, checked, vid, sid, just_saved=(trap_id == last_saved_trap_id))
 
-    # Trap-journey-scroll brief: this is the card-system brief's Phase 2
-    # schedule line, relocated to the bottom of the trap list rather than
-    # between the H1 and the cards where it previously sat — read-only
-    # reference for someone already inside a visit, not something that
-    # needs to compete with the cards for the first-viewport scroll budget.
-    site_row_for_schedule = data["Sites"][data["Sites"]["Site ID"] == sid]
-    if not site_row_for_schedule.empty:
-        schedule_interval = int(float(site_row_for_schedule.iloc[0]["Visit Interval Days"] or 3))
-        schedule_last = latest_completed_visit(data, sid)
-        schedule_last_dt = parse_dt(schedule_last["End Time"]) if schedule_last is not None else None
-        schedule_next_dt = schedule_last_dt + timedelta(days=schedule_interval) if schedule_last_dt else now()
-        st.caption(
-            f"Last {schedule_last_dt.strftime('%d %b %Y') if schedule_last_dt else 'not completed'} · "
-            f"Next {'due now' if schedule_next_dt.date() <= now().date() else schedule_next_dt.strftime('%d %b %Y')}"
+    # Phase 7b (3/8): visit mode is one narrow column with no top navigation, only the back pill. Nothing here reads a new sheet.
+    r1_screen_css(hide_nav=True)
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Exit to Trap sites", "sites", "exit_visit")
+        r1_title(site_name(data, sid), stat_value=f"{checked_count} of {total_traps}", stat_label="Checked")
+        st.markdown(
+            f'<div class="r1-bar" role="progressbar" aria-label="Traps checked" aria-valuemin="0" aria-valuemax="{total_traps}" aria-valuenow="{checked_count}">'
+            f'<span style="width:{progress_value * 100:.0f}%"></span></div>',
+            unsafe_allow_html=True,
         )
+        if saved:
+            photo_count = int(saved.get("photo_count", 0))
+            row = latest_check.get(str(saved["trap_id"]))
+            finding = str(row["Finding"]).strip() if row is not None else ""
+            species = str(row["Species"]).strip() if row is not None and finding == "Dead animal found" else ""
+            detail = " · ".join(part for part in (finding, species, f"{photo_count} photo{'s' if photo_count != 1 else ''} stored" if photo_count else "") if part)
+            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", html.escape(detail)), unsafe_allow_html=True)
 
-    st.markdown("### Site check actions")
-    with st.container(border=True):
+        # Keyed by vid, not persisted anywhere else, so a new visit always starts closed.
+        filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
+        if filter_expanded:
+            filter_col, search_col = st.columns([1, 1.6])
+            product_filter = filter_col.radio(
+                "Trap type",
+                ["All", "R1", "M1"],
+                horizontal=True,
+                key=product_filter_key,
+            )
+            search_text = search_col.text_input(
+                "Find trap",
+                placeholder="Trap ID or location",
+                key=search_key,
+            ).strip().lower()
+        else:
+            product_filter = prior_product_filter
+            search_text = prior_search_text.lower()
+
+        if product_filter != "All":
+            traps = traps[traps["Product"] == product_filter]
+        if search_text:
+            traps = traps[
+                traps.apply(
+                    lambda row: search_text in str(row["Trap ID"]).lower()
+                    or search_text in trap_location_label(row).lower(),
+                    axis=1,
+                )
+            ]
+
+        traps["_checked"] = traps["Trap ID"].astype(str).isin(done)
+        traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
+        to_check = traps[~traps["_checked"]].sort_values(["Product", "_route", "Trap ID"])
+        # Checked traps, the one just saved and then the most recent first.
+        last_saved_trap_id = st.session_state.get(f"last_saved_trap_{vid}")
+        checked_rows = traps[traps["_checked"]].copy()
+        checked_rows["_when"] = checked_rows["Trap ID"].astype(str).map(lambda t: str(latest_check[t]["Check Time"]) if t in latest_check else "")
+        checked_rows = checked_rows.sort_values("_when", ascending=False)
+
+        if traps.empty:
+            st.markdown('<div class="r1-meta">No traps match this filter.</div>', unsafe_allow_html=True)
+        if not to_check.empty:
+            with st.container(key="cardlist_visit_tocheck"):
+                for position, (_, tr) in enumerate(to_check.iterrows()):
+                    render_visit_trap_card(tr, False, vid, sid, is_next=(position == 0), is_last=(position == len(to_check) - 1), show_build=show_build)
+        if not checked_rows.empty:
+            st.markdown('<div class="r1-label">Checked</div>', unsafe_allow_html=True)
+            with st.container(key="cardlist_visit_checked"):
+                for position, (_, tr) in enumerate(checked_rows.iterrows()):
+                    trap_id = str(tr["Trap ID"])
+                    render_visit_trap_card(tr, True, vid, sid, just_saved=(trap_id == last_saved_trap_id), is_last=(position == len(checked_rows) - 1), check=latest_check.get(trap_id))
+
         if st.button(
             "Finish site check",
             type="primary",
-            use_container_width=True,
             disabled=not all_checked,
-            help="Check every active trap before completing the site visit." if not all_checked else None,
         ):
             idx = data["Visits"].index[data["Visits"]["Visit ID"] == vid][0]
             data["Visits"].at[idx, "End Time"] = dtstr()
@@ -6825,20 +6763,19 @@ elif page == "visit":
             if open_trial(data, sid) is not None:
                 go("trial", site_id=sid)
             go("sites")
+        if not all_checked:
+            remaining = max(total_traps - checked_count, 0)
+            st.markdown(f'<div class="r1-meta">{r1_count(remaining, "trap")} still to check.</div>', unsafe_allow_html=True)
         if checked_count >= 1 and open_trial(data, sid) is not None:
             st.button(
-                "Finish visit and end trial…", key=f"finish_visit_end_trial_{vid}", use_container_width=True,
+                "Finish visit and end trial…", key=f"finish_visit_end_trial_{vid}", type="tertiary",
                 on_click=begin_trial_end, args=(sid, vid),
             )
-        st.button("Pause and return to Trap sites", use_container_width=True, on_click=set_page, args=("sites",))
         if checked_count == 0:
-            # Only offered while nothing has been recorded under this visit
-            # yet — the moment a single trap is checked, there's real field
-            # data attached to it and this option disappears entirely, so
-            # it can never be used to discard actual work. No separate
-            # confirm step: at 0 checks there's nothing to lose, and the
-            # worst case of a stray tap is just re-tapping "Start checking".
-            if st.button("Cancel check", key=f"cancel_visit_{vid}", use_container_width=True):
+            # Only offered while nothing has been recorded under this visit yet: the moment a single trap is checked, there is real field
+            # data attached to it and this option disappears, so it can never discard actual work. No confirm step: at 0 checks there is
+            # nothing to lose, and the worst case of a stray tap is re-tapping "Start checking".
+            if st.button("Cancel check", key=f"cancel_visit_{vid}", type="tertiary"):
                 audit_change(data, "Visit", vid, "Status", "In progress", "Cancelled (no traps checked)", "Cancelled from Site check actions")
                 data["Visits"] = data["Visits"][data["Visits"]["Visit ID"] != vid]
                 save_data(data)

@@ -290,6 +290,14 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-listrow_next"]{{background:var(--orange-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow{{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
 .r1-donebox{{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--green-10);color:var(--green);display:flex;align-items:center;justify-content:center}}
+.stApp [class*="st-key-listrow_"][class*="end_visit_"],.r1-donerow.is-last{{border-bottom:0}}
+/* The trap list's filter toggle is a rarely used extra, so it reads as quiet text, not as a heading. */
+.stApp [class*="st-key-visit_filter_expanded_"] label p{{font-size:15px;line-height:20px;font-weight:400;color:var(--ink-70)}}
+.r1-donerow.is-just-saved{{background:var(--green-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
+.r1-donerow.is-just-saved .r1-donebox{{background:#fff}}
+/* A progress bar: a thin ink-05 track with an orange fill. */
+.r1-bar{{height:8px;border-radius:4px;background:var(--ink-05);overflow:hidden;margin:4px 0 12px}}
+.r1-bar span{{display:block;height:100%;background:var(--orange);border-radius:4px}}
 
 /* ---- Message panel: radius 14, padding 14; warn / error / success / info ---- */
 .r1-msg{{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}}
