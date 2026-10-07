@@ -7954,47 +7954,64 @@ elif page == "trap_detail":
 
 elif page == "followups":
     selected_followup_id=st.session_state.get("followup_panel")
-    if not selected_followup_id:
-        header("Follow-ups", "Complete tasks created during trap checks.")
     fu=data["Followups"][data["Followups"]["Status"]=="Open"].copy()
 
     if not selected_followup_id:
-        filter_left,action_right=st.columns([4,1],vertical_alignment="bottom")
-        with filter_left:
-            filter_site,filter_priority=st.columns(2)
-            followup_site=filter_site.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x),key="followup_site_filter")
-            followup_priority=filter_priority.selectbox("Priority",["All priorities","High","Normal","Low"],key="followup_priority_filter")
+        # Phase 7b (7/8): a title with the open count, two visible filters (short lists are never dropdowns) and the tasks as list rows.
+        # The filters keep their keys (the trial hub sets followup_site_filter before it opens this page); nothing new is read from a sheet.
+        r1_screen_css()
+        site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
+        priority_options = ["All priorities", "High", "Normal", "Low"]
+        if st.session_state.get("followup_site_filter") not in site_options:
+            st.session_state["followup_site_filter"] = "All sites"
+        if st.session_state.get("followup_priority_filter") not in priority_options:
+            st.session_state["followup_priority_filter"] = "All priorities"
+        followup_site = st.session_state["followup_site_filter"]
+        followup_priority = st.session_state["followup_priority_filter"]
+        total_open = len(fu)
         if followup_site!="All sites": fu=fu[fu["Site ID"]==followup_site]
         if followup_priority!="All priorities": fu=fu[fu["Priority"]==followup_priority]
         if not fu.empty:
             fu=fu.assign(_priority_order=pd.Categorical(fu["Priority"],categories=["High","Normal","Low"],ordered=True)).sort_values(["_priority_order","Created Time"])
-            if action_right.button("Review next task",type="primary",key="review_next_followup"):
-                st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
-        if fu.empty:
-            message_panel("success","All follow-up work is complete.",["There is nothing waiting for review."])
-        else:
-            st.caption("Review a task directly from its row.")
-            for _,item_row in fu.iterrows():
-                row_fid=item_row["Follow-up ID"]
-                with app_card():
-                    bag_text = f"Bag: {item_row['Bag ID']} · " if str(item_row.get("Bag ID", "")).strip() else ""
-                    reason_text = item_row["Reason"] or "—"
-                    # Priority is shown plainly, same as before — an explicit decision,
-                    # not the unresolved default: this card doesn't give High any
-                    # extra visual weight (no colour, no icon), since that's a separate
-                    # design decision this release isn't making. If that changes later,
-                    # it should be a deliberate follow-up, not a silent addition here.
-                    st.markdown(
-                        '<div class="shared-card-copy">'
-                        f'<div class="shared-card-heading"><strong>{html.escape(str(item_row["Trap ID"]))}</strong>{status_pill(str(item_row["Follow-up Type"]), "neutral")}</div>'
-                        f'<div class="shared-card-meta">{html.escape(site_name(data,item_row["Site ID"]))} · {html.escape(str(item_row["Priority"]))}</div>'
-                        f'<div class="shared-card-meta">{html.escape(bag_text)}Reason: {html.escape(str(reason_text))}</div>'
-                        f'<div class="shared-card-meta">Created: {html.escape(human_dt(item_row["Created Time"]))}</div>'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("Review",key=f"followup_review_{row_fid}",use_container_width=True):
-                        st.session_state.followup_panel=row_fid; st.rerun()
+        with st.container(key=design.SCREEN_KEY):
+            r1_title("Follow-ups", stat_value=len(fu), stat_label="Open")
+            with st.container(key="chips_followup_site"):
+                st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
+            with st.container(key="seg_followup_priority"):
+                st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
+            if fu.empty:
+                if total_open:
+                    st.markdown(design.message_html("info", "No open follow-ups match these filters."), unsafe_allow_html=True)
+                else:
+                    st.markdown(design.message_html("success", "All follow-up work is complete.", "There is nothing waiting for review."), unsafe_allow_html=True)
+            else:
+                if st.button("Review next task",type="primary",key="review_next_followup"):
+                    st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
+                several_sites = fu["Site ID"].nunique() > 1
+                task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
+                with st.container(key="cardlist_followups"):
+                    for position, (_, item_row) in enumerate(fu.iterrows()):
+                        row_fid=item_row["Follow-up ID"]
+                        task_type=str(item_row["Follow-up Type"])
+                        # What the person needs to find the task: the trap, its site only when the list spans sites, why it exists, and the
+                        # bag for a necropsy. Priority is plain words and only when it is not the ordinary one (no colour: that is a separate decision).
+                        bits=[html.escape(str(item_row["Trap ID"]))]
+                        if several_sites: bits.append(html.escape(site_name(data,item_row["Site ID"])))
+                        reason = str(item_row["Reason"]).strip()
+                        if reason and task_type != "Necropsy review" and reason.lower() != task_type.lower():  # not when it only repeats the task's own name
+                            bits.append(html.escape(reason))
+                        if task_type=="Necropsy review" and str(item_row.get("Bag ID", "")).strip(): bits.append("Bag " + html.escape(str(item_row["Bag ID"]).strip()))
+                        if str(item_row["Priority"]) in ("High", "Low"): bits.append(f"{html.escape(str(item_row['Priority']))} priority")
+                        row_key = f"listrow_{'next_' if position == 0 else ''}{'end_' if position == len(fu) - 1 else ''}followup_{row_fid}"
+                        with st.container(key=row_key):
+                            text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                            text_col.markdown(
+                                f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(task_icon.get(task_type, "warn-circle"), 22)}</div>'
+                                f'<div><div class="r1-row-title">{html.escape(task_type)}</div><div class="r1-meta">{" · ".join(bits)}</div></div></div>',
+                                unsafe_allow_html=True,
+                            )
+                            if button_col.button("Review",key=f"followup_review_{row_fid}"):
+                                st.session_state.followup_panel=row_fid; st.rerun()
     else:
         matches=data["Followups"][data["Followups"]["Follow-up ID"]==selected_followup_id]
         if matches.empty:

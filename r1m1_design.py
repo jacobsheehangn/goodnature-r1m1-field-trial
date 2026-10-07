@@ -236,6 +236,9 @@ COMPONENT_CSS = f"""
 
 /* ---- Segmented control (st.segmented_control). Only when every label is about 12 characters or fewer. ---- */
 [class*="st-key-seg"] [role="radiogroup"]{{display:flex;width:100%!important;max-width:none!important;gap:0;background:var(--ink-05);border-radius:var(--r-segment);padding:2px}}
+/* The filter on Follow-ups sits in its own container, so its element wrappers are widened to the column. */
+[class*="st-key-seg_followup"] [data-testid="stElementContainer"],[class*="st-key-seg_followup"] [data-testid="stButtonGroup"]{{width:100%!important}}
+@media (min-width:701px){{[class*="st-key-seg_followup"]{{max-width:480px}}}}
 [class*="st-key-seg"] button[role="radio"]{{
   flex:1 1 0;min-width:0;min-height:44px;border:0;border-radius:var(--r-input);background:transparent;color:var(--ink-70);box-shadow:none}}
 [class*="st-key-seg"] button[role="radio"] p{{font-size:15px;line-height:20px;font-weight:400;color:inherit}}
@@ -290,7 +293,7 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-listrow_next"]{{background:var(--orange-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow{{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
 .r1-donebox{{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--green-10);color:var(--green);display:flex;align-items:center;justify-content:center}}
-.stApp [class*="st-key-listrow_"][class*="end_visit_"],.r1-donerow.is-last{{border-bottom:0}}
+.stApp [class*="st-key-listrow_"][class*="end_visit_"],.stApp [class*="st-key-listrow_"][class*="end_followup_"],.r1-donerow.is-last{{border-bottom:0}}
 /* The trap list's filter toggle is a rarely used extra, so it reads as quiet text, not as a heading. */
 .stApp [class*="st-key-visit_filter_expanded_"] label p{{font-size:15px;line-height:20px;font-weight:400;color:var(--ink-70)}}
 /* ...but still a 44px tap target: the whole label is the button. */

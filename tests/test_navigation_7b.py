@@ -88,7 +88,7 @@ def test_the_count_is_what_the_follow_ups_page_lists_by_default_and_is_hidden_at
         followups = _sheet(data_dir, "Followups")
         assert shown == int((followups["Status"] == "Open").sum()) == 4
         page.get_by_role("link", name=FOLLOWUPS).click()
-        expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=20_000)
         assert page.get_by_role("button", name="Review", exact=True).count() == shown, "the badge counts the tasks the page lists as open by default"
     (tmp_path / "e").mkdir()
     with _serve(tmp_path / "e", JOURNEY_SEED) as url:
@@ -172,7 +172,7 @@ def test_the_current_page_is_shown_and_the_menu_pill_takes_the_state_when_a_page
         current = lambda root: page.evaluate("(r) => [...document.querySelectorAll(r + ' a[disabled]')].map(a => a.getAttribute('href') || '')", root)
         assert [h.rsplit("/", 1)[-1] for h in current(".st-key-nav_phone")] == ["trap-sites"] or current(".st-key-nav_phone") == [""] or len(current(".st-key-nav_phone")) == 1
         page.get_by_role("link", name=FOLLOWUPS).click()
-        expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=20_000)
         assert [h.rsplit("/", 1)[-1] for h in current(".st-key-nav_phone")] == ["follow-ups"]
         assert page.locator('[class*="st-key-navmore_on"]').count() == 0
         page.get_by_role("button", name="More", exact=True).click()
@@ -212,7 +212,7 @@ def test_visit_mode_and_the_flows_have_no_navigation_and_every_other_page_has_it
         page.get_by_role("button", name="Exit to Trap sites").click()
         expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=20_000)
         page.get_by_role("link", name=FOLLOWUPS).click()
-        expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 1, "Follow-ups"
         page.get_by_role("button", name="Review", exact=True).first.click()
         expect(page.get_by_role("button", name=re.compile("Back to task list"))).to_be_visible(timeout=20_000)

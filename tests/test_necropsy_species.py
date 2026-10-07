@@ -28,7 +28,7 @@ WITH_OPEN_CAMERA_REVIEW = NECROPSY_SEED + """
 def _open_task(page: Page, url: str, task_type: str) -> None:
     _home(page, url)
     page.get_by_role("link", name="Follow-ups").click()
-    expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=30_000)
     card = page.get_by_text(task_type, exact=True).first.locator("xpath=ancestor::div[.//button][1]")
     card.get_by_role("button", name="Review", exact=True).click()
     expect(page.get_by_role("heading", name=task_type)).to_be_visible(timeout=30_000) if task_type != "Necropsy review" else expect(page.get_by_text("Species", exact=True)).to_be_visible(timeout=30_000)
@@ -120,7 +120,7 @@ def test_task_pages_have_one_h1_the_right_copy_and_no_misplaced_caption(page: Pa
         # D2 on the list page: it keeps its own H1; on a task page the task title is the only H1.
         _home(page, url)
         page.get_by_role("link", name="Follow-ups").click()
-        expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=30_000)
         assert page.locator("h1").all_inner_texts() == ["Follow-ups"]
         # Necropsy: D2, D3, D4, and the trimmed context.
         card = page.get_by_text("Necropsy review", exact=True).first.locator("xpath=ancestor::div[.//button][1]")
@@ -132,7 +132,7 @@ def test_task_pages_have_one_h1_the_right_copy_and_no_misplaced_caption(page: Pa
         for jargon in ("KPI", "test-window", "Same upload behaviour as trap-check photos", "Record when events occurred in the footage"):
             assert page.get_by_text(jargon, exact=False).count() == 0, jargon
         page.get_by_role("button", name="Back to task list").click()
-        expect(page.get_by_text("Review a task directly from its row.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=30_000)
         # Camera review: one H1, the footage caption belongs here, Build / Camera / Reason rows are gone.
         card = page.get_by_text("Camera review", exact=True).first.locator("xpath=ancestor::div[.//button][1]")
         card.get_by_role("button", name="Review", exact=True).click()
