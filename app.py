@@ -4864,15 +4864,6 @@ input::placeholder, textarea::placeholder {
 
 /* App-owned marked cards plus Streamlit wrapper fallback. */
 .app-card-marker {display: none !important;}
-/* site-complete-marker (a second, separate hidden hook span used only on a
-   freshly-completed site's card - see the "sites" page) has the exact same
-   issue below, so it gets the same two-part fix. Confirmed live on staging:
-   a completed-today card showed 32px of dead space (two phantom gaps
-   stacked) where a normal card only had one, because this marker's own
-   container wasn't covered by the app-card-marker fix - local demo data
-   never exercised a "completed today" card during testing, so this half
-   was missed the first time. */
-.site-complete-marker {display: none !important;}
 /* The marker spans above are hidden, but their own stElementContainer divs
    aren't - those divs still count as flex siblings in the card's column
    layout, so the card's inter-element gap (16px, Streamlit's own default)
@@ -4881,8 +4872,7 @@ input::placeholder, textarea::placeholder {
    a phantom gap per hidden marker present) - confirmed via getComputedStyle
    showing 0-height children still consuming a gap. Hiding the whole
    container removes each one from the flex layout entirely. */
-[data-testid="stElementContainer"]:has(.app-card-marker),
-[data-testid="stElementContainer"]:has(.site-complete-marker) {display: none !important;}
+[data-testid="stElementContainer"]:has(.app-card-marker) {display: none !important;}
 
 /* Same bug, page-chrome scale: HEADER_PADDING_BRIEF.md was written against
    a screenshot of a large empty region above the top nav, and traced that
@@ -5480,12 +5470,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
   padding: 15px !important;
 }
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) {
-  background: var(--card-success-bg) !important;
-  border-color: var(--card-success-border) !important;
-}
 
 .shared-card-copy { display:grid; gap:15px; width:100%; margin:0 0 .35rem 0; }
 .shared-card-heading { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; }
@@ -5574,11 +5558,7 @@ input, textarea, select, button,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
 
-/* Completed site state and compact site metadata. */
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
-.site-card-compact { display:grid; gap:.35rem; }
+/* Compact site metadata. */
 .site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:22px; }
 .site-card-meta { color:#737780; font-size:.9rem; }
 
@@ -6433,10 +6413,11 @@ if is_demo_data:
     message_panel("warning", "Demo data", ["This app contains synthetic demonstration records. Do not treat its Performance figures as trial evidence."])
 
 if page == "sites":
-    header("Trap sites", "Choose the trap site you are visiting today.")
+    # Phase 7b (2/8): white cards, a dot and words for status, the stat on the right, one primary button per card. Nothing here
+    # reads a new sheet: every figure below was already computed for the old card.
+    r1_screen_css()
     active_sites = data["Sites"][data["Sites"]["Status"] == "Active"].copy()
-    if active_sites.empty:
-        helper("No active trap sites are available. Reactivate a site in Administration → Trial setup.")
+    site_cards = []
     for _, s in active_sites.iterrows():
         sid = s["Site ID"]
         traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")]
@@ -6448,66 +6429,68 @@ if page == "sites":
         # Field report fix (2026-08-14): count unique traps checked, not raw
         # Check rows - a trap checked twice in one visit (e.g. a re-check
         # after an ambiguous/dropped-connection save) inflated this past the
-        # real trap count ("10 of 9 traps checked"). The site-detail page's
-        # own progress bar already dedupes this way (see `done` below); the
-        # list card just hadn't matched it.
+        # real trap count ("10 of 9 traps checked").
         checked_trap_count = checks["Trap ID"].astype(str).nunique() if active is not None else 0
         active_complete = active is not None and len(traps) > 0 and checked_trap_count >= len(traps)
-        if active is not None:
-            status_text = "Ready to finish" if active_complete else "In progress"
-            status_kind = "warning" if active_complete else "guidance"
-        else:
-            # Card-system brief Phase 2: an absolute Last/Next date line no
-            # longer appears on this card (moved to the visit page) — this
-            # is its replacement, and it's the only pill a not-yet-started
-            # site shows. A freshly-completed site (completed_today) is
-            # simply not due soon, so it now shows no pill here, same as
-            # any other site with time before its next check — the pale
-            # green card background below is still its own, separate signal.
-            status_text, status_kind = site_urgency_pill(next_dt.date(), now().date())
         site_trial = open_trial(data, sid)
         no_trial_no_traps = site_trial is None and len(traps) == 0
-        with app_card():
-            if completed_today and active is None:
-                st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-            # Trap count is shown once: as a fraction while a visit is in
-            # progress (matches the "X of Y" language already used
-            # elsewhere), or as a plain count before one starts — never both,
-            # since showing "9 active traps" next to "0 of 9 traps checked"
-            # repeats the same number for no reason.
-            trap_count_text = (
-                f"{checked_trap_count} of {len(traps)} traps checked" if active is not None
-                else f"{len(traps)} active traps"
-            )
-            if no_trial_no_traps:
-                trap_count_text = "No trial running"
-            st.markdown(
-                '<div class="shared-card-copy site-card-compact">'
-                f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
-                f'<div class="shared-card-meta">{trap_count_text} · Every {interval} days</div>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            if site_trial is None and len(traps) > 0:
-                # Field work never waits on a migration: Start checking still works at an untracked site.
-                message_panel("warning", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial.")
-            if no_trial_no_traps:
-                st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
-            else:
-                if active is not None:
-                    st.button(
-                        "Resume checking", key=f"resume_{sid}", type="primary",
-                        on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": active["Visit ID"]},
-                    )
+        # Status: orange dot = due or in progress, red = overdue (words bold), green = done, grey = nothing running.
+        # A site not due for a while shows no status at all (nothing to flag).
+        urgency_text, _urgency_kind = site_urgency_pill(next_dt.date(), now().date())
+        if no_trial_no_traps:
+            status_text, status_class = "No trial running", ""
+        elif active is not None:
+            status_text, status_class = ("Ready to finish" if active_complete else "In progress"), "progress"
+        elif urgency_text.startswith("Overdue"):
+            status_text, status_class = urgency_text, "overdue"
+        elif urgency_text:
+            status_text, status_class = urgency_text, "due"
+        elif completed_today:
+            status_text, status_class = "Checked today", "done"
+        else:
+            status_text, status_class = "", ""
+        # One number on the right: how far through a visit is, or how many traps the site runs.
+        if no_trial_no_traps:
+            stat_value, stat_label = "", ""
+        elif active is not None:
+            stat_value, stat_label = f"{checked_trap_count} of {len(traps)}", "Checked"
+        else:
+            stat_value, stat_label = str(len(traps)), "Traps"
+        site_cards.append({"sid": sid, "name": str(s["Site Name"]), "active": active, "site_trial": site_trial, "no_trial_no_traps": no_trial_no_traps,
+                           "untracked": site_trial is None and len(traps) > 0, "status_text": status_text, "status_class": status_class,
+                           "stat_value": stat_value, "stat_label": stat_label,
+                           "due_now": active is None and (urgency_text.startswith("Overdue") or urgency_text == "Due today") and not no_trial_no_traps})
+    due_count = sum(1 for c in site_cards if c["due_now"])
+    with st.container(key=design.SCREEN_KEY):
+        r1_title("Trap sites", stat_value=due_count or None, stat_label="Due today")
+        if not site_cards:
+            st.markdown('<div class="r1-meta">No active trap sites are available. Reactivate a site in Administration → Trial setup.</div>', unsafe_allow_html=True)
+        for c in site_cards:
+            sid = c["sid"]
+            with st.container(key=f"card_site_{sid}"):
+                status = f'<div class="r1-status {c["status_class"]}">{html.escape(c["status_text"])}</div>' if c["status_text"] else ""
+                stat = (f'<div><div class="r1-stat">{html.escape(c["stat_value"])}</div><div class="r1-stat-label">{c["stat_label"]}</div></div>' if c["stat_value"] else "")
+                st.markdown(f'<div class="r1-titlerow"><div><div class="r1-card-title">{html.escape(c["name"])}</div>{status}</div>{stat}</div>', unsafe_allow_html=True)
+                if c["untracked"]:
+                    # Field work never waits on a migration: Start checking still works at an untracked site.
+                    st.markdown(design.message_html("warn", "", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial."), unsafe_allow_html=True)
+                if c["no_trial_no_traps"]:
+                    st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
                 else:
-                    st.button(
-                        "Start checking", key=f"open_{sid}", type="primary",
-                        on_click=start_checking_callback, args=(sid,),
-                    )
-                if site_trial is not None:
-                    st.button("Trial overview", key=f"trial_overview_{sid}", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
-                else:
-                    st.button("Track as a trial", key=f"track_{sid}", on_click=begin_trial_adopt, args=(sid,))
+                    if c["active"] is not None:
+                        st.button(
+                            "Resume checking", key=f"resume_{sid}", type="primary",
+                            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": c["active"]["Visit ID"]},
+                        )
+                    else:
+                        st.button(
+                            "Start checking", key=f"open_{sid}", type="primary",
+                            on_click=start_checking_callback, args=(sid,),
+                        )
+                    if c["site_trial"] is not None:
+                        st.button("Trial overview", key=f"trial_overview_{sid}", type="tertiary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+                    else:
+                        st.button("Track as a trial", key=f"track_{sid}", type="tertiary", on_click=begin_trial_adopt, args=(sid,))
 
 elif page == "site":
     sid = st.session_state.site_id

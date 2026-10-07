@@ -32,14 +32,15 @@ def _tap(page: Page, app: ProbeApp, steps: dict, name: str, action, destination)
     steps[name] = app.log_lines()[before:]
 
 
-TRAP_SITES_HEADING = "Choose the trap site you are visiting today."
+# The page title (Phase 7b: the old "Choose the trap site you are visiting today." line is gone).
+TRAP_SITES_HEADING = "Trap sites"
 
 
 def _landing(page: Page):
     return (
         page.get_by_text("Resume checking?", exact=True)
         .or_(page.get_by_text(SELECTOR_TEXT, exact=True))
-        .or_(page.get_by_text(TRAP_SITES_HEADING, exact=True))
+        .or_(page.get_by_role("heading", name=TRAP_SITES_HEADING, exact=True))
         .or_(page.get_by_text("What did you find?", exact=True))
         .first
     )

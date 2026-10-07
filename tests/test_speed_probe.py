@@ -162,7 +162,7 @@ def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: Prob
     expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
     # Visit mode has no top navigation (Phase 7): the way out of the trap list is its own back pill.
     page.get_by_role("button", name="Pause and return to Trap sites").click()
-    expect(page.get_by_text("Choose the trap site you are visiting today.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
     page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
     page.wait_for_timeout(1_000)
@@ -217,7 +217,7 @@ def test_probe_median_tracks_up_to_ten_samples(page: Page, probe_on: ProbeApp) -
         expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1_500)
         page.get_by_role("link", name="Trap sites", exact=True).click()
-        expect(page.get_by_text("Choose the trap site you are visiting today.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1_500)
     text = caption_locator(page).inner_text()
     median_n = int(re.search(r"median of (\d+)", text).group(1))

@@ -145,13 +145,13 @@ def test_list_card_checked_count_is_deduped_not_a_raw_row_count(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    # The card's meta line combines this with "· Every N days" in one
-    # element (e.g. "2 of 6 traps checked · Every 3 days"), so this can only
-    # be a substring match, not exact.
-    expected_text = f"{unique_checked} of {trap_count} traps checked"
-    expect(page.get_by_text(expected_text, exact=False)).to_be_visible(timeout=15_000)
+    # Phase 7b: the card shows the count as its own stat, "N of M" over the label "Checked" (it used to be the
+    # sentence "N of M traps checked" inside a meta line).
+    expected_text = f"{unique_checked} of {trap_count}"
+    expect(page.get_by_text(expected_text, exact=True)).to_be_visible(timeout=15_000)
+    expect(page.get_by_text("Checked", exact=True)).to_be_visible(timeout=15_000)
 
-    impossible_text = f"{trap_count + 1} of {trap_count} traps checked"
-    assert page.get_by_text(impossible_text, exact=False).count() == 0, (
+    impossible_text = f"{trap_count + 1} of {trap_count}"
+    assert page.get_by_text(impossible_text, exact=True).count() == 0, (
         "the checked count must never exceed the trap count, however many duplicate Check rows exist"
     )

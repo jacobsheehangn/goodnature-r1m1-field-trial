@@ -250,6 +250,13 @@ COMPONENT_CSS = f"""
   content:"Choose a build";display:block;color:var(--orange-ink);font-weight:700;font-size:14px;line-height:20px;margin-top:6px}}
 /* A build row on Set up step 1: a white card holding the checkbox. */
 [class*="st-key-card_build"]{{padding:14px 15px}}
+/* A site card on Trap sites: one primary button and a text button under it, both the width of the card (the Main board). */
+.stApp [class*="st-key-card_site_"]{{gap:8px}}
+.stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(button[kind="primary"]),
+.stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(button[kind="tertiary"]),
+.stApp [class*="st-key-card_site_"] div.stButton:has(button[kind="primary"]),.stApp [class*="st-key-card_site_"] div.stButton:has(button[kind="tertiary"]){{width:100%}}
+.stApp [class*="st-key-card_site_"] button[kind="primary"],.stApp [class*="st-key-card_site_"] button[kind="tertiary"]{{width:100%;justify-content:center}}
+.stApp [class*="st-key-card_site_"] .r1-msg{{margin:2px 0 4px}}
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
 @media (max-width:700px){{
@@ -516,4 +523,5 @@ def message_html(kind: str, title: str, detail: str = "") -> str:
     """Message panel: warn / error / success / info, icon + bold title + 15px detail."""
     icon_name = {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
     body = f'<div class="d">{detail}</div>' if detail else ""
-    return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div><div class="t">{title}</div>{body}</div></div>'
+    heading = f'<div class="t">{title}</div>' if title else ""
+    return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div>{heading}{body}</div></div>'
