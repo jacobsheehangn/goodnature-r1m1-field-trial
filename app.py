@@ -4532,8 +4532,8 @@ def visit_complete_summary(data, sid: str, vid: str) -> dict:
     if not visit.empty:
         start, end = parse_dt(visit.iloc[0]["Start Time"]), parse_dt(visit.iloc[0]["End Time"])
         minutes = int(round((end - start).total_seconds() / 60)) if start and end else 0
-        # A visit paused and finished the next day is not time on site, so the figure is only shown for a visit of an ordinary length.
-        if 1 <= minutes <= 12 * 60:
+        # A visit that began on one calendar day (NZ time) and finished on another was paused, so it has no honest time on site.
+        if minutes >= 1 and start.date() == end.date():
             stats.append((f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60} min", "On site"))
     tasks = data["Followups"][(data["Followups"]["Visit ID"] == vid) & (data["Followups"]["Status"] == "Open")]
     task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
