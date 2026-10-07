@@ -293,6 +293,8 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-listrow_"][class*="end_visit_"],.r1-donerow.is-last{{border-bottom:0}}
 /* The trap list's filter toggle is a rarely used extra, so it reads as quiet text, not as a heading. */
 .stApp [class*="st-key-visit_filter_expanded_"] label p{{font-size:15px;line-height:20px;font-weight:400;color:var(--ink-70)}}
+/* ...but still a 44px tap target: the whole label is the button. */
+.stApp [class*="st-key-visit_filter_expanded_"] label{{min-height:44px;display:flex;align-items:center;cursor:pointer}}
 .r1-donerow.is-just-saved{{background:var(--green-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow.is-just-saved .r1-donebox{{background:#fff}}
 /* A progress bar: a thin ink-05 track with an orange fill. */

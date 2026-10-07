@@ -152,3 +152,22 @@ def test_it_is_one_narrow_column_with_full_width_buttons_on_a_phone_and_natural_
             else:
                 assert screen_w <= 761, f"one narrow column {where}: {screen_w}"
                 assert finish["width"] < screen_w / 2, f"Finish keeps its natural width {where}"
+
+
+def test_the_filter_toggles_tap_area_is_at_least_44px_and_a_touch_anywhere_in_it_opens_it(page: Page, tmp_path: Path) -> None:
+    """A scripted mouse click never toggles this react-aria switch (the repo's older tests note it), so the taps here are touch, which is what a phone sends."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, END_SEED) as url:
+        for viewport in (PHONE, DESKTOP):
+            touch_page = page.context.browser.new_context(viewport=viewport, has_touch=True).new_page()
+            _open_visit(touch_page, url)
+            label = touch_page.locator('[class*="st-key-visit_filter_expanded_"] label')
+            box = label.bounding_box()
+            assert box["height"] >= 44 and box["width"] >= 44, f"the whole label is the tap area at {viewport['width']}: {box}"
+            find = touch_page.get_by_role("textbox", name="Find trap")
+            assert find.count() == 0
+            # the top edge, then the far end of the label, then the bottom edge: places that were outside the old 20px label
+            for opens, (dx, dy) in ((True, (80, 3)), (False, (box["width"] - 10, box["height"] / 2)), (True, (80, box["height"] - 3))):
+                touch_page.touchscreen.tap(box["x"] + dx, box["y"] + dy)
+                expect(find).to_have_count(1 if opens else 0, timeout=10_000)
+            touch_page.context.close()
