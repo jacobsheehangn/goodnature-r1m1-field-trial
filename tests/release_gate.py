@@ -73,7 +73,7 @@ required = {
     "Top navigation administration group": '"Administration": [',
     "Top navigation sign out": 'st.Page(top_nav_sign_out, title="Sign out"',
     "Traps page title": 'header("Traps",',
-    "Follow-ups page title": 'header("Follow-ups",',
+    "Follow-ups page title": 'r1_title("Follow-ups",',  # Phase 7b (7/8): the list's title is the 7a title helper, as on the other restyled screens
     "Trial performance page title": 'header("Trial performance",',
     "Trial setup page title": 'header("Trial setup",',
     "Data and records page title": 'header("Data & records",',
