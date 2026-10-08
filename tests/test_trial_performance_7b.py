@@ -77,7 +77,7 @@ def test_the_three_summary_cards_follow_the_board_and_say_the_same_facts(page: P
         assert k["title"] == "Kill outcome" and k["stats"] == ["12 good kills", "86% humane"], k
         assert k["meta"] == "Based on 14 assessed kills of 17.", k["meta"]
         assert k["warn"] == "1 kill awaiting final assessment — see Results needing attention", k["warn"]
-        assert k["info"] == "2 kills not assessed (1 no carcass, 1 trial ended).", k["info"]
+        assert k["info"] == "2 kills not assessed (1 no carcass, 1 trial ended): counted as kills, not in the humane rate.", k["info"]
         t = v["time"]
         assert t["title"] == "Time to kill" and t["stats"] == ["6 of 6 Met <24 hr target"] and t["meta"] == ["Median: 1.6 hr", "6 of 17 total kills have usable timing"], t
         e = v["evidence"]
@@ -125,3 +125,18 @@ def test_combining_builds_warns_in_a_message_panel(page: Page, tmp_path: Path) -
         _open(page, url, phone=False)
         _choose(page, "Build to assess", "All builds — use with care")
         expect(page.locator(".r1-msg.warn").filter(has_text="These results combine different builds. Use them for exploration, not a single performance conclusion.")).to_be_visible(timeout=15_000)
+
+
+def test_the_two_plain_language_terms_and_the_calculation_definitions_are_under_more_detail(page: Page, tmp_path: Path) -> None:
+    """The summary cards' footers used to define necropsy and camera review; they now sit with the calculation definitions."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size(DESKTOP)
+    with _serve(data_dir, SEED) as url:
+        _open(page, url, phone=False)
+        expect(page.get_by_text("Necropsy: physical examination of the collected animal.", exact=True)).to_be_hidden()  # not on the cards, and the expander is closed
+        page.get_by_text("More detail", exact=True).click()
+        expect(page.get_by_text("Calculation definitions", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("Necropsy: physical examination of the collected animal.", exact=True)).to_be_visible()
+        expect(page.get_by_text("Camera review: watching footage of the event.", exact=True)).to_be_visible()
+        expect(page.get_by_text("Humane rate: good kills divided by good plus bad kills with a completed final assessment.", exact=True)).to_be_visible()
+

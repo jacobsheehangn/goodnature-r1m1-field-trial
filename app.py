@@ -8407,7 +8407,7 @@ elif page == "results":
                     no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
                     trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
                     reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
-                    st.markdown(design.message_html("info", "", f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} not assessed ({', '.join(reasons)})."), unsafe_allow_html=True)
+                    st.markdown(design.message_html("info", "", f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} not assessed ({', '.join(reasons)}): counted as {'kills' if len(not_assessed)!=1 else 'a kill'}, not in the humane rate."), unsafe_allow_html=True)
         with time_card:
             with st.container(key="card_perf_time"):
                 st.markdown('<div class="r1-card-title">Time to kill</div>', unsafe_allow_html=True)
@@ -8608,6 +8608,9 @@ elif page == "results":
             st.dataframe(windows[cols],use_container_width=True,hide_index=True)
 
             st.markdown("#### Calculation definitions")
+            # The plain-language terms the summary cards' footers used to define (moved here in Phase 7b, 8/8).
+            st.write("**Necropsy:** physical examination of the collected animal.")
+            st.write("**Camera review:** watching footage of the event.")
             st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
             st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
             st.write("**Bad kill:** final humane-kill assessment is No.")

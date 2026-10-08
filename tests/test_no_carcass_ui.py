@@ -313,7 +313,7 @@ def test_trial_performance_counts_the_not_assessed_kills_honestly(page: Page, tm
         expect(page.get_by_text("86%", exact=True).first).to_be_visible(timeout=15_000)  # 12 of the 14 assessed
         expect(page.get_by_text("1 kill awaiting final assessment — see Results needing attention", exact=True)).to_be_visible(timeout=15_000)  # Phase 7b: the board's wording, no arrow
         # Phase 7b: the TrialPerformance board's wording for the same facts (the long footer sentence is gone; the definitions are under More detail).
-        expect(page.get_by_text("2 kills not assessed (1 no carcass, 1 trial ended).", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("2 kills not assessed (1 no carcass, 1 trial ended): counted as kills, not in the humane rate.", exact=True)).to_be_visible(timeout=15_000)
         expect(page.get_by_text("Based on 14 assessed kills of 17.", exact=True)).to_be_visible(timeout=15_000)
         evidence = page.locator('[class*="st-key-card_perf_evidence"]')
         expect(evidence.get_by_text("Unresolved", exact=True)).to_be_visible(timeout=15_000)
