@@ -86,6 +86,9 @@ def test_the_filters_narrow_the_list_and_the_site_leaves_the_rows_once_it_is_one
         page.locator('[class*="st-key-seg_followup_priority"] button').filter(has_text="Low").click()
         expect(page.get_by_text("No open follow-ups match these filters.", exact=True)).to_be_visible(timeout=15_000)
         assert page.get_by_role("button", name="Review next task").count() == 0
+        v = page.evaluate(ROWS)
+        assert v["stat"] is None, "a count of 0 would only repeat the panel underneath"
+        assert len(v["site"]) == 4 and len(v["priority"]) == 4, "the filters stay, so the operator can change them"
 
 
 def test_nothing_open_says_so_and_offers_no_next_task(page: Page, tmp_path: Path) -> None:
@@ -95,7 +98,9 @@ def test_nothing_open_says_so_and_offers_no_next_task(page: Page, tmp_path: Path
         _open(page, url)
         expect(page.get_by_text("All follow-up work is complete.", exact=True)).to_be_visible()
         assert page.get_by_role("button", name="Review next task").count() == 0
-        assert page.evaluate(ROWS)["stat"] == ["0", "Open"]
+        v = page.evaluate(ROWS)
+        assert v["stat"] is None, "no count of 0: it would repeat the panel underneath"
+        assert v["site"] == [] and v["priority"] == [], "nothing open, so nothing to filter: no chips and no segmented control"
 
 
 def test_review_opens_that_task_and_review_next_task_opens_the_first(page: Page, tmp_path: Path) -> None:

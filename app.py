@@ -7974,11 +7974,14 @@ elif page == "followups":
         if not fu.empty:
             fu=fu.assign(_priority_order=pd.Categorical(fu["Priority"],categories=["High","Normal","Low"],ordered=True)).sort_values(["_priority_order","Created Time"])
         with st.container(key=design.SCREEN_KEY):
-            r1_title("Follow-ups", stat_value=len(fu), stat_label="Open")
-            with st.container(key="chips_followup_site"):
-                st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
-            with st.container(key="seg_followup_priority"):
-                st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
+            # At zero the count would only repeat the panel underneath (and the navigation badge hides at zero too), so it is left out.
+            r1_title("Follow-ups", stat_value=(len(fu) or None), stat_label="Open")
+            # With nothing open at all there is nothing to filter. A filter that matches nothing keeps its controls, so it can be changed.
+            if total_open:
+                with st.container(key="chips_followup_site"):
+                    st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
+                with st.container(key="seg_followup_priority"):
+                    st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
             if fu.empty:
                 if total_open:
                     st.markdown(design.message_html("info", "No open follow-ups match these filters."), unsafe_allow_html=True)

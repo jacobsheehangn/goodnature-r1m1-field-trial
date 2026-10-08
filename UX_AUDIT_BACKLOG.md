@@ -108,6 +108,11 @@ have been fixed. See Medium/Low below for what's left.
   Move trap and Change build (same page, same card shape) don't.
 - No chronological guardrail on effective times across activate/deactivate/move/
   change-build — can silently create negative-duration windows.
+- **Needs a board first: the camera review and camera issue task pages (Follow-ups).** They are still the legacy forms: a bullet-list "Task context",
+  "Select…" dropdowns for short lists (Camera evidence usable, Camera outcome, Camera now ready, Past test-window evidence), date and time inputs, and a
+  "Saving this will update" heading. They look wrong beside the restyled Follow-ups list. Restyling them means converting those dropdowns to visible
+  controls, which the brief defers until it has its own mockup (field standard 12). Not restyled in Phase 7b (owner decision, 2026-10-08); needs a
+  canvas board first.
 - **Post-Deploy-A fix: `deactivate_trap` has no time floor.** It sets the open window's End Time to whatever effective time it is given
   (`deactivate_trap`, app.py) without checking it against the window's Start Time or the latest check in it, and the Traps admin
   "Deactivate" form passes the operator's entry straight in, so a time before the window opened (or before its last check) closes the
