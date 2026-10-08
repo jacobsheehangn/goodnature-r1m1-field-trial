@@ -148,7 +148,12 @@ def expect_caption_really_visible(page: Page) -> None:
     is exactly how this caption shipped invisible once (the app's own CSS hides
     top-level helper iframes). Require it to be visible with a real size."""
     expect(caption_locator(page)).to_be_visible(timeout=15_000)
-    box = caption_locator(page).bounding_box()
+    box = None
+    for _ in range(25):  # the frame can be re-created or resized just after it first appears (it failed once, under suite load, with no size yet)
+        box = caption_locator(page).bounding_box()
+        if box is not None and box["height"] >= 10 and box["width"] >= 100:
+            break
+        page.wait_for_timeout(200)
     assert box is not None and box["height"] >= 10 and box["width"] >= 100, f"caption has no real size: {box}"
     fits = caption_locator(page).evaluate("el => el.getBoundingClientRect().bottom <= window.innerHeight + 1")
     assert fits, "the caption text is taller than its frame, so part of it (e.g. 'save ... ms') is cut off"
