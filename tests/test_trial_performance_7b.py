@@ -97,6 +97,9 @@ def test_the_cards_stack_on_a_phone_and_sit_side_by_side_on_desktop(page: Page, 
         page.set_viewport_size(DESKTOP); page.wait_for_timeout(1_000)
         a, b, c = page.evaluate(VIEW)["tops"]
         assert a == b == c, f"three across on desktop: {a, b, c}"
+        # the narrow Evidence card keeps a value such as "12 of 13" on one line
+        height = page.evaluate("document.querySelector('[class*=\"st-key-card_perf_evidence\"] .r1-kv .v').getBoundingClientRect().height")
+        assert height < 30, f"the value wrapped onto two lines: {height}"
 
 
 def test_the_headings_and_messages_below_the_cards_are_in_the_same_language_and_the_funnel_is_untouched(page: Page, tmp_path: Path) -> None:

@@ -303,6 +303,8 @@ COMPONENT_CSS = f"""
 .r1-bigstat{{font-size:36px;line-height:40px;font-weight:700}}
 .r1-bigstat-label{{font-size:14px;line-height:20px;color:var(--ink-70)}}
 .r1-section{{font-size:22px;line-height:30px;font-weight:700;margin:24px 0 4px}}
+/* In a narrow summary card the value stays on one line ("12 of 13") and the label wraps instead. */
+[class*="st-key-card_perf_"] .r1-kv .v{{white-space:nowrap}}
 .r1-donerow.is-just-saved{{background:var(--green-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow.is-just-saved .r1-donebox{{background:#fff}}
 /* A progress bar: a thin ink-05 track with an orange fill. */
