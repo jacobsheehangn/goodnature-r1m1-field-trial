@@ -121,7 +121,7 @@ def test_task_pages_have_one_h1_the_right_copy_and_no_misplaced_caption(page: Pa
         _home(page, url)
         page.get_by_role("link", name="Follow-ups").click()
         expect(page.get_by_role("heading", name="Follow-ups", exact=True)).to_be_visible(timeout=30_000)
-        assert page.locator("h1").all_inner_texts() == ["Follow-ups"]
+        assert page.locator('h1,[role="heading"][aria-level="1"]').all_inner_texts() == ["Follow-ups"]  # Phase 7b: the list's title is a level-1 heading by role
         # Necropsy: D2, D3, D4, and the trimmed context.
         card = page.get_by_text("Necropsy review", exact=True).first.locator("xpath=ancestor::div[.//button][1]")
         card.get_by_role("button", name="Review", exact=True).click()
