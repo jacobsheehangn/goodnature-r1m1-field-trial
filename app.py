@@ -4592,6 +4592,11 @@ def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = 
     )
 
 
+def r1_section(title: str) -> None:
+    """A heading between the cards of a long screen."""
+    st.markdown(f'<div class="r1-section" role="heading" aria-level="2">{html.escape(title)}</div>', unsafe_allow_html=True)
+
+
 def r1_back(label: str, page: str, key: str, **kwargs) -> None:
     """A back pill: always names its destination."""
     st.button(label, key=f"back_{key}", on_click=set_page, args=(page,), kwargs=kwargs)
@@ -8330,295 +8335,287 @@ elif page == "data_quality":
 
 elif page == "results":
     install_grey_footer_tooltips()
-    header("Trial performance",
-        "Do we have enough evidence to launch? Efficacy against the humane-kill and time-to-kill targets, trial-wide.",
-        emphasize_subtitle=True,
-    )
-    with app_card():
-        product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
-        product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
-        builds=data["Builds"][data["Builds"]["Product"]==product]
-        current=builds[builds["Build Status"]=="Current"]["Build Version"].tolist()
-        selected=build_col.selectbox("Build to assess",["Latest active build"]+builds["Build Version"].tolist()+["Compare builds","All builds — use with care"])
-        site=site_col.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x))
+    # Phase 7b (8/8): the title, filters and the three summary cards are in the 7a language (the TrialPerformance board); the camera funnel's visuals
+    # and logic are untouched (the Trial performance brief locks them), as is every figure on the page. Nothing new is read from a sheet.
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        r1_title("Trial performance", "Do we have enough evidence to launch? Efficacy against the humane-kill and time-to-kill targets, trial-wide.")
+        with st.container(key="card_perf_filters"):
+            product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
+            product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
+            builds=data["Builds"][data["Builds"]["Product"]==product]
+            current=builds[builds["Build Status"]=="Current"]["Build Version"].tolist()
+            selected=build_col.selectbox("Build to assess",["Latest active build"]+builds["Build Version"].tolist()+["Compare builds","All builds — use with care"])
+            site=site_col.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x))
 
-    windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")&(data["Windows"]["Excluded"]!="Yes")].copy()
-    windows=windows[windows["End Time"].astype(str).str.strip()!=""]
-    if selected=="Latest active build":
-        windows=windows[windows["Build Version"].isin(current)]; context_label=f"Current build: {', '.join(current) if current else 'not configured'}"
-    elif selected not in ["Compare builds","All builds — use with care"]:
-        windows=windows[windows["Build Version"]==selected]; context_label=f"Build: {selected}"
-    elif selected=="Compare builds": context_label="Comparing builds"
-    else: context_label="All builds pooled"
-    if site!="All sites": windows=windows[windows["Site ID"]==site]; context_label+=f" · {site_name(data,site)}"
-    export_col.download_button("Export",windows.to_csv(index=False).encode("utf-8"),file_name="DEMO_results_filtered.csv" if is_demo_data else "results_filtered.csv",mime="text/csv",key="export_filtered_results",use_container_width=True)
-    st.caption(context_label)
-    if selected=="All builds — use with care": st.warning("These results combine different builds. Use them for exploration, not a single performance conclusion.")
+        windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")&(data["Windows"]["Excluded"]!="Yes")].copy()
+        windows=windows[windows["End Time"].astype(str).str.strip()!=""]
+        if selected=="Latest active build":
+            windows=windows[windows["Build Version"].isin(current)]; context_label=f"Current build: {', '.join(current) if current else 'not configured'}"
+        elif selected not in ["Compare builds","All builds — use with care"]:
+            windows=windows[windows["Build Version"]==selected]; context_label=f"Build: {selected}"
+        elif selected=="Compare builds": context_label="Comparing builds"
+        else: context_label="All builds pooled"
+        if site!="All sites": windows=windows[windows["Site ID"]==site]; context_label+=f" · {site_name(data,site)}"
+        export_col.download_button("Export",windows.to_csv(index=False).encode("utf-8"),file_name="DEMO_results_filtered.csv" if is_demo_data else "results_filtered.csv",mime="text/csv",key="export_filtered_results",use_container_width=True)
+        st.markdown(f'<div class="r1-meta">{html.escape(context_label)}</div>', unsafe_allow_html=True)
+        if selected=="All builds — use with care": st.markdown(design.message_html("warn", "", "These results combine different builds. Use them for exploration, not a single performance conclusion."), unsafe_allow_html=True)
 
-    def median_numeric(df,col):
-        vals=pd.to_numeric(df[col],errors="coerce").dropna()
-        return vals.median() if not vals.empty else None
+        def median_numeric(df,col):
+            vals=pd.to_numeric(df[col],errors="coerce").dropna()
+            return vals.median() if not vals.empty else None
 
-    # Explicit result populations keep whole-trial kill evidence separate from camera-sampled evidence.
-    physical_kills=physical_kill_population(windows)
-    confirmed_kills=physical_kills.copy()  # retained name for the breakdown and attention views
-    humane=physical_kills[physical_kills["Final Humane Kill"]=="Yes"]
-    non_humane=physical_kills[physical_kills["Final Humane Kill"]=="No"]
-    not_assessed=physical_kills[not_assessed_mask(physical_kills["Final Humane Kill"])]
-    final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(physical_kills["Final Humane Kill"])]
-    assessed_kills=len(humane)+len(non_humane)
-    humane_rate=len(humane)/assessed_kills*100 if assessed_kills else None
+        # Explicit result populations keep whole-trial kill evidence separate from camera-sampled evidence.
+        physical_kills=physical_kill_population(windows)
+        confirmed_kills=physical_kills.copy()  # retained name for the breakdown and attention views
+        humane=physical_kills[physical_kills["Final Humane Kill"]=="Yes"]
+        non_humane=physical_kills[physical_kills["Final Humane Kill"]=="No"]
+        not_assessed=physical_kills[not_assessed_mask(physical_kills["Final Humane Kill"])]
+        final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(physical_kills["Final Humane Kill"])]
+        assessed_kills=len(humane)+len(non_humane)
+        humane_rate=len(humane)/assessed_kills*100 if assessed_kills else None
 
-    # Time-to-kill only uses physical kills with usable camera evidence and valid footage timestamps.
-    confirmed_kills["Interaction To Kill Numeric"]=pd.to_numeric(confirmed_kills["Interaction To Kill Min"],errors="coerce")
-    timed_kills=confirmed_kills[(confirmed_kills["Evidence Usable"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].notna()].copy()
-    within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES]
-    missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES]
-    timing_pending=physical_kills[~physical_kills["Window ID"].isin(timed_kills["Window ID"])]
-    target_rate=len(within_target)/len(timed_kills)*100 if len(timed_kills) else None
-    interaction_to_kill=timed_kills["Interaction To Kill Numeric"].median() if len(timed_kills) else None
+        # Time-to-kill only uses physical kills with usable camera evidence and valid footage timestamps.
+        confirmed_kills["Interaction To Kill Numeric"]=pd.to_numeric(confirmed_kills["Interaction To Kill Min"],errors="coerce")
+        timed_kills=confirmed_kills[(confirmed_kills["Evidence Usable"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].notna()].copy()
+        within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES]
+        missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES]
+        timing_pending=physical_kills[~physical_kills["Window ID"].isin(timed_kills["Window ID"])]
+        target_rate=len(within_target)/len(timed_kills)*100 if len(timed_kills) else None
+        interaction_to_kill=timed_kills["Interaction To Kill Numeric"].median() if len(timed_kills) else None
 
-    kill_evidence_complete=physical_kills[physical_kills["Final Humane Kill"].isin(["Yes","No"])]
-    camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
-    camera_reviews_complete=camera_windows[camera_windows["Review Status"]=="Complete"]
-    camera_reviews_open=camera_windows[camera_windows["Review Status"]=="Open"]
-    unusable=camera_windows[camera_windows["Evidence Usable"]=="No"]
+        kill_evidence_complete=physical_kills[physical_kills["Final Humane Kill"].isin(["Yes","No"])]
+        camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
+        camera_reviews_complete=camera_windows[camera_windows["Review Status"]=="Complete"]
+        camera_reviews_open=camera_windows[camera_windows["Review Status"]=="Open"]
+        unusable=camera_windows[camera_windows["Evidence Usable"]=="No"]
 
-    outcome_card,time_card,evidence_card=st.columns(3)
-    with outcome_card:
+        outcome_card,time_card,evidence_card=st.columns(3)
+        with outcome_card:
+            with st.container(key="card_perf_kill"):
+                st.markdown('<div class="r1-card-title">Kill outcome</div>', unsafe_allow_html=True)
+                humane_text=f"{humane_rate:.0f}%" if humane_rate is not None else "—"
+                st.markdown(
+                    f'<div class="r1-stats2"><div><div class="r1-bigstat">{len(humane)}</div><div class="r1-bigstat-label">good kills</div></div>'
+                    f'<div><div class="r1-bigstat">{humane_text}</div><div class="r1-bigstat-label">humane</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f'<div class="r1-meta">Based on {assessed_kills} assessed kill{"" if assessed_kills==1 else "s"} of {len(physical_kills)}.</div>', unsafe_allow_html=True)
+                if len(final_pending):
+                    st.markdown(design.message_html("warn", "", f"{len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention"), unsafe_allow_html=True)
+                if len(not_assessed):
+                    no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
+                    trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
+                    reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
+                    st.markdown(design.message_html("info", "", f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} not assessed ({', '.join(reasons)})."), unsafe_allow_html=True)
+        with time_card:
+            with st.container(key="card_perf_time"):
+                st.markdown('<div class="r1-card-title">Time to kill</div>', unsafe_allow_html=True)
+                met_text=f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—"
+                st.markdown(f'<div class="r1-stats2"><div><div class="r1-bigstat">{met_text}</div><div class="r1-bigstat-label">Met &lt;24 hr target</div></div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="r1-meta"><b>{"Median: " + html.escape(human_duration(minutes=interaction_to_kill)) if interaction_to_kill is not None else "No usable timing yet"}</b></div>', unsafe_allow_html=True)
+                # Coverage relative to the full physical-kill population, not just the met/missed split within the timed sample:
+                # "8 of 10 met target" reads very differently depending on whether that "10" is 90% or 15% of all confirmed kills.
+                if len(physical_kills):
+                    if len(timed_kills) == len(physical_kills):
+                        st.markdown(f'<div class="r1-meta">All {len(physical_kills)} confirmed kill{"s" if len(physical_kills)!=1 else ""} have usable timing</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="r1-meta">{len(timed_kills)} of {len(physical_kills)} total kill{"s" if len(physical_kills)!=1 else ""} have usable timing</div>', unsafe_allow_html=True)
+        with evidence_card:
+            with st.container(key="card_perf_evidence"):
+                st.markdown('<div class="r1-card-title">Evidence</div>', unsafe_allow_html=True)
+                camera_reviews_unresolved=camera_windows[camera_windows["Review Status"]=="Unresolved"]
+                evidence_rows=[("Camera reviews complete", f"{len(camera_reviews_complete)} of {len(camera_windows)}")]
+                if len(camera_reviews_unresolved): evidence_rows.append(("Unresolved", str(len(camera_reviews_unresolved))))
+                st.markdown(r1_kv(evidence_rows), unsafe_allow_html=True)
+                if len(camera_reviews_unresolved):
+                    st.markdown('<div class="r1-meta">Unresolved = review given up on at trial end. Not counted as complete.</div>', unsafe_allow_html=True)
+                if not len(windows): st.markdown('<div class="r1-meta">No closed windows in this selection</div>', unsafe_allow_html=True)
+
+        # Only surface exceptions that could change the decision.
+        attention=confirmed_kills[
+            (confirmed_kills["Final Humane Kill"]=="No") |
+            (confirmed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES) |
+            (confirmed_kills["Final Humane Kill"].isin(["","Pending","Unclear","Not assessable"])) |
+            ((confirmed_kills["Camera Assigned"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].isna())
+        ].copy()
+
+        r1_section("Camera conversion funnel")
+        camera_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Camera ID"].astype(str).str.strip()!="")]
+        if site!="All sites": camera_traps=camera_traps[camera_traps["Site ID"]==site]
+        camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
+        reviewed_camera=camera_windows[(camera_windows["Review Status"]=="Complete") & (camera_windows["Evidence Usable"]=="Yes")]
+        interacted=reviewed_camera[reviewed_camera["Target Present"]=="Yes"]
+        entered=interacted[interacted["Entered Strike Area"]=="Yes"]
+        activated=entered[entered["Trap Activated"]=="Yes"]
+        killed=activated[activated["Kill Confirmed"]=="Yes"]
+        humane_funnel=killed[killed["Final Humane Kill"]=="Yes"]
+        total_product_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Status"]=="Active")]
+        if site!="All sites": total_product_traps=total_product_traps[total_product_traps["Site ID"]==site]
+        # Stage count, order, labels, conversion calculation and "main loss"
+        # selection logic below are unchanged from before this restyle - Trial
+        # performance brief 2h locks this section's visuals once shipped, and
+        # the brief is explicit that the underlying logic must stay
+        # byte-identical, not just look the same.
+        stages=[("Rat interacted",len(interacted)),("Meaningful entry",len(entered)),("Trap activated",len(activated)),("Rat killed",len(killed)),("Humane kill",len(humane_funnel))]
+        base=max(1,len(interacted))
         with app_card():
-            st.markdown("#### Kill outcome")
-            coequal_stats([
-                (len(humane), "good kills", ""),
-                (f"{humane_rate:.0f}%" if humane_rate is not None else "—", "humane", "success" if humane_rate is not None else ""),
-            ])
-            if len(final_pending):
-                action_callout(f"→ {len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention")
-            if len(not_assessed):
-                no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
-                trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
-                reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
-                st.caption(f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} counted but not assessed ({', '.join(reasons)}) — not in the humane rate.")
-            card_footer(
-                "Necropsy-dependent",
-                f"Necropsy = physical examination of the collected animal. Based on {assessed_kills} of {len(physical_kills)} confirmed kills with a completed necropsy assessment. All {len(physical_kills)} count as kills; only assessed kills count toward the humane rate.",
-            )
-    with time_card:
-        with app_card():
-            st.markdown("#### Time to kill")
-            st.metric("Met <24 hr target",f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—")
-            st.write(f"**Median: {human_duration(minutes=interaction_to_kill)}**" if interaction_to_kill is not None else "**No usable timing yet**")
-            # Coverage relative to the full physical-kill population, not just the
-            # internal met/missed split within the timed sample - "8 of 10 met
-            # target" reads very differently depending on whether that "10" is
-            # 90% or 15% of all confirmed kills.
-            if len(physical_kills):
-                if len(timed_kills) == len(physical_kills):
-                    st.caption(f"All {len(physical_kills)} confirmed kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
+            rows_html=[]
+            for i,(label,count) in enumerate(stages):
+                prior=stages[i-1][1] if i else None
+                conversion=(count/prior*100) if prior else None
+                bar_pct=min(100,count/base*100)
+                if conversion is None:
+                    conversion_html='<div class="funnel-conversion base">base</div>'
                 else:
-                    st.caption(f"{len(timed_kills)} of {len(physical_kills)} total kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
-            card_footer(
-                "Camera-dependent",
-                f"Camera review = watching footage of the event. Based on {len(timed_kills)} of {len(physical_kills)} confirmed kills with usable, camera-reviewed footage timing.",
-            )
-    with evidence_card:
-        with app_card():
-            st.markdown("#### Evidence")
-            st.metric("Kill assessments complete",f"{len(kill_evidence_complete)} of {len(physical_kills)}")
-            st.caption(f"Camera reviews complete: {len(camera_reviews_complete)} of {len(camera_windows)}")
-            camera_reviews_unresolved=camera_windows[camera_windows["Review Status"]=="Unresolved"]
-            if len(camera_reviews_unresolved):
-                st.caption(f"Unresolved: {len(camera_reviews_unresolved)} — review given up on at trial end. Not counted as complete.")
-            if not len(windows): st.caption("No closed windows in this selection")
-            card_footer(
-                "Coverage card",
-                f"Open camera reviews: {len(camera_reviews_open)} · Unusable footage: {len(unusable)} — explains the denominators on the other two cards.",
-            )
-
-    # Only surface exceptions that could change the decision.
-    attention=confirmed_kills[
-        (confirmed_kills["Final Humane Kill"]=="No") |
-        (confirmed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES) |
-        (confirmed_kills["Final Humane Kill"].isin(["","Pending","Unclear","Not assessable"])) |
-        ((confirmed_kills["Camera Assigned"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].isna())
-    ].copy()
-
-    st.subheader("Camera conversion funnel")
-    camera_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Camera ID"].astype(str).str.strip()!="")]
-    if site!="All sites": camera_traps=camera_traps[camera_traps["Site ID"]==site]
-    camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
-    reviewed_camera=camera_windows[(camera_windows["Review Status"]=="Complete") & (camera_windows["Evidence Usable"]=="Yes")]
-    interacted=reviewed_camera[reviewed_camera["Target Present"]=="Yes"]
-    entered=interacted[interacted["Entered Strike Area"]=="Yes"]
-    activated=entered[entered["Trap Activated"]=="Yes"]
-    killed=activated[activated["Kill Confirmed"]=="Yes"]
-    humane_funnel=killed[killed["Final Humane Kill"]=="Yes"]
-    total_product_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Status"]=="Active")]
-    if site!="All sites": total_product_traps=total_product_traps[total_product_traps["Site ID"]==site]
-    # Stage count, order, labels, conversion calculation and "main loss"
-    # selection logic below are unchanged from before this restyle - Trial
-    # performance brief 2h locks this section's visuals once shipped, and
-    # the brief is explicit that the underlying logic must stay
-    # byte-identical, not just look the same.
-    stages=[("Rat interacted",len(interacted)),("Meaningful entry",len(entered)),("Trap activated",len(activated)),("Rat killed",len(killed)),("Humane kill",len(humane_funnel))]
-    base=max(1,len(interacted))
-    with app_card():
-        rows_html=[]
-        for i,(label,count) in enumerate(stages):
-            prior=stages[i-1][1] if i else None
-            conversion=(count/prior*100) if prior else None
-            bar_pct=min(100,count/base*100)
-            if conversion is None:
-                conversion_html='<div class="funnel-conversion base">base</div>'
+                    conversion_html=f'<div class="funnel-conversion">{conversion:.0f}%<span class="sub">from prior</span></div>'
+                rows_html.append(
+                    '<div class="funnel-row">'
+                    f'<div><div class="funnel-label">{html.escape(label)}</div><div class="funnel-count">{count} window{"s" if count!=1 else ""}</div></div>'
+                    f'<div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
+                    f'{conversion_html}'
+                    '</div>'
+                )
+            st.markdown("".join(rows_html), unsafe_allow_html=True)
+            if len(interacted):
+                losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
+                loss_label,loss_count=max(losses,key=lambda x:x[1])
+                if loss_count>0:
+                    st.markdown(f'<div class="main-loss">Main loss: {loss_count} reviewed camera window{"s" if loss_count!=1 else ""} with rat interaction {loss_label}.</div>', unsafe_allow_html=True)
             else:
-                conversion_html=f'<div class="funnel-conversion">{conversion:.0f}%<span class="sub">from prior</span></div>'
-            rows_html.append(
-                '<div class="funnel-row">'
-                f'<div><div class="funnel-label">{html.escape(label)}</div><div class="funnel-count">{count} window{"s" if count!=1 else ""}</div></div>'
-                f'<div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
-                f'{conversion_html}'
-                '</div>'
+                helper("No reviewed camera windows with target interaction are available for this selection.")
+            card_footer(
+                "Camera-sampled evidence",
+                f"{len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage. This funnel reflects that sample, not every kill trial-wide."
+                '<br><br><b>Terms:</b> a "window" is one monitoring period for a trap, between two checks — opens when a trap is set or reset, closes whenever the next check happens, whatever the outcome. Stages: Rat interacted (detected at/near the trap) → Meaningful entry (entered far enough to potentially trigger it) → Trap activated (mechanism fired) → Rat killed → Humane kill (met the humane standard). Each stage is a subset of the one before it.',
+                wide=True,
             )
-        st.markdown("".join(rows_html), unsafe_allow_html=True)
-        if len(interacted):
-            losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
-            loss_label,loss_count=max(losses,key=lambda x:x[1])
-            if loss_count>0:
-                st.markdown(f'<div class="main-loss">Main loss: {loss_count} reviewed camera window{"s" if loss_count!=1 else ""} with rat interaction {loss_label}.</div>', unsafe_allow_html=True)
+
+        r1_section("What is driving the result?")
+        st.markdown('<div class="r1-meta">Use one breakdown at a time to see where bad kills or slow kills are clustering.</div>', unsafe_allow_html=True)
+        default_breakdown="Build" if selected=="Compare builds" else "Rodent weight"
+        breakdown_options=["Rodent weight","Rat type","Build","Site","Trap"]
+        breakdown=st.selectbox("Break down performance by",breakdown_options,index=breakdown_options.index(default_breakdown))
+
+        group_map={
+            "Rodent weight":"Animal Weight Range",
+            "Rat type":"Rat Type",
+            "Build":"Build Version",
+            "Site":"Site ID",
+            "Trap":"Trap ID",
+        }
+        group_col=group_map[breakdown]
+        breakdown_source=confirmed_kills.copy()
+        breakdown_source[group_col]=breakdown_source[group_col].fillna("").replace("","Unknown")
+
+        if breakdown_source.empty:
+            helper("No completed kills are available for this selection.")
         else:
-            helper("No reviewed camera windows with target interaction are available for this selection.")
-        card_footer(
-            "Camera-sampled evidence",
-            f"{len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage. This funnel reflects that sample, not every kill trial-wide."
-            '<br><br><b>Terms:</b> a "window" is one monitoring period for a trap, between two checks — opens when a trap is set or reset, closes whenever the next check happens, whatever the outcome. Stages: Rat interacted (detected at/near the trap) → Meaningful entry (entered far enough to potentially trigger it) → Trap activated (mechanism fired) → Rat killed → Humane kill (met the humane standard). Each stage is a subset of the one before it.',
-            wide=True,
-        )
+            rows=[]
+            for group_value,gp in breakdown_source.groupby(group_col,dropna=False):
+                good=len(gp[gp["Final Humane Kill"]=="Yes"])
+                bad=len(gp[gp["Final Humane Kill"]=="No"])
+                assessed=good+bad
+                gp_timed=gp[gp["Interaction To Kill Numeric"].notna()]
+                met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES])
+                missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES])
+                rows.append({
+                    breakdown: site_name(data,group_value) if breakdown=="Site" and group_value!="Unknown" else group_value,
+                    "Kills":len(gp),
+                    "Good":good,
+                    "Bad":bad,
+                    "Humane":f"{good/assessed*100:.0f}%" if assessed else "—",
+                    "Met <24 hr":met,
+                    "Missed <24 hr":missed,
+                    "Time target":f"{met/len(gp_timed)*100:.0f}%" if len(gp_timed) else "—",
+                    "Median interaction → kill":human_duration(minutes=gp_timed["Interaction To Kill Numeric"].median()) if len(gp_timed) else "—",
+                })
+            breakdown_df=pd.DataFrame(rows)
+            if breakdown=="Rodent weight":
+                # Rat and mouse bands are two different scales sharing one column
+                # (a mouse's "0–10 g" isn't the same band as a rat's "0–50 g"),
+                # so they can't be merged into one ascending-by-gram order without
+                # inventing a meaningless cross-species ranking. Keep them as two
+                # internally-ordered groups instead - rat bands first (unchanged
+                # from before mice had their own scale), then mouse bands, then
+                # Unknown last - rather than letting every mouse band collapse
+                # into the same "not found" bucket as genuinely unknown weights.
+                all_bands=RAT_WEIGHT_RANGES+MOUSE_WEIGHT_RANGES
+                order={band:i for i,band in enumerate(all_bands)}; order["Unknown"]=len(all_bands)
+                breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(len(all_bands))
+                breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
+            else:
+                breakdown_df=breakdown_df.sort_values(breakdown)
+            st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
+            if breakdown in ("Rat type","Rodent weight"):
+                # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
+                confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
+                st.caption(f"{confirmed_species_n} of {len(breakdown_source)} windows have necropsy-confirmed species. Remaining {len(breakdown_source)-confirmed_species_n} rest on unconfirmed field guesses.")
 
-    st.subheader("What is driving the result?")
-    st.caption("Use one breakdown at a time to see where bad kills or slow kills are clustering.")
-    default_breakdown="Build" if selected=="Compare builds" else "Rodent weight"
-    breakdown_options=["Rodent weight","Rat type","Build","Site","Trap"]
-    breakdown=st.selectbox("Break down performance by",breakdown_options,index=breakdown_options.index(default_breakdown))
+        if not attention.empty:
+            r1_section("Results needing attention")
+            bad_count=len(non_humane)
+            slow_count=len(missed_target)
+            missing_count=len(attention[
+                (~attention["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(attention["Final Humane Kill"])) |
+                ((attention["Camera Assigned"]=="Yes") & attention["Interaction To Kill Numeric"].isna())
+            ])
+            summary_parts=[]
+            if bad_count: summary_parts.append(f"{bad_count} bad kill{'s' if bad_count!=1 else ''}")
+            if slow_count: summary_parts.append(f"{slow_count} kill{'s' if slow_count!=1 else ''} missed the time target")
+            if missing_count: summary_parts.append(f"{missing_count} incomplete result{'s' if missing_count!=1 else ''}")
+            st.markdown(design.message_html("warn", "", " · ".join(summary_parts)), unsafe_allow_html=True)
+            with st.expander(f"Review {len(attention)} result{'s' if len(attention)!=1 else ''}"):
+                attention_display=attention.copy()
+                attention_display["Interaction → kill"]=attention_display["Interaction To Kill Numeric"].apply(lambda x: human_duration(minutes=x) if pd.notna(x) else "—")
+                cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Final Humane Kill","Interaction → kill","Review Status"]
+                st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
+        elif len(confirmed_kills):
+            st.markdown(design.message_html("success", "", "No bad kills, missed time targets or incomplete kill results in this selection."), unsafe_allow_html=True)
 
-    group_map={
-        "Rodent weight":"Animal Weight Range",
-        "Rat type":"Rat Type",
-        "Build":"Build Version",
-        "Site":"Site ID",
-        "Trap":"Trap ID",
-    }
-    group_col=group_map[breakdown]
-    breakdown_source=confirmed_kills.copy()
-    breakdown_source[group_col]=breakdown_source[group_col].fillna("").replace("","Unknown")
+        with st.expander("More detail"):
+            camera_assessed=windows[(windows["Camera Assigned"]=="Yes") & (windows["Review Status"]=="Complete") & (windows["Evidence Usable"]=="Yes") & (windows["Target Present"].isin(["Yes","No"]))]
+            interacted=camera_assessed[camera_assessed["Target Present"]=="Yes"]
+            activated=interacted[interacted["Trap Activated"]=="Yes"]
+            observed_activation=activated[activated["Activation Evidence"]=="Observed"]
+            killed=interacted[interacted["Kill Confirmed"]=="Yes"]
+            repeated_no_kill=interacted[(interacted["Interaction Level"].isin(["Repeated interaction","Heavy / repeated interaction"])) & (interacted["Kill Confirmed"]!="Yes")]
 
-    if breakdown_source.empty:
-        helper("No completed kills are available for this selection.")
-    else:
-        rows=[]
-        for group_value,gp in breakdown_source.groupby(group_col,dropna=False):
-            good=len(gp[gp["Final Humane Kill"]=="Yes"])
-            bad=len(gp[gp["Final Humane Kill"]=="No"])
-            assessed=good+bad
-            gp_timed=gp[gp["Interaction To Kill Numeric"].notna()]
-            met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES])
-            missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES])
-            rows.append({
-                breakdown: site_name(data,group_value) if breakdown=="Site" and group_value!="Unknown" else group_value,
-                "Kills":len(gp),
-                "Good":good,
-                "Bad":bad,
-                "Humane":f"{good/assessed*100:.0f}%" if assessed else "—",
-                "Met <24 hr":met,
-                "Missed <24 hr":missed,
-                "Time target":f"{met/len(gp_timed)*100:.0f}%" if len(gp_timed) else "—",
-                "Median interaction → kill":human_duration(minutes=gp_timed["Interaction To Kill Numeric"].median()) if len(gp_timed) else "—",
-            })
-        breakdown_df=pd.DataFrame(rows)
-        if breakdown=="Rodent weight":
-            # Rat and mouse bands are two different scales sharing one column
-            # (a mouse's "0–10 g" isn't the same band as a rat's "0–50 g"),
-            # so they can't be merged into one ascending-by-gram order without
-            # inventing a meaningless cross-species ranking. Keep them as two
-            # internally-ordered groups instead - rat bands first (unchanged
-            # from before mice had their own scale), then mouse bands, then
-            # Unknown last - rather than letting every mouse band collapse
-            # into the same "not found" bucket as genuinely unknown weights.
-            all_bands=RAT_WEIGHT_RANGES+MOUSE_WEIGHT_RANGES
-            order={band:i for i,band in enumerate(all_bands)}; order["Unknown"]=len(all_bands)
-            breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(len(all_bands))
-            breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
-        else:
-            breakdown_df=breakdown_df.sort_values(breakdown)
-        st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
-        if breakdown in ("Rat type","Rodent weight"):
-            # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
-            confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
-            st.caption(f"{confirmed_species_n} of {len(breakdown_source)} windows have necropsy-confirmed species. Remaining {len(breakdown_source)-confirmed_species_n} rest on unconfirmed field guesses.")
+            attraction_rate=len(interacted)/len(camera_assessed)*100 if len(camera_assessed) else None
+            activation_rate=len(activated)/len(interacted)*100 if len(interacted) else None
+            conversion_rate=len(killed)/len(interacted)*100 if len(interacted) else None
+            deployment_to_interaction=median_numeric(interacted,"Time To First Interaction Hr")
+            interaction_to_activation=median_numeric(observed_activation,"Interaction To Trigger Min")
 
-    if not attention.empty:
-        st.subheader("Results needing attention")
-        bad_count=len(non_humane)
-        slow_count=len(missed_target)
-        missing_count=len(attention[
-            (~attention["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(attention["Final Humane Kill"])) |
-            ((attention["Camera Assigned"]=="Yes") & attention["Interaction To Kill Numeric"].isna())
-        ])
-        summary_parts=[]
-        if bad_count: summary_parts.append(f"{bad_count} bad kill{'s' if bad_count!=1 else ''}")
-        if slow_count: summary_parts.append(f"{slow_count} kill{'s' if slow_count!=1 else ''} missed the time target")
-        if missing_count: summary_parts.append(f"{missing_count} incomplete result{'s' if missing_count!=1 else ''}")
-        st.warning(" · ".join(summary_parts))
-        with st.expander(f"Review {len(attention)} result{'s' if len(attention)!=1 else ''}"):
-            attention_display=attention.copy()
-            attention_display["Interaction → kill"]=attention_display["Interaction To Kill Numeric"].apply(lambda x: human_duration(minutes=x) if pd.notna(x) else "—")
-            cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Final Humane Kill","Interaction → kill","Review Status"]
-            st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
-    elif len(confirmed_kills):
-        st.success("No bad kills, missed time targets or incomplete kill results in this selection.")
+            st.markdown("#### Diagnostic measures")
+            d1,d2,d3,d4=st.columns(4)
+            d1.metric("Target interaction",f"{attraction_rate:.0f}%" if attraction_rate is not None else "—")
+            d1.caption(f"{len(interacted)} of {len(camera_assessed)} assessed windows")
+            d2.metric("Interaction → activation",f"{activation_rate:.0f}%" if activation_rate is not None else "—")
+            d2.caption(f"{len(activated)} of {len(interacted)} interactions")
+            d3.metric("Interaction → kill",f"{conversion_rate:.0f}%" if conversion_rate is not None else "—")
+            d3.caption(f"{len(killed)} of {len(interacted)} interactions")
+            d4.metric("Repeated interaction, no kill",len(repeated_no_kill))
 
-    with st.expander("More detail"):
-        camera_assessed=windows[(windows["Camera Assigned"]=="Yes") & (windows["Review Status"]=="Complete") & (windows["Evidence Usable"]=="Yes") & (windows["Target Present"].isin(["Yes","No"]))]
-        interacted=camera_assessed[camera_assessed["Target Present"]=="Yes"]
-        activated=interacted[interacted["Trap Activated"]=="Yes"]
-        observed_activation=activated[activated["Activation Evidence"]=="Observed"]
-        killed=interacted[interacted["Kill Confirmed"]=="Yes"]
-        repeated_no_kill=interacted[(interacted["Interaction Level"].isin(["Repeated interaction","Heavy / repeated interaction"])) & (interacted["Kill Confirmed"]!="Yes")]
+            st.markdown("#### Diagnostic timing")
+            t1,t2=st.columns(2)
+            t1.metric("Median deployment → interaction",human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—")
+            t2.metric("Median interaction → observed activation",human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—")
+            t2.caption(f"Based on {len(observed_activation)} observed activations; inferred activations excluded")
 
-        attraction_rate=len(interacted)/len(camera_assessed)*100 if len(camera_assessed) else None
-        activation_rate=len(activated)/len(interacted)*100 if len(interacted) else None
-        conversion_rate=len(killed)/len(interacted)*100 if len(interacted) else None
-        deployment_to_interaction=median_numeric(interacted,"Time To First Interaction Hr")
-        interaction_to_activation=median_numeric(observed_activation,"Interaction To Trigger Min")
+            st.markdown("#### All closed result records")
+            cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Evidence Usable","Target Present","Interaction Level","Trap Activated","Activation Evidence","Kill Confirmed","Outcome","Interaction To Kill Min","Final Humane Kill","Review Status"]
+            st.dataframe(windows[cols],use_container_width=True,hide_index=True)
 
-        st.markdown("#### Diagnostic measures")
-        d1,d2,d3,d4=st.columns(4)
-        d1.metric("Target interaction",f"{attraction_rate:.0f}%" if attraction_rate is not None else "—")
-        d1.caption(f"{len(interacted)} of {len(camera_assessed)} assessed windows")
-        d2.metric("Interaction → activation",f"{activation_rate:.0f}%" if activation_rate is not None else "—")
-        d2.caption(f"{len(activated)} of {len(interacted)} interactions")
-        d3.metric("Interaction → kill",f"{conversion_rate:.0f}%" if conversion_rate is not None else "—")
-        d3.caption(f"{len(killed)} of {len(interacted)} interactions")
-        d4.metric("Repeated interaction, no kill",len(repeated_no_kill))
-
-        st.markdown("#### Diagnostic timing")
-        t1,t2=st.columns(2)
-        t1.metric("Median deployment → interaction",human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—")
-        t2.metric("Median interaction → observed activation",human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—")
-        t2.caption(f"Based on {len(observed_activation)} observed activations; inferred activations excluded")
-
-        st.markdown("#### All closed result records")
-        cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Evidence Usable","Target Present","Interaction Level","Trap Activated","Activation Evidence","Kill Confirmed","Outcome","Interaction To Kill Min","Final Humane Kill","Review Status"]
-        st.dataframe(windows[cols],use_container_width=True,hide_index=True)
-
-        st.markdown("#### Calculation definitions")
-        st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
-        st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
-        st.write("**Bad kill:** final humane-kill assessment is No.")
-        st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
-        st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
-        st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
-        st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
-        st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
+            st.markdown("#### Calculation definitions")
+            st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
+            st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
+            st.write("**Bad kill:** final humane-kill assessment is No.")
+            st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
+            st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
+            st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
+            st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
+            st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
 
 
 elif page == "trap_edit":

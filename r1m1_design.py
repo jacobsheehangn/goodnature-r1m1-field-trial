@@ -298,6 +298,11 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-visit_filter_expanded_"] label p{{font-size:15px;line-height:20px;font-weight:400;color:var(--ink-70)}}
 /* ...but still a 44px tap target: the whole label is the button. */
 .stApp [class*="st-key-visit_filter_expanded_"] label{{min-height:44px;display:flex;align-items:center;cursor:pointer}}
+/* Big numbers on a summary card (Trial performance), and a heading between cards. */
+.r1-stats2{{display:flex;gap:36px;align-items:flex-end;margin:4px 0 8px}}
+.r1-bigstat{{font-size:36px;line-height:40px;font-weight:700}}
+.r1-bigstat-label{{font-size:14px;line-height:20px;color:var(--ink-70)}}
+.r1-section{{font-size:22px;line-height:30px;font-weight:700;margin:24px 0 4px}}
 .r1-donerow.is-just-saved{{background:var(--green-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow.is-just-saved .r1-donebox{{background:#fff}}
 /* A progress bar: a thin ink-05 track with an orange fill. */

@@ -279,8 +279,8 @@ def test_end_trial_from_a_partial_visit_resolves_everything_in_one_atomic_save(p
         expect(page.get_by_text("Trap type", exact=True)).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1000)
         _choose(page, "Trap type", "R1")
-        expect(page.get_by_text("1 kill counted but not assessed (1 trial ended) — not in the humane rate.", exact=True)).to_be_visible(timeout=30_000)
-        expect(page.get_by_text("Unresolved: 1 — review given up on at trial end. Not counted as complete.", exact=True)).to_be_visible()
+        expect(page.get_by_text("1 kill not assessed (1 trial ended).", exact=True)).to_be_visible(timeout=30_000)  # Phase 7b: the board's wording
+        expect(page.get_by_text("Unresolved = review given up on at trial end. Not counted as complete.", exact=True)).to_be_visible()
         assert page.get_by_text("awaiting final assessment", exact=False).count() == 0, "the kill no longer sits in the awaiting callout"
 
 

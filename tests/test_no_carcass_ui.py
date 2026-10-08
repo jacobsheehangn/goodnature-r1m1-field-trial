@@ -311,18 +311,15 @@ def test_trial_performance_counts_the_not_assessed_kills_honestly(page: Page, tm
 
         # 17 confirmed kills = 12 humane + 2 not humane + 1 awaiting + 2 not assessed.
         expect(page.get_by_text("86%", exact=True).first).to_be_visible(timeout=15_000)  # 12 of the 14 assessed
-        expect(page.get_by_text("→ 1 kill awaiting final assessment — see Results needing attention", exact=True)).to_be_visible(timeout=15_000)
-        expect(page.get_by_text(
-            "2 kills counted but not assessed (1 no carcass, 1 trial ended) — not in the humane rate.", exact=True
-        )).to_be_visible(timeout=15_000)
-        expect(page.get_by_text("14 of 17", exact=True).first).to_be_visible(timeout=15_000)  # Kill assessments complete
-        expect(page.get_by_text(
-            "Unresolved: 1 — review given up on at trial end. Not counted as complete.", exact=True
-        )).to_be_visible(timeout=15_000)
-        assert (
-            "Based on 14 of 17 confirmed kills with a completed necropsy assessment. "
-            "All 17 count as kills; only assessed kills count toward the humane rate."
-        ) in page.content()
+        expect(page.get_by_text("1 kill awaiting final assessment — see Results needing attention", exact=True)).to_be_visible(timeout=15_000)  # Phase 7b: the board's wording, no arrow
+        # Phase 7b: the TrialPerformance board's wording for the same facts (the long footer sentence is gone; the definitions are under More detail).
+        expect(page.get_by_text("2 kills not assessed (1 no carcass, 1 trial ended).", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("Based on 14 assessed kills of 17.", exact=True)).to_be_visible(timeout=15_000)
+        evidence = page.locator('[class*="st-key-card_perf_evidence"]')
+        expect(evidence.get_by_text("Unresolved", exact=True)).to_be_visible(timeout=15_000)
+        assert evidence.locator(".r1-kv").filter(has_text="Unresolved").inner_text().replace("\n", " ").endswith("1")
+        expect(page.get_by_text("Unresolved = review given up on at trial end. Not counted as complete.", exact=True)).to_be_visible(timeout=15_000)
+        assert "Necropsy-dependent" not in page.content() and "All 17 count as kills" not in page.content(), "the long footers are gone"
 
         # The two not-assessed kills are not "incomplete results": 2 bad kills + 1 awaiting.
         expect(page.get_by_text("2 bad kills · 1 incomplete result", exact=True)).to_be_visible(timeout=15_000)
