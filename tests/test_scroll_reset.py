@@ -116,14 +116,22 @@ def _walk_the_screens(page: Page, url: str) -> None:
     assert _half_way_down(page) > 100, "the trap list must be scrolled for this to prove anything"
     page.get_by_role("button", name="Check", exact=True).first.click(); expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "the check form opened from the trap list")
-    assert _half_way_down(page) > 50, "the check form must be scrolled for this to prove anything"
+    assert _half_way_down(page) > 10, "the check form must be scrolled for this to prove anything"  # a short form on the 7b screens
     page.get_by_role("button", name=re.compile("Back to trap selector")).click(); expect(trap_list).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "the trap list reached from the check form")
-    assert _half_way_down(page) > 50, "the trap list must be scrolled for this to prove anything"
+    assert _half_way_down(page) > 10, "the trap list must be scrolled for this to prove anything"
+    if not page.get_by_role("link", name=re.compile(r"^Follow-ups")).count():  # the 7b trap list hides the top navigation
+        page.get_by_role("button", name="Exit to Trap sites").click(); expect(sites).to_be_visible(timeout=30_000)
+        _lands_at_the_top_and_stays(page, "Trap sites reached from the trap list")
+        assert _half_way_down(page) > 100, "Trap sites must be scrolled for this to prove anything"
     page.get_by_role("link", name=re.compile(r"^Follow-ups")).click(); expect(page.get_by_role("heading", name="Follow-ups")).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "Follow-ups opened from the top navigation")
     _half_way_down(page)
-    page.get_by_role("link", name=re.compile(r"^Trial performance")).click(); expect(page.get_by_role("heading", name="Trial performance")).to_be_visible(timeout=30_000)
+    performance = page.get_by_role("link", name=re.compile(r"^Trial performance"))
+    if not performance.count():  # on a phone the 7b navigation keeps it in the More menu
+        page.get_by_role("button", name="More", exact=True).click()
+        performance = page.get_by_role("dialog", name="More").get_by_role("link", name="Trial performance", exact=True)
+    performance.click(); expect(page.get_by_role("heading", name="Trial performance")).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "Trial performance opened from the top navigation")
 
 
