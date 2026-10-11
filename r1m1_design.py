@@ -219,8 +219,10 @@ COMPONENT_CSS = f"""
   content:"";flex:0 0 24px;width:24px;height:24px;border-radius:50%;box-sizing:border-box;border:2px solid var(--ink-50);background:transparent}}
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
+/* The legacy sheet draws a small orange centre dot for any checked radio, absolutely placed at left:5px !important; the tick of an option row is
+   that same pseudo-element, so it is put back in the row's flex layout (at the right) or it sits over the first letter of the label. */
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked)::after{{
-  border:0;background:var(--orange) {_CHECK_DATA_URI} center/12px no-repeat}}
+  position:static;left:auto;top:auto;transform:none;border:0;background:var(--orange) {_CHECK_DATA_URI} center/12px no-repeat}}
 
 /* ---- Final-result rows: the same option rows, two across ---- */
 [class*="st-key-rows2"] [data-testid="stRadioGroup"]{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
