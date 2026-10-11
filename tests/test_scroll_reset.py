@@ -86,6 +86,11 @@ def test_each_step_of_set_up_and_end_trial_opens_at_the_top(page: Page, tmp_path
 # of the old position survives is down to timing: Chromium on a laptop clamps it to 0, WebKit (the engine of iPhone Safari)
 # keeps part of it. So the screens are opened here in both engines.
 
+def _trap_list_marker(page: Page):
+    """The trap list is open: its sub-line before Phase 7b removed it, the Finish site check button on every line."""
+    return page.get_by_text("Select the trap you are standing at.", exact=True).or_(page.get_by_role("button", name=re.compile(r"^Finish site check"))).first
+
+
 def _half_way_down(page: Page) -> int:
     page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = (el.scrollHeight - el.clientHeight) / 2 }")
     page.wait_for_timeout(400)
@@ -103,7 +108,7 @@ def _lands_at_the_top_and_stays(page: Page, what: str) -> None:
 
 def _walk_the_screens(page: Page, url: str) -> None:
     sites = page.get_by_role("button", name=re.compile(r"^(Resume|Start) checking$")).first
-    trap_list = page.get_by_text("Select the trap you are standing at.", exact=True)
+    trap_list = _trap_list_marker(page)
     page.goto(url, wait_until="domcontentloaded"); expect(sites).to_be_visible(timeout=40_000); page.wait_for_timeout(1500)
     assert _half_way_down(page) > 100, "Trap sites must be scrolled for this to prove anything"
     sites.click(); expect(trap_list).to_be_visible(timeout=30_000)
@@ -169,7 +174,7 @@ def test_a_screen_the_operator_starts_scrolling_straight_away_is_not_pulled_back
         sites = page.get_by_role("button", name=re.compile(r"^(Resume|Start) checking$")).first
         expect(sites).to_be_visible(timeout=40_000); page.wait_for_timeout(1500)
         sites.click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(_trap_list_marker(page)).to_be_visible(timeout=30_000)
         expect(page.locator('iframe[srcdoc*="handOver"]')).to_have_count(1, timeout=10_000)  # the reset is running
         page.wait_for_timeout(150)
         page.mouse.move(200, 500); page.mouse.wheel(0, 300)
