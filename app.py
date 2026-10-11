@@ -2722,23 +2722,48 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     return False
 
 
+def scroll_signature() -> tuple:
+    """Which screen the operator is on: the Streamlit page, the app's own page and the site/visit/trap it is about."""
+    native = globals().get("selected_navigation_page")
+    return (
+        getattr(native, "url_path", None),
+        st.session_state.get("page"),
+        *(st.session_state.get(key) for key in WORKFLOW_CONTEXT_QUERY_KEYS),
+    )
+
+
 def scroll_to_top_once():
-    """Reset Streamlit's current page after navigation and rerender settling."""
-    if not st.session_state.pop("scroll_to_top_once", False):
+    """Open the screen the operator has just moved to at its top, whatever position the screen they left was scrolled to.
+
+    Streamlit 1.60 scrolls section[data-testid="stMain"] and keeps that element between screens. When a screen is swapped
+    for another, the page briefly collapses and grows back, and how much of the old scroll position survives depends on
+    timing: on a phone a screen opened from half-way down another often opened half-way down itself. The reset therefore
+    targets stMain on every screen, and it is asked for by what changed on screen (scroll_signature) as well as by the
+    navigation helpers that set the flag, so a route that sets no flag (a direct switch_page, a resumed session) still opens
+    at the top. The one screen that asks to land part-way down, the check form restored on its Camera check, says so with
+    scroll_hold_for_anchor."""
+    flagged = st.session_state.pop("scroll_to_top_once", False)
+    signature = scroll_signature()
+    changed = st.session_state.get("scroll_signature_seen") not in (None, signature)
+    st.session_state["scroll_signature_seen"] = signature
+    if st.session_state.pop("scroll_hold_for_anchor", False) or not (flagged or changed):
         return
-    # Streamlit 1.60 scrolls section[data-testid="stMain"], which none of the long-standing targets below name, so on the
-    # existing pages this reset has no effect (measured on origin/main). That is left exactly as it was: the check page's
-    # resume-to-camera scroll and the forms on Data & records were built and tested around it. The trial journey screens
-    # are new, and they need the reset to work (a step opens at its top), so only they get the real target.
-    main_target = "doc.querySelector('section[data-testid=\"stMain\"]')," if st.session_state.get("page") in TRIAL_JOURNEY_PAGES else ""
     components.html(
         """
         <script>
         (() => {
+          // run %NONCE%: a fresh srcdoc each time so two resets in a row both run
           const parent = window.parent;
           const doc = parent.document;
 
+          // Once the operator touches, scrolls or types, the page is theirs: stop pulling it back to the top.
+          let handedOver = false;
+          const handOver = () => { handedOver = true; };
+          const gestures = ['touchstart', 'wheel', 'keydown', 'mousedown'];
+          gestures.forEach((name) => doc.addEventListener(name, handOver, {capture: true, passive: true, once: true}));
+
           const reset = () => {
+            if (handedOver) return;
             // Deliberately not using topAnchor.scrollIntoView() here: the
             // #r1m1-page-top marker sits after the top nav bar in the DOM
             // (app.py places it just below the nav container), so scrolling
@@ -2751,7 +2776,7 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
-              /*MAIN_TARGET*/
+              doc.querySelector('section[data-testid="stMain"]'),
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -2779,9 +2804,10 @@ def scroll_to_top_once():
           reset();
           requestAnimationFrame(reset);
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
+          window.setTimeout(() => gestures.forEach((name) => doc.removeEventListener(name, handOver, true)), 1000);
         })();
         </script>
-        """.replace("/*MAIN_TARGET*/", main_target),
+        """.replace("%NONCE%", str(time.time_ns())),
         height=0,
         width=0,
     )
@@ -6992,6 +7018,7 @@ elif page == "check":
             st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
             st.markdown("### Camera check")
             if just_restored_draft:
+                st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
                 # Field report fix (2026-08-17): "focus directly where you
                 # left off" - Camera check is specifically where the Arlo
                 # app-switch happens, so it's the one place worth landing on
