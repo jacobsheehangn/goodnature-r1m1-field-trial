@@ -320,3 +320,44 @@ def test_a_tap_that_changes_nothing_on_screen_does_not_blank_the_page_first(page
         page.wait_for_timeout(9000)
         frames = page.evaluate("window.__frames")
     assert frames and all(f[3] for f in frames), f"the page was blanked during an in-place tap: {frames}"
+
+
+# --- the Add/Edit panels on Trial setup sit in a second column, which stacks below the whole list on a phone: opening one has to
+# bring it into view (on the iPhone profile "Add trap" opened its form 4000 px down a 5200 px page, so nothing seemed to happen).
+
+def _panel_walk(page: Page, url: str) -> None:
+    page.goto(url + "/trial-setup", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Trial setup")).to_be_visible(timeout=40_000); page.wait_for_timeout(2500)
+    for section, button, heading in (("Traps", "Add trap", "Add trap"), ("Trap sites", "Add site", "Add site"), ("Builds", "Add build", "Add build")):
+        page.get_by_role("radio", name=section, exact=True).check(force=True); page.wait_for_timeout(2000)
+        page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = 0 }")
+        page.get_by_role("button", name=button, exact=True).click()
+        panel = page.get_by_role("heading", name=heading).first
+        expect(panel).to_be_visible(timeout=30_000); page.wait_for_timeout(2200)
+        box = panel.bounding_box()
+        assert box and 0 <= box["y"] < 400, f"{button}: the panel's heading is near the top of the screen, not off it: {box}"
+        page.get_by_role("button", name="Cancel").first.click()
+        expect(page.get_by_role("heading", name=heading)).to_have_count(0, timeout=30_000)
+        _lands_at_the_top_and_stays(page, f"Trial setup after closing the {button} panel")
+
+
+def test_the_add_and_edit_panels_come_into_view_in_chromium(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size({"width": 390, "height": 664})
+    with _serve(data_dir, END_SEED) as url:
+        _panel_walk(page, url)
+
+
+def test_the_add_and_edit_panels_come_into_view_in_webkit(tmp_path: Path) -> None:
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.webkit.launch()
+        except Exception as exc:
+            pytest.skip(f"WebKit is not installed: {exc}")
+        data_dir = tmp_path / "d"; data_dir.mkdir()
+        try:
+            page = browser.new_context(**playwright.devices["iPhone 13"]).new_page()
+            with _serve(data_dir, END_SEED) as url:
+                _panel_walk(page, url)
+        finally:
+            browser.close()

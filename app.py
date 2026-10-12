@@ -2734,10 +2734,19 @@ def scroll_state_keys() -> tuple:
     )
 
 
+def scroll_panel_anchor() -> None:
+    """First thing in a side panel (the Add/Edit forms and the test-window panel): where the page lands when the panel opens on a
+    phone, where the columns stack and the panel sits below the whole list."""
+    st.markdown('<span id="r1m1-panel-anchor"></span>', unsafe_allow_html=True)
+
+
+SCROLL_PANEL_KEYS = ("setup_mode", "setup_trap", "site_mode", "setup_site", "build_mode", "setup_build", "window_panel", "data_quality_review")
+
+
 def scroll_signature() -> tuple:
     """scroll_state_keys() plus the title the screen drew. The title is what catches a screen swapped for another in place that
     no key announces: it needs no list of which screens do that."""
-    return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None,)
+    return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None, *(st.session_state.get(key) for key in SCROLL_PANEL_KEYS))
 
 
 def hide_stale_screen_while_navigating() -> None:
@@ -2821,6 +2830,14 @@ def scroll_to_top_once():
               parent.scrollTo({top: 0, left: 0, behavior: 'auto'});
             } catch (_) {
               parent.scrollTo(0, 0);
+            }
+
+            // A side panel that opened below the first screen (the columns stack on a phone) is where the operator should land.
+            const anchor = doc.getElementById('r1m1-panel-anchor');
+            const main = doc.querySelector('section[data-testid="stMain"]');
+            if (anchor && main) {
+              const y = anchor.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+              if (y > main.clientHeight * 0.5) main.scrollTo({top: Math.max(0, y - 12), left: 0, behavior: 'auto'});
             }
           };
 
@@ -8337,6 +8354,7 @@ elif page == "windows":
                         st.rerun()
     if panel is not None:
         with panel:
+            scroll_panel_anchor()
             wr=data["Windows"][data["Windows"]["Window ID"]==wid]
             if wr.empty:
                 st.session_state.pop("window_panel",None)
@@ -9013,6 +9031,7 @@ elif page == "setup":
                             go("trap_edit", trap_id=trap_id)
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
                 setup_title, setup_close = st.columns([1, 0.13], vertical_alignment="top")
                 with setup_title:
@@ -9223,6 +9242,7 @@ elif page == "setup":
                         st.session_state.setup_site=sid; st.session_state.site_mode="edit"; st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 ex=data["Sites"][data["Sites"]["Site ID"]==st.session_state.get("setup_site","")].iloc[0] if mode=="edit" else None
                 st.subheader("Edit site" if mode=="edit" else "Add site")
                 with st.form("site_setup_panel"):
@@ -9426,6 +9446,7 @@ elif page == "setup":
                         st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 if mode=="edit":
                     selected_build_identity=st.session_state.get("setup_build","")
                     selected_product, selected_version = selected_build_identity.split("::", 1)
