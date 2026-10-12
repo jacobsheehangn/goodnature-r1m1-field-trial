@@ -2722,13 +2722,35 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     return False
 
 
-def scroll_signature() -> tuple:
-    """Which screen the operator is on: the Streamlit page, the app's own page and the site/visit/trap it is about."""
+def scroll_state_keys() -> tuple:
+    """Which screen the session is on, from state alone: the Streamlit page, the app's own page, the site/visit/trap it is about
+    and the follow-up task open on the Follow-ups page (a task replaces the list in place, with no navigation)."""
     native = globals().get("selected_navigation_page")
     return (
         getattr(native, "url_path", None),
         st.session_state.get("page"),
         *(st.session_state.get(key) for key in WORKFLOW_CONTEXT_QUERY_KEYS),
+        st.session_state.get("followup_panel"),
+    )
+
+
+def scroll_signature() -> tuple:
+    """scroll_state_keys() plus the title the screen drew. The title is what catches a screen swapped for another in place that
+    no key announces: it needs no list of which screens do that."""
+    return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None,)
+
+
+def hide_stale_screen_while_navigating() -> None:
+    """Streamlit keeps the previous run's elements on screen, marked stale, until the run ends, and draws the new screen over
+    them from the top. When the new screen is shorter, or slow, the old screen's last buttons sit under the new screen's first
+    ones: on a phone, Finish site check showed up as a second set of three buttons under Trap sites. While the screen is being
+    changed those leftovers are hidden. The rule only applies while the marker drawn in the same run is current (not stale), so
+    it ends with the run and cannot hide the next tap's screen; always one element, so positions do not shift between runs."""
+    changing = bool(st.session_state.get("scroll_to_top_once")) or st.session_state.get("scroll_state_seen") not in (None, scroll_state_keys())
+    st.markdown(
+        '<style>section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark) [data-stale="true"]{display:none !important}</style><span class="r1-navmark"></span>'
+        if changing else "<style></style>",
+        unsafe_allow_html=True,
     )
 
 
@@ -2743,6 +2765,7 @@ def scroll_to_top_once():
     at the top. The one screen that asks to land part-way down, the check form restored on its Camera check, says so with
     scroll_hold_for_anchor."""
     flagged = st.session_state.pop("scroll_to_top_once", False)
+    st.session_state["scroll_state_seen"] = scroll_state_keys()
     signature = scroll_signature()
     changed = st.session_state.get("scroll_signature_seen") not in (None, signature)
     st.session_state["scroll_signature_seen"] = signature
@@ -4507,12 +4530,16 @@ def success_state(title: str, recorded=None, updated=None, next_action=None):
         st.write(next_action)
 
 
+SCREEN_TITLES: list = []  # the titles drawn in this run, first is the screen's own (the script re-runs top to bottom, so this starts empty each run)
+
+
 def header(title, subtitle="", *, emphasize_subtitle=False):
     """emphasize_subtitle: Trial performance brief 2c — that page's subtitle
     reframes toward the question the page answers and needs more visual
     weight against its H1/cards than the shared .page-context style gives
     every other page's subtitle. Opt-in per call site, not a global change
     to .page-context, since no other page asked for this."""
+    SCREEN_TITLES.append(str(title))
     st.title(title)
     if subtitle:
         subtitle_class = "page-context page-context-emphasis" if emphasize_subtitle else "page-context"
@@ -4543,6 +4570,7 @@ def set_flash(kind: str, title: str, lines=None):
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
+        st.session_state.scroll_to_top_once = True  # the message is at the top of the page: show it, wherever the operator was
         message_panel(flash["kind"], flash["title"], flash.get("lines", []))
 
 
@@ -4571,6 +4599,7 @@ def r1_stepper(current: int) -> None:
 
 
 def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = "") -> None:
+    SCREEN_TITLES.append(str(title))
     stat = (
         f'<div><div class="r1-stat">{html.escape(str(stat_value))}</div><div class="r1-stat-label">{html.escape(stat_label)}</div></div>'
         if stat_value is not None else ""
@@ -6427,6 +6456,7 @@ NAVIGATION_PAGES = {
 # routing, URLs and browser history remain framework-owned.
 selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
 selected_navigation_page.run()
+hide_stale_screen_while_navigating()
 
 PRIMARY_SECTION_BY_APP_PAGE = {
     "sites": "Trap sites",
