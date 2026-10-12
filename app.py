@@ -6969,7 +6969,14 @@ elif page == "check":
     # both what was actually intended and a real, if minor, existing bug
     # fix on its own.
     def _render_check_page():
-        just_restored_draft = seed_check_draft(vid, trap_id)
+        # The "scroll to the Camera check where you left off" below is for arriving on this page with a saved draft. Streamlit drops the
+        # state of widgets that are not on screen, so seed_check_draft() can restore a field again on a later rerun of the same visit
+        # to the page (the form growing as it is answered): on a trap whose check had been started before, tapping "Carcass collected?
+        # Yes" threw the page down to the Camera check. It can only fire on the first render of each arrival.
+        arrival = (vid, trap_id, int(st.session_state.get("navigation_sequence", 0)))
+        first_render_of_arrival = st.session_state.get("check_arrival_seen") != arrival
+        st.session_state["check_arrival_seen"] = arrival
+        just_restored_draft = seed_check_draft(vid, trap_id) and first_render_of_arrival
         st.button(
             "← Back to trap selector",
             on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": vid},
