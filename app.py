@@ -2722,13 +2722,44 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     return False
 
 
-def scroll_signature() -> tuple:
-    """Which screen the operator is on: the Streamlit page, the app's own page and the site/visit/trap it is about."""
+def scroll_state_keys() -> tuple:
+    """Which screen the session is on, from state alone: the Streamlit page, the app's own page, the site/visit/trap it is about
+    and the follow-up task open on the Follow-ups page (a task replaces the list in place, with no navigation)."""
     native = globals().get("selected_navigation_page")
     return (
         getattr(native, "url_path", None),
         st.session_state.get("page"),
         *(st.session_state.get(key) for key in WORKFLOW_CONTEXT_QUERY_KEYS),
+        st.session_state.get("followup_panel"),
+    )
+
+
+def scroll_panel_anchor() -> None:
+    """First thing in a side panel (the Add/Edit forms and the test-window panel): where the page lands when the panel opens on a
+    phone, where the columns stack and the panel sits below the whole list."""
+    st.markdown('<span id="r1m1-panel-anchor"></span>', unsafe_allow_html=True)
+
+
+SCROLL_PANEL_KEYS = ("setup_mode", "setup_trap", "site_mode", "setup_site", "build_mode", "setup_build", "window_panel", "data_quality_review")
+
+
+def scroll_signature() -> tuple:
+    """scroll_state_keys() plus the title the screen drew. The title is what catches a screen swapped for another in place that
+    no key announces: it needs no list of which screens do that."""
+    return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None, *(st.session_state.get(key) for key in SCROLL_PANEL_KEYS))
+
+
+def hide_stale_screen_while_navigating() -> None:
+    """Streamlit keeps the previous run's elements on screen, marked stale, until the run ends, and draws the new screen over
+    them from the top. When the new screen is shorter, or slow, the old screen's last buttons sit under the new screen's first
+    ones: on a phone, Finish site check showed up as a second set of three buttons under Trap sites. While the screen is being
+    changed those leftovers are hidden. The rule only applies while the marker drawn in the same run is current (not stale), so
+    it ends with the run and cannot hide the next tap's screen; always one element, so positions do not shift between runs."""
+    changing = bool(st.session_state.get("scroll_to_top_once")) or st.session_state.get("scroll_state_seen") not in (None, scroll_state_keys())
+    st.markdown(
+        '<style>section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark) [data-stale="true"]{display:none !important}</style><span class="r1-navmark"></span>'
+        if changing else "<style></style>",
+        unsafe_allow_html=True,
     )
 
 
@@ -2743,6 +2774,7 @@ def scroll_to_top_once():
     at the top. The one screen that asks to land part-way down, the check form restored on its Camera check, says so with
     scroll_hold_for_anchor."""
     flagged = st.session_state.pop("scroll_to_top_once", False)
+    st.session_state["scroll_state_seen"] = scroll_state_keys()
     signature = scroll_signature()
     changed = st.session_state.get("scroll_signature_seen") not in (None, signature)
     st.session_state["scroll_signature_seen"] = signature
@@ -2798,6 +2830,14 @@ def scroll_to_top_once():
               parent.scrollTo({top: 0, left: 0, behavior: 'auto'});
             } catch (_) {
               parent.scrollTo(0, 0);
+            }
+
+            // A side panel that opened below the first screen (the columns stack on a phone) is where the operator should land.
+            const anchor = doc.getElementById('r1m1-panel-anchor');
+            const main = doc.querySelector('section[data-testid="stMain"]');
+            if (anchor && main) {
+              const y = anchor.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+              if (y > main.clientHeight * 0.5) main.scrollTo({top: Math.max(0, y - 12), left: 0, behavior: 'auto'});
             }
           };
 
@@ -4504,12 +4544,16 @@ def success_state(title: str, recorded=None, updated=None, next_action=None):
         st.write(next_action)
 
 
+SCREEN_TITLES: list = []  # the titles drawn in this run, first is the screen's own (the script re-runs top to bottom, so this starts empty each run)
+
+
 def header(title, subtitle="", *, emphasize_subtitle=False):
     """emphasize_subtitle: Trial performance brief 2c — that page's subtitle
     reframes toward the question the page answers and needs more visual
     weight against its H1/cards than the shared .page-context style gives
     every other page's subtitle. Opt-in per call site, not a global change
     to .page-context, since no other page asked for this."""
+    SCREEN_TITLES.append(str(title))
     st.title(title)
     if subtitle:
         subtitle_class = "page-context page-context-emphasis" if emphasize_subtitle else "page-context"
@@ -4540,6 +4584,7 @@ def set_flash(kind: str, title: str, lines=None):
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
+        st.session_state.scroll_to_top_once = True  # the message is at the top of the page: show it, wherever the operator was
         message_panel(flash["kind"], flash["title"], flash.get("lines", []))
 
 
@@ -4568,6 +4613,7 @@ def r1_stepper(current: int) -> None:
 
 
 def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = "") -> None:
+    SCREEN_TITLES.append(str(title))
     stat = (
         f'<div><div class="r1-stat">{html.escape(str(stat_value))}</div><div class="r1-stat-label">{html.escape(stat_label)}</div></div>'
         if stat_value is not None else ""
@@ -6416,6 +6462,7 @@ NAVIGATION_PAGES = {
 # routing, URLs and browser history remain framework-owned.
 selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
 selected_navigation_page.run()
+hide_stale_screen_while_navigating()
 
 # Which navigation item an app page belongs to (its "you are here"). Pages not listed show none.
 NAV_KEY_BY_APP_PAGE = {
@@ -8200,6 +8247,7 @@ elif page == "windows":
                         st.rerun()
     if panel is not None:
         with panel:
+            scroll_panel_anchor()
             wr=data["Windows"][data["Windows"]["Window ID"]==wid]
             if wr.empty:
                 st.session_state.pop("window_panel",None)
@@ -8880,6 +8928,7 @@ elif page == "setup":
                             go("trap_edit", trap_id=trap_id)
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
                 setup_title, setup_close = st.columns([1, 0.13], vertical_alignment="top")
                 with setup_title:
@@ -9090,6 +9139,7 @@ elif page == "setup":
                         st.session_state.setup_site=sid; st.session_state.site_mode="edit"; st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 ex=data["Sites"][data["Sites"]["Site ID"]==st.session_state.get("setup_site","")].iloc[0] if mode=="edit" else None
                 st.subheader("Edit site" if mode=="edit" else "Add site")
                 with st.form("site_setup_panel"):
@@ -9293,6 +9343,7 @@ elif page == "setup":
                         st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 if mode=="edit":
                     selected_build_identity=st.session_state.get("setup_build","")
                     selected_product, selected_version = selected_build_identity.split("::", 1)
