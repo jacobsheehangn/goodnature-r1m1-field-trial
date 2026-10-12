@@ -415,3 +415,60 @@ def test_the_data_and_records_test_window_panel_comes_into_view_in_webkit(tmp_pa
                 _window_panel_walk(page, url)
         finally:
             browser.close()
+
+
+# --- the owner's phone (12 Oct): on a trap whose check had been started before, tapping "Carcass collected? Yes" threw the page down to the
+# Camera check. The "scroll to where you left off" is for arriving on the check page with a saved draft; Streamlit drops the state of
+# widgets that are not on screen, so the draft was restored again on a later rerun of the same visit and the scroll fired mid-form.
+# Live on main too (c21218d); found because the owner's retests left a draft on the trap.
+
+def _carcass_after_a_saved_draft(page: Page, url: str) -> None:
+    page.goto(url, wait_until="domcontentloaded")
+    start = page.get_by_role("button", name=re.compile(r"^(Resume|Start) checking$")).first
+    expect(start).to_be_visible(timeout=40_000); page.wait_for_timeout(1500); start.click()
+    expect(_trap_list_marker(page)).to_be_visible(timeout=30_000)
+    camera_trap = None
+    for i in range(6):   # a trap with a camera
+        page.get_by_role("button", name="Check", exact=True).nth(i).click()
+        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+        page.get_by_role("radio", name="Dead animal found").check(force=True); page.wait_for_timeout(1500)
+        page.get_by_role("radiogroup", name="Carcass collected?").get_by_role("radio", name="Yes", exact=True).check(force=True); page.wait_for_timeout(2000)
+        if page.get_by_text("Camera working and covering the trap?", exact=True).count():
+            camera_trap = i; break
+        page.get_by_role("button", name=re.compile("Back to trap selector")).click(); expect(_trap_list_marker(page)).to_be_visible(timeout=30_000)
+    assert camera_trap is not None, "no trap with a camera in the first six"
+    page.wait_for_timeout(1500)
+    page.get_by_role("button", name=re.compile("Back to trap selector")).click(); expect(_trap_list_marker(page)).to_be_visible(timeout=30_000)
+    # the same trap again: a draft is waiting
+    page.get_by_role("button", name="Check", exact=True).nth(camera_trap).click()
+    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000); page.wait_for_timeout(3000)
+    assert page.evaluate(MAIN_TOP) > 500, "arriving with a saved draft still lands on the Camera check (the field-report feature)"
+    carcass = page.get_by_role("radiogroup", name="Carcass collected?")
+    carcass.scroll_into_view_if_needed(); page.wait_for_timeout(600)
+    for answer in ("No", "Yes"):
+        before = page.evaluate(MAIN_TOP)
+        carcass.get_by_role("radio", name=answer, exact=True).check(force=True); page.wait_for_timeout(3000)
+        after = page.evaluate(MAIN_TOP)
+        assert abs(after - before) < 80, f"tapping Carcass collected = {answer} must not move the page (it went from {before} to {after})"
+
+
+def test_answering_the_check_form_after_a_saved_draft_does_not_throw_the_page_in_chromium(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size({"width": 390, "height": 664})
+    with _serve(data_dir, END_SEED) as url:
+        _carcass_after_a_saved_draft(page, url)
+
+
+def test_answering_the_check_form_after_a_saved_draft_does_not_throw_the_page_in_webkit(tmp_path: Path) -> None:
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.webkit.launch()
+        except Exception as exc:
+            pytest.skip(f"WebKit is not installed: {exc}")
+        data_dir = tmp_path / "d"; data_dir.mkdir()
+        try:
+            page = browser.new_context(**playwright.devices["iPhone 13"]).new_page()
+            with _serve(data_dir, END_SEED) as url:
+                _carcass_after_a_saved_draft(page, url)
+        finally:
+            browser.close()
