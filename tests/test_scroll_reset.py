@@ -365,3 +365,53 @@ def test_the_add_and_edit_panels_come_into_view_in_webkit(tmp_path: Path) -> Non
                 _panel_walk(page, url)
         finally:
             browser.close()
+
+
+# --- Data & records > Trial history > a test window's Review panel (the same anchor as the Add/Edit panels, walked on its own).
+
+ANCHOR_TOP = """() => { const a = document.getElementById('r1m1-panel-anchor'); const m = document.querySelector('section[data-testid="stMain"]');
+  return a ? Math.round(a.getBoundingClientRect().top - m.getBoundingClientRect().top) : null; }"""
+
+
+def _window_panel_walk(page: Page, url: str) -> None:
+    page.goto(url + "/data-records", wait_until="domcontentloaded")
+    expect(page.get_by_role("heading", name="Data & records")).to_be_visible(timeout=40_000); page.wait_for_timeout(2500)
+    page.get_by_role("radio", name="Trial history", exact=True).check(force=True); page.wait_for_timeout(2000)
+    page.get_by_role("button", name="Open trial history").click()
+    expect(page.get_by_role("heading", name="Trial periods")).to_be_visible(timeout=30_000); page.wait_for_timeout(2500)
+    _choose(page, "Show windows", "All"); page.wait_for_timeout(2500)
+    review = page.get_by_role("button", name="Review", exact=True)
+    assert review.count() > 4, "the list must be long enough to scroll for this to prove anything"
+    page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = (el.scrollHeight - el.clientHeight) / 3 }"); page.wait_for_timeout(500)
+    assert page.evaluate(MAIN_TOP) > 300
+    visible_review = [review.nth(i) for i in range(review.count()) if review.nth(i).is_visible() and 0 <= review.nth(i).bounding_box()["y"] < 600]
+    assert visible_review, "a Review button must be on screen to tap"
+    visible_review[0].click()
+    expect(page.get_by_role("button", name="Close panel")).to_be_attached(timeout=30_000); page.wait_for_timeout(2500)
+    top = page.evaluate(ANCHOR_TOP)
+    assert top is not None and 0 <= top < 400, f"the test-window panel is brought into view, not left far below the list: its top is at {top}px of a 664px screen"
+    page.get_by_role("button", name="Close panel").click()
+    expect(page.get_by_role("button", name="Close panel")).to_have_count(0, timeout=30_000)
+    _lands_at_the_top_and_stays(page, "Trial periods after closing the panel")
+
+
+def test_the_data_and_records_test_window_panel_comes_into_view_in_chromium(page: Page, tmp_path: Path) -> None:
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size({"width": 390, "height": 664})
+    with _serve(data_dir, END_SEED) as url:
+        _window_panel_walk(page, url)
+
+
+def test_the_data_and_records_test_window_panel_comes_into_view_in_webkit(tmp_path: Path) -> None:
+    with sync_playwright() as playwright:
+        try:
+            browser = playwright.webkit.launch()
+        except Exception as exc:
+            pytest.skip(f"WebKit is not installed: {exc}")
+        data_dir = tmp_path / "d"; data_dir.mkdir()
+        try:
+            page = browser.new_context(**playwright.devices["iPhone 13"]).new_page()
+            with _serve(data_dir, END_SEED) as url:
+                _window_panel_walk(page, url)
+        finally:
+            browser.close()
