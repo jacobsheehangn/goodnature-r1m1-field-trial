@@ -316,7 +316,11 @@ def test_a_tap_that_changes_nothing_on_screen_does_not_blank_the_page_first(page
         expect(link).to_be_visible(timeout=60_000); page.wait_for_timeout(1500); link.click()   # a change of screen: the hide rule is on for that run
         expect(page.get_by_role("heading", name="Follow-ups")).to_be_visible(timeout=60_000); page.wait_for_timeout(4000)
         page.evaluate(SCREEN_LOG)
-        page.get_by_label("Priority").first.click(); page.get_by_role("option", name="High").click()   # in place
+        segmented = page.locator('[class*="st-key-seg_followup_priority"] button').filter(has_text="High")   # the 7b screens use a segmented control
+        if segmented.count():
+            segmented.first.click()   # in place
+        else:
+            page.get_by_label("Priority").first.click(); page.get_by_role("option", name="High").click()   # in place
         page.wait_for_timeout(9000)
         frames = page.evaluate("window.__frames")
     assert frames and all(f[3] for f in frames), f"the page was blanked during an in-place tap: {frames}"
