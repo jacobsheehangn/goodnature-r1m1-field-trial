@@ -2749,18 +2749,37 @@ def scroll_signature() -> tuple:
     return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None, *(st.session_state.get(key) for key in SCROLL_PANEL_KEYS))
 
 
+HIDE_STALE_CSS = (
+    # Only while a marker drawn in THIS run is current (not stale): the rule ends with the run and can never touch the next tap's screen.
+    # 1. the old screen is faded and cannot be tapped (it shows the tap was received, and a late second tap lands on nothing);
+    'section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark) [data-stale="true"]'
+    '{opacity:.45 !important;pointer-events:none !important}'
+    # 2. once the new screen's title is drawn, whatever is left of the old screen is hidden (it would sit under the new screen).
+    'section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark)'
+    ':has([data-testid="stElementContainer"]:not([data-stale="true"]) :is(h1,.r1-title)) [data-stale="true"]{display:none !important}'
+)
+
+
 def hide_stale_screen_while_navigating() -> None:
     """Streamlit keeps the previous run's elements on screen, marked stale, until the run ends, and draws the new screen over
     them from the top. When the new screen is shorter, or slow, the old screen's last buttons sit under the new screen's first
     ones: on a phone, Finish site check showed up as a second set of three buttons under Trap sites. While the screen is being
-    changed those leftovers are hidden. The rule only applies while the marker drawn in the same run is current (not stale), so
-    it ends with the run and cannot hide the next tap's screen; always one element, so positions do not shift between runs."""
-    changing = bool(st.session_state.get("scroll_to_top_once")) or st.session_state.get("scroll_state_seen") not in (None, scroll_state_keys())
-    st.markdown(
-        '<style>section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark) [data-stale="true"]{display:none !important}</style><span class="r1-navmark"></span>'
-        if changing else "<style></style>",
-        unsafe_allow_html=True,
-    )
+    changed the old screen is faded and untappable until the new screen's title arrives (so on a weak signal the operator still
+    sees what they left, and a second tap cannot land on it), then its leftovers are hidden.
+
+    It applies to the one run that changes the screen: a navigation helper asked for the top (scroll_to_top_once), or the page,
+    site/visit/trap or follow-up task changed. A rerun of the same screen (a validation message, Saving…) never gets the marker.
+    The change is recorded here, at the start of the run, so a screen that stops early (st.stop) cannot make the next rerun of the
+    same screen look like a change. Always one element, so positions do not shift between runs."""
+    keys = scroll_state_keys()
+    seen = st.session_state.get("scroll_state_seen")
+    st.session_state["scroll_state_seen"] = keys
+    if seen not in (None, keys):
+        st.session_state["scroll_to_top_once"] = True  # a change no navigation helper announced: a task opening in place
+    asked = bool(st.session_state.get("scroll_to_top_once")) and not st.session_state.get("scroll_flag_hidden")
+    if asked:
+        st.session_state["scroll_flag_hidden"] = True  # this request has had its hide; if the run stops early the next rerun does not repeat it
+    st.markdown(f"<style>{HIDE_STALE_CSS}</style><span class=\"r1-navmark\"></span>" if asked else "<style></style>", unsafe_allow_html=True)
 
 
 def scroll_to_top_once():
@@ -2774,7 +2793,8 @@ def scroll_to_top_once():
     at the top. The one screen that asks to land part-way down, the check form restored on its Camera check, says so with
     scroll_hold_for_anchor."""
     flagged = st.session_state.pop("scroll_to_top_once", False)
-    st.session_state["scroll_state_seen"] = scroll_state_keys()
+    st.session_state.pop("scroll_flag_hidden", None)
+    flagged = st.session_state.pop("scroll_message_pending", False) or flagged
     signature = scroll_signature()
     changed = st.session_state.get("scroll_signature_seen") not in (None, signature)
     st.session_state["scroll_signature_seen"] = signature
@@ -4590,7 +4610,7 @@ def set_flash(kind: str, title: str, lines=None):
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
-        st.session_state.scroll_to_top_once = True  # the message is at the top of the page: show it, wherever the operator was
+        st.session_state.scroll_message_pending = True  # the message is at the top of the page: show it, wherever the operator was
         message_panel(flash["kind"], flash["title"], flash.get("lines", []))
 
 
