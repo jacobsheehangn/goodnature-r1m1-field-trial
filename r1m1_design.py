@@ -238,6 +238,9 @@ COMPONENT_CSS = f"""
 
 /* ---- Segmented control (st.segmented_control). Only when every label is about 12 characters or fewer. ---- */
 [class*="st-key-seg"] [role="radiogroup"]{{display:flex;width:100%!important;max-width:none!important;gap:0;background:var(--ink-05);border-radius:var(--r-segment);padding:2px}}
+/* The filter on Follow-ups sits in its own container, so its element wrappers are widened to the column. */
+[class*="st-key-seg_followup"] [data-testid="stElementContainer"],[class*="st-key-seg_followup"] [data-testid="stButtonGroup"]{{width:100%!important}}
+@media (min-width:701px){{[class*="st-key-seg_followup"]{{max-width:480px}}}}
 [class*="st-key-seg"] button[role="radio"]{{
   flex:1 1 0;min-width:0;min-height:44px;border:0;border-radius:var(--r-input);background:transparent;color:var(--ink-70);box-shadow:none}}
 [class*="st-key-seg"] button[role="radio"] p{{font-size:15px;line-height:20px;font-weight:400;color:inherit}}
@@ -252,6 +255,10 @@ COMPONENT_CSS = f"""
   content:"Choose a build";display:block;color:var(--orange-ink);font-weight:700;font-size:14px;line-height:20px;margin-top:6px}}
 /* A build row on Set up step 1: a white card holding the checkbox. */
 [class*="st-key-card_build"]{{padding:14px 15px}}
+/* A site card on Trap sites: a button and a text button under it. On a phone both are the width of the card (the Main board);
+   on desktop they keep their natural width, like every other 7a screen (see the 700px block below). */
+.stApp [class*="st-key-card_site_"]{{gap:8px}}
+.stApp [class*="st-key-card_site_"] .r1-msg{{margin:2px 0 4px}}
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
 @media (max-width:700px){{
@@ -261,6 +268,10 @@ COMPONENT_CSS = f"""
   .stApp [data-testid="stElementContainer"]:has(button[kind="primaryFormSubmit"]) > div{{width:100%}}
   .stApp div.stButton:has(button[kind="primary"]),.stApp div.stFormSubmitButton:has(button[kind="primaryFormSubmit"]){{width:100%}}
   .stApp div.stButton button[kind="primary"],.stApp div.stFormSubmitButton button[kind="primaryFormSubmit"]{{width:100%}}
+  /* A Trap sites card: its button (primary, or the secondary of a site checked today) and its text button, full width, centred. */
+  .stApp [class*="st-key-card_site_"] [data-testid="stElementContainer"]:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])),
+  .stApp [class*="st-key-card_site_"] div.stButton:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])){{width:100%}}
+  .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
   .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
 }}
@@ -284,6 +295,23 @@ COMPONENT_CSS = f"""
 .stApp [class*="st-key-listrow_next"]{{background:var(--orange-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
 .r1-donerow{{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
 .r1-donebox{{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--green-10);color:var(--green);display:flex;align-items:center;justify-content:center}}
+.stApp [class*="st-key-listrow_"][class*="end_visit_"],.stApp [class*="st-key-listrow_"][class*="end_followup_"],.r1-donerow.is-last{{border-bottom:0}}
+/* The trap list's filter toggle is a rarely used extra, so it reads as quiet text, not as a heading. */
+.stApp [class*="st-key-visit_filter_expanded_"] label p{{font-size:15px;line-height:20px;font-weight:400;color:var(--ink-70)}}
+/* ...but still a 44px tap target: the whole label is the button. */
+.stApp [class*="st-key-visit_filter_expanded_"] label{{min-height:44px;display:flex;align-items:center;cursor:pointer}}
+/* Big numbers on a summary card (Trial performance), and a heading between cards. */
+.r1-stats2{{display:flex;gap:36px;align-items:flex-end;margin:4px 0 8px}}
+.r1-bigstat{{font-size:36px;line-height:40px;font-weight:700}}
+.r1-bigstat-label{{font-size:14px;line-height:20px;color:var(--ink-70)}}
+.r1-section{{font-size:22px;line-height:30px;font-weight:700;margin:24px 0 4px}}
+/* In a narrow summary card the value stays on one line ("12 of 13") and the label wraps instead. */
+[class*="st-key-card_perf_"] .r1-kv .v{{white-space:nowrap}}
+.r1-donerow.is-just-saved{{background:var(--green-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
+.r1-donerow.is-just-saved .r1-donebox{{background:#fff}}
+/* A progress bar: a thin ink-05 track with an orange fill. */
+.r1-bar{{height:8px;border-radius:4px;background:var(--ink-05);overflow:hidden;margin:4px 0 12px}}
+.r1-bar span{{display:block;height:100%;background:var(--orange);border-radius:4px}}
 
 /* ---- Message panel: radius 14, padding 14; warn / error / success / info ---- */
 .r1-msg{{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}}
@@ -349,7 +377,11 @@ body [data-testid="stPopoverBody"] div.stButton button{justify-content:flex-star
 body [data-testid="stPopoverBody"] div.stButton button>div{width:100%;justify-content:flex-start}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a p,body [data-testid="stPopoverBody"] div.stButton button p{font-size:16px;line-height:22px;font-weight:400;color:var(--ink)}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a:is([aria-disabled="true"],[disabled]) p{font-weight:700}
-.r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+/* the Operator name sits in the menu like any other row: same side padding, a 44px field */
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:10px 20px 12px;border-bottom:1px solid var(--ink-05)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"] label p{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"] input{min-height:44px;font-size:16px}
 """
 
 
@@ -479,12 +511,16 @@ def _component_css_only() -> str:
     return FONT_FACE_CSS + TOKENS_CSS + scope_css(TYPE_CSS + COMPONENT_CSS, SCREEN_SCOPE, important=True)
 
 
+# The navigation is on nearly every page, including the existing ones, so it carries what it needs itself: the font, the tokens
+# and its own rules, forced above the legacy sheet (which restyles links and buttons with !important). One static string, built once.
+NAV_APP_CSS = "<style>" + FONT_FACE_CSS + TOKENS_CSS + scope_css(NAV_CSS, ".stApp", important=True) + "</style>"
+
 # One static string, built once at import (no per-run work).
 SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 
 # The journey screens that follow the Set up / End trial pattern show no top navigation, and read as a
 # single column (a form is not stretched across a desktop).
-HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation{display:none!important}</style>"
+HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
 
 
@@ -510,4 +546,48 @@ def message_html(kind: str, title: str, detail: str = "") -> str:
     """Message panel: warn / error / success / info, icon + bold title + 15px detail."""
     icon_name = {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
     body = f'<div class="d">{detail}</div>' if detail else ""
-    return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div><div class="t">{title}</div>{body}</div></div>'
+    heading = f'<div class="t">{title}</div>' if title else ""
+    return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div>{heading}{body}</div></div>'
+
+# ---------------------------------------------------------------- Visit complete (Phase 7b, 6 of 8) -----
+# The summary shown once, in place of the old one-line "site check completed" message, on the page Finish site check lands on. Its rules are
+# rooted at .r1-vc (not at the screen container) because it is drawn above whichever page that is; it uses only the :root tokens.
+VISIT_COMPLETE_CSS = """<style>
+.r1-vc{display:flex;flex-direction:column;align-items:center;gap:12px;max-width:560px;margin:8px auto 24px;text-align:center;color:var(--ink)}
+.r1-vc-badge{width:92px;height:92px;border-radius:50%;background:var(--green-10);display:flex;align-items:center;justify-content:center;margin-top:4px}
+.r1-vc-badge span{width:64px;height:64px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center}
+.r1-vc-title{font-size:34px;line-height:40px;font-weight:700}
+.r1-vc-site{font-size:17px;line-height:22px;color:var(--ink-70);margin-top:-6px}
+.r1-vc-stats{width:100%;box-sizing:border-box;display:flex;justify-content:space-around;gap:12px;background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:18px 12px;margin-top:4px}
+.r1-vc-stats b{display:block;font-size:30px;line-height:36px;font-weight:700}
+.r1-vc-stats span{display:block;font-size:14px;line-height:20px;color:var(--ink-70)}
+.r1-vc-needs{width:100%;text-align:left}
+.r1-vc-needs h3{font-size:17px;line-height:22px;font-weight:700;margin:8px 0 8px;padding:0}
+.r1-vc-list{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:4px 16px}
+.r1-vc-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}
+.r1-vc-row:last-child{border-bottom:0}
+.r1-vc-row .tile{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--ink-05);display:flex;align-items:center;justify-content:center}
+.r1-vc-row .t{font-size:17px;line-height:22px;font-weight:700}
+.r1-vc-row .d{font-size:14px;line-height:20px;color:var(--ink-70)}
+.r1-vc-next{font-size:15px;line-height:20px;color:var(--ink-70)}
+</style>"""
+
+
+def visit_complete_html(site: str, stats, needs, next_due: str = "") -> str:
+    """The Visit complete summary: a green check, the title and site, a card of numbers, what needs doing next, when the next visit is due.
+    `stats` is [(value, label)]; `needs` is [(icon name, title, caption)]; every string is already escaped by the caller."""
+    stat_html = "".join(f"<div><b>{value}</b><span>{label}</span></div>" for value, label in stats)
+    needs_html = ""
+    if needs:
+        rows = "".join(
+            f'<div class="r1-vc-row"><div class="tile">{icon(name, 22)}</div><div><div class="t">{title}</div><div class="d">{caption}</div></div></div>'
+            for name, title, caption in needs
+        )
+        needs_html = f'<div class="r1-vc-needs"><h3>Needs doing next</h3><div class="r1-vc-list">{rows}</div></div>'
+    next_html = f'<div class="r1-vc-next">Next visit due {next_due}.</div>' if next_due else ""
+    return (
+        f'<div class="r1-vc" role="status">'
+        f'<div class="r1-vc-badge"><span>{icon("check", 36)}</span></div>'
+        f'<div class="r1-vc-title" role="heading" aria-level="1">Visit complete</div><div class="r1-vc-site">{site}</div>'
+        f'<div class="r1-vc-stats">{stat_html}</div>{needs_html}{next_html}</div>'
+    )

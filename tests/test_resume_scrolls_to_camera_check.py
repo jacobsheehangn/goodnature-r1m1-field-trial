@@ -93,7 +93,7 @@ def test_resuming_a_camera_trap_scrolls_to_the_camera_check_section(
     page.goto(local_app_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     # Find a camera-equipped trap - not every seeded trap has one.
     camera_trap_found = False
@@ -106,7 +106,7 @@ def test_resuming_a_camera_trap_scrolls_to_the_camera_check_section(
             camera_trap_found = True
             break
         page.get_by_role("button", name="Back to trap selector", exact=False).click()
-        expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     assert camera_trap_found, "none of the first 5 seeded traps have a camera - test setup assumption failed"
 
     service_group = page.get_by_role("radiogroup", name="Trap relured, reset and ready?")

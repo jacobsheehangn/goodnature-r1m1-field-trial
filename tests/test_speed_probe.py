@@ -148,7 +148,12 @@ def expect_caption_really_visible(page: Page) -> None:
     is exactly how this caption shipped invisible once (the app's own CSS hides
     top-level helper iframes). Require it to be visible with a real size."""
     expect(caption_locator(page)).to_be_visible(timeout=15_000)
-    box = caption_locator(page).bounding_box()
+    box = None
+    for _ in range(25):  # the frame can be re-created or resized just after it first appears (it failed once, under suite load, with no size yet)
+        box = caption_locator(page).bounding_box()
+        if box is not None and box["height"] >= 10 and box["width"] >= 100:
+            break
+        page.wait_for_timeout(200)
     assert box is not None and box["height"] >= 10 and box["width"] >= 100, f"caption has no real size: {box}"
     fits = caption_locator(page).evaluate("el => el.getBoundingClientRect().bottom <= window.innerHeight + 1")
     assert fits, "the caption text is taller than its frame, so part of it (e.g. 'save ... ms') is cut off"
@@ -159,8 +164,11 @@ def expect_caption_really_visible(page: Page) -> None:
 def test_probe_off_emits_no_log_lines_and_no_caption(page: Page, probe_off: ProbeApp) -> None:
     open_sites(page, probe_off)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
-    page.get_by_role("link", name="Follow-ups", exact=True).click()
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
+    # Visit mode has no top navigation (Phase 7): the way out of the trap list is its own back pill.
+    page.get_by_role("button", name="Exit to Trap sites").click()
+    expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
+    page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
     page.wait_for_timeout(1_000)
 
@@ -181,7 +189,7 @@ def test_probe_on_logs_each_run_and_shows_the_caption(page: Page, probe_on: Prob
     expect_caption_really_visible(page)
 
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     expect(caption_locator(page)).to_have_text(CAPTION, timeout=15_000)
     expect_caption_really_visible(page)
     # A tap happened, so tap->render must now be a real number, not the
@@ -210,11 +218,11 @@ def test_probe_median_tracks_up_to_ten_samples(page: Page, probe_on: ProbeApp) -
         # A sample is recorded per tap once that tap's page has settled, so
         # leave a human-scale gap between taps (a tap landing before the
         # previous caption loaded is, by design, folded into the same sample).
-        page.get_by_role("link", name="Follow-ups", exact=True).click()
+        page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
         expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1_500)
         page.get_by_role("link", name="Trap sites", exact=True).click()
-        expect(page.get_by_text("Choose the trap site you are visiting today.", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
         page.wait_for_timeout(1_500)
     text = caption_locator(page).inner_text()
     median_n = int(re.search(r"median of (\d+)", text).group(1))
@@ -225,7 +233,7 @@ def test_a_failing_probe_leaves_pages_and_saves_working(page: Page, probe_on_but
     app = probe_on_but_broken
     open_sites(page, app)
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 
@@ -265,7 +273,7 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
             open_sites(page, app)
             snapshots = {"sites": _normalised_body(page)}
             page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-            expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+            expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
             snapshots["visit"] = _normalised_body(page)
             page.get_by_role("button", name="Check", exact=True).first.click()
             expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
@@ -280,6 +288,8 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
 @pytest.mark.parametrize("link", ["Follow-ups", "Trial performance"])
 def test_caption_is_visible_on_the_other_top_level_pages(page: Page, probe_on: ProbeApp, link: str) -> None:
     open_sites(page, probe_on, {"width": 390, "height": 844})
-    page.get_by_role("link", name=link, exact=True).click()
+    if link == "Trial performance":
+        page.get_by_role("button", name="More", exact=True).click()  # on a phone it lives in the More menu
+    page.get_by_role("link", name=re.compile(rf"^{re.escape(link)}( \d+)?$")).click()
     expect(page.get_by_text(link, exact=True).last).to_be_visible(timeout=30_000)
     expect_caption_really_visible(page)

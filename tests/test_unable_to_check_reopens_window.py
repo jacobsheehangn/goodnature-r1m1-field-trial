@@ -104,7 +104,7 @@ def test_unable_to_check_reopens_a_window_instead_of_stranding_the_trap(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     check_button = page.get_by_role("button", name="Check", exact=True).first
     check_button.click()

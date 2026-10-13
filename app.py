@@ -4488,57 +4488,51 @@ def render_compact_card_content(
     )
 
 
-def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_saved: bool = False) -> None:
-    """Compact field card with one checked-state indicator."""
-    trap_id = str(tr["Trap ID"])
-    build_prefix = f"{tr['Product']} Build "
-    build_raw = str(tr["Build Version"] or "—")
-    build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
-    product_build = f"Build: {build_text}"
-    location = trap_location_label(tr)
-    route = str(tr["Route Order"] or "—")
+def visit_time_label(value) -> str:
+    """"2026-10-05 08:55:00" -> "8:55 am" (the check's own time, as the operator reads a clock)."""
+    stamp = parse_dt(value)
+    if stamp is None:
+        return ""
+    return f"{stamp.hour % 12 or 12}:{stamp.minute:02d} {'am' if stamp.hour < 12 else 'pm'}"
 
+
+def render_visit_trap_card(tr, checked: bool, visit_id: str, site_id: str, just_saved: bool = False, *, is_next: bool = False, is_last: bool = False, show_build: bool = False, check=None) -> None:
+    """One row of the trap list (Phase 7b): a trap still to check (its ID, and its build only when the list compares builds, a Check
+    button that is orange on the next trap and grey on the rest) or a trap already checked (a tile, its ID, when and what was found)."""
+    trap_id = str(tr["Trap ID"])
     if checked:
-        # Field report fix (2026-08-17): "didn't get a success status after
-        # successful trap check", "have to scroll up... just looking at
-        # cards already completed" - the top-of-page flash is a true
-        # one-shot (popped the instant it's shown), so any rerun before the
-        # operator actually looks at the screen loses it for good, and
-        # every checked card looked identical anyway, so even scrolling up
-        # didn't say *which* one was just done. just_saved (set once per
-        # save, keyed to this visit, read fresh every render - not popped)
-        # makes the just-completed card visibly distinct regardless of
-        # scroll position, reruns, or a reconnect in between.
-        status_label = "✓ Just saved" if just_saved else "✓ Checked"
+        # Field report fix (2026-08-17): the top-of-page flash is a true one-shot, so the trap just saved stays visibly distinct on the
+        # list itself (just_saved is set once per save, keyed to this visit, and read fresh on every render).
+        finding = str(check["Finding"]).strip() if check is not None else ""
+        species = str(check["Species"]).strip() if check is not None else ""
+        kill = finding == "Dead animal found"
+        tile = design.icon(species.lower() if kill and species.lower() in design.ICONS else "check", 22)
+        when = visit_time_label(check["Check Time"]) if check is not None else ""
+        detail = " · ".join(part for part in (f"{'Just saved' if just_saved else 'Checked'} {when}".strip(), finding, species if kill else "") if part)
         st.markdown(
-            f'<div class="visit-trap-card is-checked{" is-just-saved" if just_saved else ""}">'
-            '<div class="visit-trap-copy">'
-            f'<div class="visit-trap-line"><strong>{html.escape(trap_id)}</strong><strong class="visit-trap-status">{status_label}</strong></div>'
-            f'<div class="visit-trap-line"><span>{html.escape(location)}</span><span class="visit-trap-meta">{html.escape(product_build)}</span></div>'
-            '</div>'
+            f'<div class="r1-donerow visit-trap-card is-checked{" is-just-saved" if just_saved else ""}{" is-last" if is_last else ""}">'
+            f'<div class="r1-donebox">{tile}</div>'
+            f'<div><div class="r1-row-title">{html.escape(trap_id)}</div><div class="r1-meta">{html.escape(detail)}</div></div>'
             '</div>',
             unsafe_allow_html=True,
         )
         return
 
-    with app_card():
-        render_compact_card_content(
-            title=trap_id,
-            right_label=location,
-            main_line=product_build,
-            meta_line=f"Route {route} · Not checked",
+    build_prefix = f"{tr['Product']} Build "
+    build_raw = str(tr["Build Version"] or "").strip()
+    build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
+    location = trap_location_label(tr)
+    generic = bool(re.fullmatch(r"Trap \d+|No location recorded", location))
+    caption = " · ".join(part for part in (f"Build {build_text}" if show_build and build_text else "", "" if generic else location) if part)
+    with st.container(key=f"listrow_{'next_' if is_next else ''}{'end_' if is_last else ''}visit_{visit_id}_{trap_id}"):
+        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+        text_col.markdown(
+            f'<div class="r1-row-title">{html.escape(trap_id)}</div>' + (f'<div class="r1-meta">{html.escape(caption)}</div>' if caption else ""),
+            unsafe_allow_html=True,
         )
-        # Field report fix (2026-08-17): "tapping check and nothing happens,
-        # need loader state there within button too" - a plain button here
-        # gave zero feedback between tap and the page actually changing, on
-        # a field connection where that round trip is far from instant.
-        # Speed brief Part B: this used to be a two-phase button (arm run,
-        # 0.3 s dwell, then go() and a second render - three script runs per
-        # tap). Opening a trap is pure navigation, so it now changes page in
-        # an on_click callback and the check page renders in one run; the
-        # destination appearing is the feedback.
-        st.button(
-            "Check", key=f"visit_check_{visit_id}_{trap_id}", use_container_width=True,
+        # Opening a trap is pure navigation: it changes page in an on_click callback so the check page renders in one run.
+        button_col.button(
+            "Check", key=f"visit_check_{visit_id}_{trap_id}", type="primary" if is_next else "secondary",
             on_click=set_page, args=("check",),
             kwargs={"site_id": site_id, "visit_id": visit_id, "trap_id": trap_id},
         )
@@ -4603,15 +4597,54 @@ def helper(message: str):
     st.markdown(f'<p class="helper-text">{message}</p>', unsafe_allow_html=True)
 
 
-def set_flash(kind: str, title: str, lines=None):
-    st.session_state.flash_message = {"kind": kind, "title": title, "lines": lines or []}
+def set_flash(kind: str, title: str, lines=None, **extra):
+    st.session_state.flash_message = {"kind": kind, "title": title, "lines": lines or [], **extra}
 
 
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
         st.session_state.scroll_message_pending = True  # the message is at the top of the page: show it, wherever the operator was
-        message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+        summary = flash.get("visit_complete")
+        if summary:
+            st.markdown(design.VISIT_COMPLETE_CSS, unsafe_allow_html=True)  # its own block: Streamlit hides a markdown block that holds a <style>
+            st.markdown(design.visit_complete_html(summary["site"], summary["stats"], summary["needs"], summary["next_due"]), unsafe_allow_html=True)
+        else:
+            message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+
+
+def visit_complete_summary(data, sid: str, vid: str) -> dict:
+    """What the Visit complete summary says, worked out from the frames this run already holds (nothing is read from disk): how many traps
+    were checked, how many had a kill, how long the visit took, what is still to do because of it, and when the next visit is due."""
+    checks = data["Checks"][data["Checks"]["Visit ID"] == vid]
+    kills = checks[checks["Finding"] == "Dead animal found"]["Trap ID"].astype(str).nunique()
+    stats = [(str(checks["Trap ID"].astype(str).nunique()), "Traps checked"), (str(kills), "Kill" if kills == 1 else "Kills")]
+    visit = data["Visits"][data["Visits"]["Visit ID"] == vid]
+    if not visit.empty:
+        start, end = parse_dt(visit.iloc[0]["Start Time"]), parse_dt(visit.iloc[0]["End Time"])
+        minutes = int(round((end - start).total_seconds() / 60)) if start and end else 0
+        # A visit that began on one calendar day (NZ time) and finished on another was paused, so it has no honest time on site.
+        if minutes >= 1 and start.date() == end.date():
+            stats.append((f"{minutes} min" if minutes < 60 else f"{minutes // 60} h {minutes % 60} min", "On site"))
+    tasks = data["Followups"][(data["Followups"]["Visit ID"] == vid) & (data["Followups"]["Status"] == "Open")]
+    task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
+    needs = []
+    for task_type, rows in sorted(tasks.groupby("Follow-up Type"), key=lambda g: ({"Necropsy review": 0, "Camera review": 1}.get(g[0], 2), g[0])):
+        first, n = rows.iloc[0], len(rows)
+        trap = html.escape(str(first["Trap ID"]))
+        if task_type == "Necropsy review":
+            bag = str(first["Bag ID"]).strip()
+            caption = f"{n} traps" if n > 1 else (f"{trap} · Bag {html.escape(bag)}" if bag else trap)
+        elif task_type == "Camera review":
+            caption = (f"{n} traps" if n > 1 else trap) + " · footage not yet reviewed"
+        else:
+            reason = str(first["Reason"]).strip().lower()
+            caption = f"{n} traps" if n > 1 else (f"{trap} · {html.escape(reason)}" if reason else trap)
+        needs.append((task_icon.get(task_type, "warn-circle"), html.escape(task_type), caption))
+    site = data["Sites"][data["Sites"]["Site ID"] == sid]
+    interval = int(float(site.iloc[0]["Visit Interval Days"] or 3)) if not site.empty else 3
+    due = now() + timedelta(days=interval)
+    return {"site": html.escape(site_name(data, sid)), "stats": stats, "needs": needs, "next_due": f"{due:%a} {due.day} {due:%b}"}
 
 
 # ---- Trial journey screens (Phase 2): shared helpers ------------------------------------
@@ -4649,6 +4682,11 @@ def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = 
         f'<div class="r1-titlerow"><div><div class="r1-title" role="heading" aria-level="1">{html.escape(title)}</div>{sub}</div>{stat}</div>',
         unsafe_allow_html=True,
     )
+
+
+def r1_section(title: str) -> None:
+    """A heading between the cards of a long screen."""
+    st.markdown(f'<div class="r1-section" role="heading" aria-level="2">{html.escape(title)}</div>', unsafe_allow_html=True)
 
 
 def r1_back(label: str, page: str, key: str, **kwargs) -> None:
@@ -5105,15 +5143,6 @@ input::placeholder, textarea::placeholder {
 
 /* App-owned marked cards plus Streamlit wrapper fallback. */
 .app-card-marker {display: none !important;}
-/* site-complete-marker (a second, separate hidden hook span used only on a
-   freshly-completed site's card - see the "sites" page) has the exact same
-   issue below, so it gets the same two-part fix. Confirmed live on staging:
-   a completed-today card showed 32px of dead space (two phantom gaps
-   stacked) where a normal card only had one, because this marker's own
-   container wasn't covered by the app-card-marker fix - local demo data
-   never exercised a "completed today" card during testing, so this half
-   was missed the first time. */
-.site-complete-marker {display: none !important;}
 /* The marker spans above are hidden, but their own stElementContainer divs
    aren't - those divs still count as flex siblings in the card's column
    layout, so the card's inter-element gap (16px, Streamlit's own default)
@@ -5122,8 +5151,7 @@ input::placeholder, textarea::placeholder {
    a phantom gap per hidden marker present) - confirmed via getComputedStyle
    showing 0-height children still consuming a gap. Hiding the whole
    container removes each one from the flex layout entirely. */
-[data-testid="stElementContainer"]:has(.app-card-marker),
-[data-testid="stElementContainer"]:has(.site-complete-marker) {display: none !important;}
+[data-testid="stElementContainer"]:has(.app-card-marker) {display: none !important;}
 
 /* Same bug, page-chrome scale: HEADER_PADDING_BRIEF.md was written against
    a screenshot of a large empty region above the top nav, and traced that
@@ -5575,47 +5603,6 @@ header[data-testid="stHeader"] button svg path[fill]:not([fill="none"]), [data-t
 }
 
 
-/* v8.7.4 — stable field completion components */
-.visit-trap-card {
-  display: grid;
-  grid-template-columns: minmax(9rem, 1fr) minmax(12rem, 1.7fr) 3.25rem;
-  align-items: center;
-  gap: 1rem;
-  min-height: 7.1rem;
-  margin: 0 0 1rem 0;
-  padding: 1rem 1.1rem;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  box-shadow: 0 0 0 1px rgba(0,0,0,.05), 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05);
-  background: #ffffff;
-  box-sizing: border-box;
-}
-.visit-trap-card.is-checked {
-  background: #eef8f1;
-  border-color: #b9ddc5;
-}
-/* Field report fix (2026-08-17): the just-saved trap's own card gets a
-   bolder border on top of the normal "checked" green, on top of its own
-   distinct "Just saved" label - two independent signals (colour weight and
-   text) since it needs to be unmistakable even to a quick glance, not just
-   findable if you already know to look for it. !important + the doubled
-   class selector: a later, more specific .is-checked !important rule
-   further down this stylesheet would otherwise win on source order alone. */
-.visit-trap-card.is-checked.is-just-saved {
-  border-color: #22683d !important;
-  border-width: 2px !important;
-  box-shadow: 0 0 0 1px #22683d, 0 0 20px rgba(0,0,0,.05), 0 0 100px rgba(0,0,0,.05) !important;
-}
-.visit-trap-meta { color: var(--muted); margin-top: .35rem; }
-.visit-trap-status { color: #22683d; font-weight: 700; margin-top: .35rem; }
-@media (max-width: 700px) {
-  .visit-trap-card {
-    grid-template-columns: minmax(7.5rem, 1fr) minmax(8rem, 1.35fr) 2.5rem;
-    min-height: 6.4rem;
-    gap: .7rem;
-    padding: .9rem;
-  }
-}
 /* v8.7.3 — force one complete light visual system */
 html, body, [data-testid="stApp"], [data-testid="stAppViewContainer"],
 [data-testid="stMain"], [data-testid="stHeader"], [data-testid="stSidebar"],
@@ -5721,12 +5708,6 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .app-card-marker)
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div {
   padding: 15px !important;
 }
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) {
-  background: var(--card-success-bg) !important;
-  border-color: var(--card-success-border) !important;
-}
 
 .shared-card-copy { display:grid; gap:15px; width:100%; margin:0 0 .35rem 0; }
 .shared-card-heading { display:flex; justify-content:space-between; align-items:baseline; gap:.75rem; }
@@ -5736,15 +5717,9 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-ma
 .shared-card-label { color:var(--text); font-size:.88rem; text-align:right; }
 
 /* Field cards use the same neutral base and identical geometry between states. */
-.visit-trap-card,
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) {
   background:var(--card-bg) !important;
 }
-.visit-trap-card.is-checked {
-  background:var(--card-success-bg) !important;
-  border-color:var(--card-success-border) !important;
-}
-.visit-trap-card { padding:15px !important; margin-bottom:.7rem !important; min-height:0 !important; }
 
 /* Compact action spacing inside all shared cards. */
 [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) .stButton,
@@ -5758,8 +5733,7 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-ma
 
 @media (max-width:700px) {
   [data-testid="stVerticalBlockBorderWrapper"]:has(.app-card-marker) > div,
-  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div,
-  .visit-trap-card { padding:15px !important; }
+  [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
   .shared-card-heading { gap:.5rem; }
   .shared-card-main { font-size:.9rem; }
   .shared-card-meta, .shared-card-label { font-size:.82rem; }
@@ -5805,21 +5779,11 @@ input, textarea, select, button,
    Applies on desktop and mobile; never targets generic header buttons. *//* Hide only the two native sidebar-control SVGs. *//* Closed drawer: right-pointing open chevron. *//* Avoid two pseudo-icons where Streamlit wraps the button. *//* Open drawer: left-pointing close chevron. *//* Maintain visible controls without hover-dependent colour changes. */
 
 /* Compact field cards. */
-.visit-trap-card { min-height:0 !important; padding:15px !important; display:block !important; margin-bottom:.7rem !important; }
-.visit-trap-copy { display:grid; gap:.35rem; width:100%; }
-.visit-trap-line { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; }
-.visit-trap-meta { color:#737780; font-size:.9rem; }
-.visit-trap-status { color:#22683d; white-space:nowrap; }
-.visit-trap-card.is-checked { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) { margin-bottom:.7rem !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) > div { padding:15px !important; }
 [data-testid="stVerticalBlockBorderWrapper"]:has(.visit-unchecked-marker) .stButton button { min-height:2.7rem !important; margin-top:.45rem !important; }
 
-/* Completed site state and compact site metadata. */
-[data-testid="stVerticalBlockBorderWrapper"]:has(.site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="stElementContainer"] .site-complete-marker),
-div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-marker) { background:#eef8f1 !important; border-color:#b9ddc5 !important; }
-.site-card-compact { display:grid; gap:.35rem; }
+/* Compact site metadata. */
 .site-card-heading { display:flex; justify-content:space-between; gap:1rem; align-items:baseline; font-size:22px; }
 .site-card-meta { color:#737780; font-size:.9rem; }
 
@@ -5827,8 +5791,8 @@ div[data-testid="stVerticalBlock"]:has(> div.element-container .site-complete-ma
 
 @media (max-width:700px) {
   h1 { font-size:2.35rem !important; line-height:1.05 !important; }
-  .visit-trap-line, .site-card-heading { gap:.55rem; }
-  .visit-trap-meta, .site-card-meta { font-size:.82rem; }
+  .site-card-heading { gap:.55rem; }
+  .site-card-meta { font-size:.82rem; }
   [data-testid="stVerticalBlockBorderWrapper"] { margin-bottom:.75rem !important; }
 }/* v8.7.5.3 — controlled single-chevron fix.
    Draw exactly one icon on the actual button only. Container and nested pseudo-elements
@@ -6006,87 +5970,6 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
 }
 </style>
 
-<style>
-/* v8.7.6.4 — one responsive navigation flow */
-.st-key-app_top_navigation {
-  width: 100%;
-}
-
-/* No space before [data-testid] deliberately: stHorizontalBlock is a
-   data-testid on .st-key-app_top_navigation itself, not a descendant of
-   it — the previous descendant-combinator selector here could never match
-   anything (confirmed via devtools: zero matched rules), so this row was
-   silently running on Streamlit's own default 1rem gap the whole time.
-   That extra width was enough to overflow the row at normal desktop
-   widths, forcing Administration onto its own second line — which is what
-   was actually behind the "Administration sits lower" symptom, not a
-   same-row height mismatch between stPageLink and stPopover. */
-.st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
-  width: 100%;
-  flex-wrap: wrap !important;
-  align-items: center !important;
-  column-gap: .4rem !important;
-  row-gap: .42rem !important;
-}
-
-/* [data-testid="stPopoverButton"] here, not "[stPopover] > button": the
-   real button sits behind an extra unnamed wrapper div (stPopover > div >
-   button), so the old "> button" direct-child selector never matched
-   anything either (confirmed via devtools — zero matched rules, same
-   failure mode as the stHorizontalBlock gap selector above). The
-   Administration pill's visible styling up to now came entirely from
-   broader app-wide button rules, not from this nav-specific block, which
-   is why its padding/height never quite matched its siblings. */
-.st-key-app_top_navigation [data-testid="stPageLink"] a,
-.st-key-app_top_navigation [data-testid="stPopoverButton"] {
-  width: auto !important;
-  min-height: 2.55rem !important;
-  padding: .42rem .85rem !important;
-  border: 1px solid #d7d9dd !important;
-  border-radius: 999px !important;
-  background: #ffffff !important;
-  color: #25262d !important;
-  box-shadow: none !important;
-  font-weight: 500 !important;
-  line-height: 1.2 !important;
-  white-space: nowrap !important;
-}
-
-/* Streamlit's react-aria nav-link text sits in a nested span carrying its own
-   hardcoded dark-theme colour, which wins over the <a> rule above through
-   normal inheritance rules regardless of !important. Target it directly. */
-.st-key-app_top_navigation [data-testid="stPageLink"] a *,
-.st-key-app_top_navigation [data-testid="stPopoverButton"] * {
-  color: #25262d !important;
-}
-
-.st-key-app_top_navigation [data-testid="stPageLink"] a:hover,
-.st-key-app_top_navigation [data-testid="stPopoverButton"]:hover {
-  border-color: #b8bcc2 !important;
-  background: #f7f7f5 !important;
-}
-
-.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"],
-.st-key-app_top_navigation [data-testid="stPageLink"] a[aria-disabled="true"] * {
-  background: #f3f3f0 !important;
-  border-color: #b8bcc2 !important;
-  color: #25262d !important;
-  opacity: 1 !important;
-}
-
-@media (max-width: 700px) {
-  .st-key-app_top_navigation[data-testid="stHorizontalBlock"] {
-    column-gap: .32rem !important;
-    row-gap: .38rem !important;
-  }
-
-  .st-key-app_top_navigation [data-testid="stPageLink"] a,
-  .st-key-app_top_navigation [data-testid="stPopoverButton"] {
-    min-height: 2.65rem !important;
-    padding: .43rem .72rem !important;
-  }
-}
-</style>
 
 <style>
 /* Dark-mode leak fix for Streamlit's react-aria-based widgets (popover panel,
@@ -6645,120 +6528,106 @@ selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
 selected_navigation_page.run()
 hide_stale_screen_while_navigating()
 
-PRIMARY_SECTION_BY_APP_PAGE = {
-    "sites": "Trap sites",
-    "site": "Trap sites",
-    "start_visit": "Trap sites",
-    "visit": "Trap sites",
-    "check": "Trap sites",
-    "check_confirm": "Trap sites",
-    "trial": "Trap sites",
-    "trial_start": "Trap sites",
-    "trial_adopt": "Trap sites",
-    "trial_end": "Trap sites",
-    "network": "Traps",
-    "trap_detail": "Traps",
-    "followups": "Follow-ups",
-    "results": "Trial performance",
+# Which navigation item an app page belongs to (its "you are here"). Pages not listed show none.
+NAV_KEY_BY_APP_PAGE = {
+    "sites": "sites", "site": "sites", "start_visit": "sites", "visit": "sites", "check": "sites", "check_confirm": "sites",
+    "trial": "sites", "trial_start": "sites", "trial_adopt": "sites", "trial_end": "sites",
+    "followups": "followups", "results": "performance",
+    "network": "traps", "trap_detail": "traps", "setup": "setup", "trap_edit": "setup",
+    "data_management": "records", "windows": "records", "data_quality": "quality",
 }
+NAV_ADMIN_KEYS = ("traps", "setup", "records", "quality")
+# Visit mode has no navigation, only its back pill; the check form and Set up / Track as a trial / End trial are flows.
+NAV_HIDDEN_PAGES = {"visit", "check", "check_confirm", "trial_start", "trial_adopt", "trial_end"}
+current_nav_key = NAV_KEY_BY_APP_PAGE.get(st.session_state.get("page", "sites"), "")
+NAV_PAGE_BY_KEY = {"sites": PAGE_TRAP_SITES, "followups": PAGE_FOLLOWUPS, "performance": PAGE_PERFORMANCE, "traps": PAGE_TRAPS,
+                   "setup": PAGE_TRIAL_SETUP, "records": PAGE_DATA_RECORDS, "quality": PAGE_DATA_QUALITY}
 
-current_primary_section = PRIMARY_SECTION_BY_APP_PAGE.get(
-    st.session_state.get("page", "sites")
-)
 
-# Native Streamlit page links and Administration share one wrapping container.
-# No selection state is stored, so a tap routes immediately.
-with st.container(
-    horizontal=True,
-    horizontal_alignment="left",
-    gap="small",
-    width="stretch",
-    key="app_top_navigation",
-):
-    st.page_link(
-        PAGE_TRAP_SITES,
-        label="Trap sites",
-        disabled=current_primary_section == "Trap sites",
-        width="content",
+def _mirror_operator(source_key: str) -> None:
+    """The Operator box lives in both menus (phone and desktop); whichever is edited sets the one name and the other box."""
+    name = st.session_state.get(source_key, "")
+    st.session_state.field_operator = name
+    for key in ("top_nav_operator_desktop", "top_nav_operator_phone"):
+        st.session_state[key] = name
+
+
+def _sign_out() -> None:
+    clear_workflow_query_params()
+    # The signed access token in the URL is what lets a refresh survive
+    # without re-prompting (see require_authentication) - it must be
+    # cleared here too, or a rerun immediately re-authenticates from the
+    # still-valid URL and Sign out has no effect.
+    st.query_params.pop(AUTH_QUERY_KEY, None)
+    st.session_state.clear()
+
+
+NAV_LABEL_BY_KEY = {"sites": "Trap sites", "followups": "Follow-ups", "performance": "Trial performance", "traps": "Traps",
+                    "setup": "Trial setup", "records": "Data & records", "quality": "Data quality"}
+
+
+def _nav_link(key: str, current: str, width: str = "content") -> None:
+    st.page_link(NAV_PAGE_BY_KEY[key], label=NAV_LABEL_BY_KEY[key], disabled=(key == current), width=width)
+
+
+def _admin_menu_items(current: str, suffix: str) -> None:
+    """Traps, Trial setup, Data & records, Data quality (its count is drawn by CSS from a number already in hand), the
+    Operator name, Sign out."""
+    for key in ("traps", "setup", "records", "quality"):
+        _nav_link(key, current, width="stretch")
+    _operator_box(suffix)
+    st.button("Sign out", key=f"top_nav_sign_out_{suffix}", use_container_width=True, on_click=_sign_out)
+
+
+def _operator_box(suffix: str) -> None:
+    # UX-audit fix (2026-08-13): the only place in the live app that sets the operator name attributed to a visit/check.
+    # Reachable from every page that shows the navigation, same as Sign out.
+    st.text_input("Operator", value=st.session_state.field_operator, key=f"top_nav_operator_{suffix}",
+                  help="Attributed to every visit and check you record until changed.",
+                  on_change=_mirror_operator, args=(f"top_nav_operator_{suffix}",))
+
+
+def draw_top_navigation(current: str) -> None:
+    """The Phase 7 navigation: one row on a phone (Trap sites, Follow-ups with its count, More), four items on desktop.
+    Both layouts are drawn and CSS shows one at 700px. The two counts are numbers the run already has: open follow-ups
+    (exactly what the Follow-ups page lists by default) and the cached Data quality candidates."""
+    open_followups = int((data["Followups"]["Status"] == "Open").sum())
+    st.markdown(
+        design.NAV_APP_CSS + "<style>" + design.count_badge_css("follow-ups", open_followups) + design.count_badge_css("data-quality", data_quality_candidate_count(_data_file_mtime(), data)) + "</style>",
+        unsafe_allow_html=True,
     )
-    st.page_link(
-        PAGE_FOLLOWUPS,
-        label="Follow-ups",
-        disabled=current_primary_section == "Follow-ups",
-        width="content",
-    )
-    st.page_link(
-        PAGE_PERFORMANCE,
-        label="Trial performance",
-        disabled=current_primary_section == "Trial performance",
-        width="content",
-    )
-    # Streamlit doesn't unmount/remount this popover across a rerun triggered
-    # from inside it (its own open/closed state is local, uncontrolled React
-    # state, not tied to session_state) - so a page_link click that navigates
-    # away leaves it sitting open over the new page's content. Keying it to
-    # the current page forces a fresh component identity (and therefore a
-    # fresh, closed popover) on every real navigation, without needing to
-    # track open/closed state ourselves.
-    with st.popover("Administration", key=f"app_top_navigation_admin_popover_{st.session_state.get('page', 'sites')}"):
-        # UX-audit fix (2026-08-13): this was the only place in the live app that
-        # could set the operator name attributed to a visit/check - the sole
-        # <text_input> for it lived in a dead, unreachable page handler, so every
-        # visit was silently attributed to whatever the hardcoded default happened
-        # to be. Reachable from every page via the top nav, same as Sign out below.
-        st.session_state.field_operator = st.text_input(
-            "Operator",
-            value=st.session_state.field_operator,
-            key="top_nav_operator",
-            help="Attributed to every visit and check you record until changed.",
-        )
-        st.divider()
-        st.page_link(PAGE_TRAPS, label="Traps", width="stretch")
-        st.page_link(PAGE_TRIAL_SETUP, label="Trial setup", width="stretch")
-        st.page_link(PAGE_DATA_RECORDS, label="Data & records", width="stretch")
-        data_quality_badge_count = data_quality_candidate_count(_data_file_mtime(), data)
-        if data_quality_badge_count:
-            # The badge's count is baked directly into the CSS content string
-            # rather than styled unconditionally, so the highlighted
-            # background and count pill only ever render when there really
-            # are candidates waiting - nothing to hide/show client-side.
-            st.markdown(
-                f"""<style>
-                [data-testid="stPageLink"]:has(a[href*="data-quality"]) {{
-                    background: #FFF3D9 !important;
-                    border-radius: 8px;
-                }}
-                [data-testid="stPageLink"]:has(a[href*="data-quality"]) a::after {{
-                    content: "{data_quality_badge_count}";
-                    background: #775900;
-                    color: #FFFFFF;
-                    font-size: 10px;
-                    font-weight: 700;
-                    border-radius: 999px;
-                    padding: 1px 6px;
-                    margin-left: 6px;
-                }}
-                </style>""",
-                unsafe_allow_html=True,
-            )
-        st.page_link(PAGE_DATA_QUALITY, label="Data quality", width="stretch")
-        st.divider()
-        if st.button("Sign out", key="top_nav_sign_out", use_container_width=True):
-            clear_workflow_query_params()
-            # The signed access token in the URL is what lets a refresh survive
-            # without re-prompting (see require_authentication) - it must be
-            # cleared here too, or a rerun immediately re-authenticates from the
-            # still-valid URL and Sign out has no effect.
-            st.query_params.pop(AUTH_QUERY_KEY, None)
-            st.session_state.clear()
-            st.rerun()
+    page_key = st.session_state.get("page", "sites")
+    with st.container(key="app_nav"):
+        # Desktop (over 700px): Trap sites, Follow-ups, Trial performance, Administration.
+        with st.container(horizontal=True, key="nav_desktop"):
+            for key in ("sites", "followups", "performance"):
+                _nav_link(key, current)
+            with st.container(key="navmore_on_desktop" if current in NAV_ADMIN_KEYS else "navmore_off_desktop"):
+                # Streamlit doesn't unmount/remount a popover across a rerun triggered from inside it (its open state is local,
+                # uncontrolled React state), so a link click that navigates away would leave it open over the new page.
+                # Keying it to the current page forces a fresh, closed popover on every real navigation.
+                with st.popover("Administration", key=f"app_top_navigation_admin_popover_{page_key}"):
+                    _admin_menu_items(current, "desktop")
+        # Phone (700px and under): Trap sites, Follow-ups, More.
+        with st.container(horizontal=True, key="nav_phone"):
+            for key in ("sites", "followups"):
+                _nav_link(key, current)
+            with st.container(key="navmore_on_phone" if (current == "performance" or current in NAV_ADMIN_KEYS) else "navmore_off_phone"):
+                with st.popover("More", key=f"app_top_navigation_more_popover_{page_key}"):
+                    _nav_link("performance", current, width="stretch")
+                    st.markdown('<div class="r1-menu-group">Administration</div>', unsafe_allow_html=True)
+                    _admin_menu_items(current, "phone")
+
+
+if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:
+    draw_top_navigation(current_nav_key)
 
 # Workflow pages retain one explicit escape route while the top navigation
 # remains on the parent Trap sites section. No separate site-name caption
 # here any more (trap-journey-scroll brief) — every workflow page's own H1
 # already carries that context, so a line above this button was showing the
 # same name twice.
-if st.session_state.page in WORKFLOW_PAGES:
+if st.session_state.page in WORKFLOW_PAGES and st.session_state.page != "visit":
     st.button("← Exit to Trap sites", key="exit_workflow_to_sites", on_click=set_page, args=("sites",))
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
@@ -6770,10 +6639,11 @@ if is_demo_data:
     message_panel("warning", "Demo data", ["This app contains synthetic demonstration records. Do not treat its Performance figures as trial evidence."])
 
 if page == "sites":
-    header("Trap sites", "Choose the trap site you are visiting today.")
+    # Phase 7b (2/8): white cards, a dot and words for status, the stat on the right, one primary button per card. Nothing here
+    # reads a new sheet: every figure below was already computed for the old card.
+    r1_screen_css()
     active_sites = data["Sites"][data["Sites"]["Status"] == "Active"].copy()
-    if active_sites.empty:
-        helper("No active trap sites are available. Reactivate a site in Administration → Trial setup.")
+    site_cards = []
     for _, s in active_sites.iterrows():
         sid = s["Site ID"]
         traps = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")]
@@ -6785,66 +6655,69 @@ if page == "sites":
         # Field report fix (2026-08-14): count unique traps checked, not raw
         # Check rows - a trap checked twice in one visit (e.g. a re-check
         # after an ambiguous/dropped-connection save) inflated this past the
-        # real trap count ("10 of 9 traps checked"). The site-detail page's
-        # own progress bar already dedupes this way (see `done` below); the
-        # list card just hadn't matched it.
+        # real trap count ("10 of 9 traps checked").
         checked_trap_count = checks["Trap ID"].astype(str).nunique() if active is not None else 0
         active_complete = active is not None and len(traps) > 0 and checked_trap_count >= len(traps)
-        if active is not None:
-            status_text = "Ready to finish" if active_complete else "In progress"
-            status_kind = "warning" if active_complete else "guidance"
-        else:
-            # Card-system brief Phase 2: an absolute Last/Next date line no
-            # longer appears on this card (moved to the visit page) — this
-            # is its replacement, and it's the only pill a not-yet-started
-            # site shows. A freshly-completed site (completed_today) is
-            # simply not due soon, so it now shows no pill here, same as
-            # any other site with time before its next check — the pale
-            # green card background below is still its own, separate signal.
-            status_text, status_kind = site_urgency_pill(next_dt.date(), now().date())
         site_trial = open_trial(data, sid)
         no_trial_no_traps = site_trial is None and len(traps) == 0
-        with app_card():
-            if completed_today and active is None:
-                st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-            # Trap count is shown once: as a fraction while a visit is in
-            # progress (matches the "X of Y" language already used
-            # elsewhere), or as a plain count before one starts — never both,
-            # since showing "9 active traps" next to "0 of 9 traps checked"
-            # repeats the same number for no reason.
-            trap_count_text = (
-                f"{checked_trap_count} of {len(traps)} traps checked" if active is not None
-                else f"{len(traps)} active traps"
-            )
-            if no_trial_no_traps:
-                trap_count_text = "No trial running"
-            st.markdown(
-                '<div class="shared-card-copy site-card-compact">'
-                f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
-                f'<div class="shared-card-meta">{trap_count_text} · Every {interval} days</div>'
-                '</div>',
-                unsafe_allow_html=True,
-            )
-            if site_trial is None and len(traps) > 0:
-                # Field work never waits on a migration: Start checking still works at an untracked site.
-                message_panel("warning", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial.")
-            if no_trial_no_traps:
-                st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
-            else:
-                if active is not None:
-                    st.button(
-                        "Resume checking", key=f"resume_{sid}", type="primary",
-                        on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": active["Visit ID"]},
-                    )
+        # Status: orange dot = due or in progress, red = overdue (words bold), green = done, grey = nothing running.
+        # A site not due for a while shows no status at all (nothing to flag).
+        urgency_text, _urgency_kind = site_urgency_pill(next_dt.date(), now().date())
+        if no_trial_no_traps:
+            status_text, status_class = "No trial running", ""
+        elif active is not None:
+            status_text, status_class = ("Ready to finish" if active_complete else "In progress"), "progress"
+        elif urgency_text.startswith("Overdue"):
+            status_text, status_class = urgency_text, "overdue"
+        elif urgency_text:
+            status_text, status_class = urgency_text, "due"
+        elif completed_today:
+            status_text, status_class = "Checked today", "done"
+        else:
+            status_text, status_class = "", ""
+        # One number on the right: how far through a visit is, or how many traps the site runs.
+        if no_trial_no_traps:
+            stat_value, stat_label = "", ""
+        elif active is not None:
+            stat_value, stat_label = f"{checked_trap_count} of {len(traps)}", "Checked"
+        else:
+            stat_value, stat_label = str(len(traps)), "Traps"
+        site_cards.append({"sid": sid, "name": str(s["Site Name"]), "active": active, "site_trial": site_trial, "no_trial_no_traps": no_trial_no_traps,
+                           "untracked": site_trial is None and len(traps) > 0, "status_text": status_text, "status_class": status_class,
+                           "stat_value": stat_value, "stat_label": stat_label,
+                           "due_now": active is None and (urgency_text.startswith("Overdue") or urgency_text == "Due today") and not no_trial_no_traps})
+    due_count = sum(1 for c in site_cards if c["due_now"])
+    with st.container(key=design.SCREEN_KEY):
+        r1_title("Trap sites", stat_value=due_count or None, stat_label="Due today")
+        if not site_cards:
+            st.markdown('<div class="r1-meta">No active trap sites are available. Reactivate a site in Administration → Trial setup.</div>', unsafe_allow_html=True)
+        for c in site_cards:
+            sid = c["sid"]
+            with st.container(key=f"card_site_{sid}"):
+                status = f'<div class="r1-status {c["status_class"]}">{html.escape(c["status_text"])}</div>' if c["status_text"] else ""
+                stat = (f'<div><div class="r1-stat">{html.escape(c["stat_value"])}</div><div class="r1-stat-label">{c["stat_label"]}</div></div>' if c["stat_value"] else "")
+                st.markdown(f'<div class="r1-titlerow"><div><div class="r1-card-title">{html.escape(c["name"])}</div>{status}</div>{stat}</div>', unsafe_allow_html=True)
+                if c["untracked"]:
+                    # Field work never waits on a migration: Start checking still works at an untracked site.
+                    st.markdown(design.message_html("warn", "", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial."), unsafe_allow_html=True)
+                if c["no_trial_no_traps"]:
+                    st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
                 else:
-                    st.button(
-                        "Start checking", key=f"open_{sid}", type="primary",
-                        on_click=start_checking_callback, args=(sid,),
-                    )
-                if site_trial is not None:
-                    st.button("Trial overview", key=f"trial_overview_{sid}", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
-                else:
-                    st.button("Track as a trial", key=f"track_{sid}", on_click=begin_trial_adopt, args=(sid,))
+                    if c["active"] is not None:
+                        st.button(
+                            "Resume checking", key=f"resume_{sid}", type="primary",
+                            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": c["active"]["Visit ID"]},
+                        )
+                    else:
+                        # A site already checked today still offers a new visit, but not as the page's loudest button: secondary.
+                        st.button(
+                            "Start checking", key=f"open_{sid}", type="secondary" if c["status_class"] == "done" else "primary",
+                            on_click=start_checking_callback, args=(sid,),
+                        )
+                    if c["site_trial"] is not None:
+                        st.button("Trial overview", key=f"trial_overview_{sid}", type="tertiary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+                    else:
+                        st.button("Track as a trial", key=f"track_{sid}", type="tertiary", on_click=begin_trial_adopt, args=(sid,))
 
 elif page == "site":
     sid = st.session_state.site_id
@@ -6906,28 +6779,22 @@ elif page == "visit":
             go("sites")
         st.stop()
 
-    traps = data["Traps"][
+    site_traps = data["Traps"][
         (data["Traps"]["Site ID"] == sid)
         & (data["Traps"]["Status"] == "Active")
     ].copy()
+    traps = site_traps.copy()
     checks = data["Checks"][data["Checks"]["Visit ID"] == vid]
     done = set(checks["Trap ID"].astype(str))
+    latest_check = {str(row["Trap ID"]): row for _, row in checks.sort_values("Check Time").iterrows()}
+    # Build is shown on a trap row only when the list compares builds.
+    show_build = site_traps[["Product", "Build Version"]].drop_duplicates().shape[0] > 1
 
-    header(site_name(data, sid), "Select the trap you are standing at.")
     saved = st.session_state.pop("saved_check", None)
-    if saved:
-        photo_count = int(saved.get("photo_count", 0))
-        details = [f"{photo_count} photo{'s' if photo_count != 1 else ''} stored"] if photo_count else []
-        message_panel("success", f"{saved['trap_id']} saved", details)
 
-    # Trap-journey-scroll brief: someone standing at one physical trap is not
-    # usually filtering or searching, so both fields live behind one toggle,
-    # default closed. Read prior widget state directly from session_state
-    # rather than only from the (possibly unrendered) widgets themselves —
-    # Streamlit keeps a widget's value in session_state after it stops being
-    # drawn, so an active filter still applies to the list even while its
-    # controls are hidden, and the toggle label surfaces what's active so it
-    # isn't silently discarded from view.
+    # Trap-journey-scroll brief: someone standing at one physical trap is not usually filtering or searching, so both fields live behind
+    # one toggle, default closed. Prior widget state is read straight from session_state: an active filter still applies to the list
+    # while its controls are hidden, and the toggle label says what is active.
     product_filter_key = f"visit_product_filter_{vid}"
     search_key = f"visit_trap_search_{vid}"
     prior_product_filter = st.session_state.get(product_filter_key, "All")
@@ -6943,106 +6810,115 @@ elif page == "visit":
             active_bits.append(f'"{prior_search_text}"')
         toggle_label += " · " + " · ".join(active_bits)
 
-    # Keyed by vid, not persisted anywhere else, so a new visit always starts
-    # closed — no remembered state across visits or page loads.
-    filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
-    if filter_expanded:
-        filter_col, search_col = st.columns([1, 1.6])
-        product_filter = filter_col.radio(
-            "Trap type",
-            ["All", "R1", "M1"],
-            horizontal=True,
-            key=product_filter_key,
-        )
-        search_text = search_col.text_input(
-            "Find trap",
-            placeholder="Trap ID or location",
-            key=search_key,
-        ).strip().lower()
-    else:
-        product_filter = prior_product_filter
-        search_text = prior_search_text.lower()
-
-    if product_filter != "All":
-        traps = traps[traps["Product"] == product_filter]
-    if search_text:
-        traps = traps[
-            traps.apply(
-                lambda row: search_text in str(row["Trap ID"]).lower()
-                or search_text in trap_location_label(row).lower(),
-                axis=1,
-            )
-        ]
-
-    traps["_checked"] = traps["Trap ID"].astype(str).isin(done)
-    traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
-    traps = traps.sort_values(["_checked", "Product", "_route", "Trap ID"])
-
-    total_traps = len(data['Traps'][(data['Traps']['Site ID']==sid) & (data['Traps']['Status']=='Active')])
+    total_traps = len(site_traps)
     checked_count = len(done)
     progress_value = min(1.0, checked_count / total_traps) if total_traps else 0.0
-    st.progress(progress_value, text=f"{checked_count} of {total_traps} traps checked")
     all_checked = total_traps > 0 and checked_count >= total_traps
-    if all_checked:
-        message_panel("success", f"All {total_traps} traps checked", ["Finish the site check to record completion."])
-    if traps.empty:
-        helper("No traps match this filter.")
-    else:
-        last_saved_trap_id = st.session_state.get(f"last_saved_trap_{vid}")
-        for _, tr in traps.iterrows():
-            trap_id = str(tr["Trap ID"])
-            checked = trap_id in done
-            render_visit_trap_card(tr, checked, vid, sid, just_saved=(trap_id == last_saved_trap_id))
 
-    # Trap-journey-scroll brief: this is the card-system brief's Phase 2
-    # schedule line, relocated to the bottom of the trap list rather than
-    # between the H1 and the cards where it previously sat — read-only
-    # reference for someone already inside a visit, not something that
-    # needs to compete with the cards for the first-viewport scroll budget.
-    site_row_for_schedule = data["Sites"][data["Sites"]["Site ID"] == sid]
-    if not site_row_for_schedule.empty:
-        schedule_interval = int(float(site_row_for_schedule.iloc[0]["Visit Interval Days"] or 3))
-        schedule_last = latest_completed_visit(data, sid)
-        schedule_last_dt = parse_dt(schedule_last["End Time"]) if schedule_last is not None else None
-        schedule_next_dt = schedule_last_dt + timedelta(days=schedule_interval) if schedule_last_dt else now()
-        st.caption(
-            f"Last {schedule_last_dt.strftime('%d %b %Y') if schedule_last_dt else 'not completed'} · "
-            f"Next {'due now' if schedule_next_dt.date() <= now().date() else schedule_next_dt.strftime('%d %b %Y')}"
+    # Phase 7b (3/8): visit mode is one narrow column with no top navigation, only the back pill. Nothing here reads a new sheet.
+    r1_screen_css(hide_nav=True)
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Exit to Trap sites", "sites", "exit_visit")
+        r1_title(site_name(data, sid), stat_value=f"{checked_count} of {total_traps}", stat_label="Checked")
+        st.markdown(
+            f'<div class="r1-bar" role="progressbar" aria-label="Traps checked" aria-valuemin="0" aria-valuemax="{total_traps}" aria-valuenow="{checked_count}">'
+            f'<span style="width:{progress_value * 100:.0f}%"></span></div>',
+            unsafe_allow_html=True,
         )
+        if saved:
+            photo_count = int(saved.get("photo_count", 0))
+            row = latest_check.get(str(saved["trap_id"]))
+            finding = str(row["Finding"]).strip() if row is not None else ""
+            species = str(row["Species"]).strip() if row is not None and finding == "Dead animal found" else ""
+            detail = " · ".join(part for part in (finding, species, f"{photo_count} photo{'s' if photo_count != 1 else ''} stored" if photo_count else "") if part)
+            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", html.escape(detail)), unsafe_allow_html=True)
 
-    st.markdown("### Site check actions")
-    with st.container(border=True):
+        # Keyed by vid, not persisted anywhere else, so a new visit always starts closed.
+        filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
+        if filter_expanded:
+            filter_col, search_col = st.columns([1, 1.6])
+            product_filter = filter_col.radio(
+                "Trap type",
+                ["All", "R1", "M1"],
+                horizontal=True,
+                key=product_filter_key,
+            )
+            search_text = search_col.text_input(
+                "Find trap",
+                placeholder="Trap ID or location",
+                key=search_key,
+            ).strip().lower()
+        else:
+            product_filter = prior_product_filter
+            search_text = prior_search_text.lower()
+
+        if product_filter != "All":
+            traps = traps[traps["Product"] == product_filter]
+        if search_text:
+            traps = traps[
+                traps.apply(
+                    lambda row: search_text in str(row["Trap ID"]).lower()
+                    or search_text in trap_location_label(row).lower(),
+                    axis=1,
+                )
+            ]
+
+        traps["_checked"] = traps["Trap ID"].astype(str).isin(done)
+        traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
+        to_check = traps[~traps["_checked"]].sort_values(["Product", "_route", "Trap ID"])
+        # Checked traps, the one just saved and then the most recent first.
+        last_saved_trap_id = st.session_state.get(f"last_saved_trap_{vid}")
+        checked_rows = traps[traps["_checked"]].copy()
+        checked_rows["_when"] = checked_rows["Trap ID"].astype(str).map(lambda t: str(latest_check[t]["Check Time"]) if t in latest_check else "")
+        checked_rows = checked_rows.sort_values("_when", ascending=False)
+
+        if traps.empty:
+            st.markdown('<div class="r1-meta">No traps match this filter.</div>', unsafe_allow_html=True)
+        if not to_check.empty:
+            with st.container(key="cardlist_visit_tocheck"):
+                for position, (_, tr) in enumerate(to_check.iterrows()):
+                    render_visit_trap_card(tr, False, vid, sid, is_next=(position == 0), is_last=(position == len(to_check) - 1), show_build=show_build)
+        if not checked_rows.empty:
+            st.markdown('<div class="r1-label">Checked</div>', unsafe_allow_html=True)
+            with st.container(key="cardlist_visit_checked"):
+                for position, (_, tr) in enumerate(checked_rows.iterrows()):
+                    trap_id = str(tr["Trap ID"])
+                    render_visit_trap_card(tr, True, vid, sid, just_saved=(trap_id == last_saved_trap_id), is_last=(position == len(checked_rows) - 1), check=latest_check.get(trap_id))
+
         if st.button(
             "Finish site check",
             type="primary",
-            use_container_width=True,
             disabled=not all_checked,
-            help="Check every active trap before completing the site visit." if not all_checked else None,
         ):
             idx = data["Visits"].index[data["Visits"]["Visit ID"] == vid][0]
             data["Visits"].at[idx, "End Time"] = dtstr()
             data["Visits"].at[idx, "Status"] = "Complete"
             save_data(data)
-            set_flash("success", f"{site_name(data, sid)} site check completed", [f"All {total_traps} traps were checked."])
+            # Phase 7b (6/8): the confirmation is the Visit complete summary. If working it out ever failed, the plain message still shows.
+            try:
+                summary = visit_complete_summary(data, sid, vid)
+            except Exception:
+                _logger.exception("Could not work out the Visit complete summary; showing the plain message.")
+                summary = None
+            set_flash("success", f"{site_name(data, sid)} site check completed", [] if summary else [f"All {total_traps} traps were checked."], visit_complete=summary)
             st.session_state.completed_site_id = sid
             # At a tracked site the finished visit lands on the trial hub; an untracked site behaves as before.
             if open_trial(data, sid) is not None:
                 go("trial", site_id=sid)
             go("sites")
+        if not all_checked:
+            remaining = max(total_traps - checked_count, 0)
+            st.markdown(f'<div class="r1-meta">{r1_count(remaining, "trap")} still to check.</div>', unsafe_allow_html=True)
         if checked_count >= 1 and open_trial(data, sid) is not None:
             st.button(
-                "Finish visit and end trial…", key=f"finish_visit_end_trial_{vid}", use_container_width=True,
+                "Finish visit and end trial…", key=f"finish_visit_end_trial_{vid}", type="tertiary",
                 on_click=begin_trial_end, args=(sid, vid),
             )
-        st.button("Pause and return to Trap sites", use_container_width=True, on_click=set_page, args=("sites",))
         if checked_count == 0:
-            # Only offered while nothing has been recorded under this visit
-            # yet — the moment a single trap is checked, there's real field
-            # data attached to it and this option disappears entirely, so
-            # it can never be used to discard actual work. No separate
-            # confirm step: at 0 checks there's nothing to lose, and the
-            # worst case of a stray tap is just re-tapping "Start checking".
-            if st.button("Cancel check", key=f"cancel_visit_{vid}", use_container_width=True):
+            # Only offered while nothing has been recorded under this visit yet: the moment a single trap is checked, there is real field
+            # data attached to it and this option disappears, so it can never discard actual work. No confirm step: at 0 checks there is
+            # nothing to lose, and the worst case of a stray tap is re-tapping "Start checking".
+            if st.button("Cancel check", key=f"cancel_visit_{vid}", type="tertiary"):
                 audit_change(data, "Visit", vid, "Status", "In progress", "Cancelled (no traps checked)", "Cancelled from Site check actions")
                 data["Visits"] = data["Visits"][data["Visits"]["Visit ID"] != vid]
                 save_data(data)
@@ -8184,47 +8060,67 @@ elif page == "trap_detail":
 
 elif page == "followups":
     selected_followup_id=st.session_state.get("followup_panel")
-    if not selected_followup_id:
-        header("Follow-ups", "Complete tasks created during trap checks.")
     fu=data["Followups"][data["Followups"]["Status"]=="Open"].copy()
 
     if not selected_followup_id:
-        filter_left,action_right=st.columns([4,1],vertical_alignment="bottom")
-        with filter_left:
-            filter_site,filter_priority=st.columns(2)
-            followup_site=filter_site.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x),key="followup_site_filter")
-            followup_priority=filter_priority.selectbox("Priority",["All priorities","High","Normal","Low"],key="followup_priority_filter")
+        # Phase 7b (7/8): a title with the open count, two visible filters (short lists are never dropdowns) and the tasks as list rows.
+        # The filters keep their keys (the trial hub sets followup_site_filter before it opens this page); nothing new is read from a sheet.
+        r1_screen_css()
+        site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
+        priority_options = ["All priorities", "High", "Normal", "Low"]
+        if st.session_state.get("followup_site_filter") not in site_options:
+            st.session_state["followup_site_filter"] = "All sites"
+        if st.session_state.get("followup_priority_filter") not in priority_options:
+            st.session_state["followup_priority_filter"] = "All priorities"
+        followup_site = st.session_state["followup_site_filter"]
+        followup_priority = st.session_state["followup_priority_filter"]
+        total_open = len(fu)
         if followup_site!="All sites": fu=fu[fu["Site ID"]==followup_site]
         if followup_priority!="All priorities": fu=fu[fu["Priority"]==followup_priority]
         if not fu.empty:
             fu=fu.assign(_priority_order=pd.Categorical(fu["Priority"],categories=["High","Normal","Low"],ordered=True)).sort_values(["_priority_order","Created Time"])
-            if action_right.button("Review next task",type="primary",key="review_next_followup"):
-                st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
-        if fu.empty:
-            message_panel("success","All follow-up work is complete.",["There is nothing waiting for review."])
-        else:
-            st.caption("Review a task directly from its row.")
-            for _,item_row in fu.iterrows():
-                row_fid=item_row["Follow-up ID"]
-                with app_card():
-                    bag_text = f"Bag: {item_row['Bag ID']} · " if str(item_row.get("Bag ID", "")).strip() else ""
-                    reason_text = item_row["Reason"] or "—"
-                    # Priority is shown plainly, same as before — an explicit decision,
-                    # not the unresolved default: this card doesn't give High any
-                    # extra visual weight (no colour, no icon), since that's a separate
-                    # design decision this release isn't making. If that changes later,
-                    # it should be a deliberate follow-up, not a silent addition here.
-                    st.markdown(
-                        '<div class="shared-card-copy">'
-                        f'<div class="shared-card-heading"><strong>{html.escape(str(item_row["Trap ID"]))}</strong>{status_pill(str(item_row["Follow-up Type"]), "neutral")}</div>'
-                        f'<div class="shared-card-meta">{html.escape(site_name(data,item_row["Site ID"]))} · {html.escape(str(item_row["Priority"]))}</div>'
-                        f'<div class="shared-card-meta">{html.escape(bag_text)}Reason: {html.escape(str(reason_text))}</div>'
-                        f'<div class="shared-card-meta">Created: {html.escape(human_dt(item_row["Created Time"]))}</div>'
-                        '</div>',
-                        unsafe_allow_html=True,
-                    )
-                    if st.button("Review",key=f"followup_review_{row_fid}",use_container_width=True):
-                        st.session_state.followup_panel=row_fid; st.rerun()
+        with st.container(key=design.SCREEN_KEY):
+            # At zero the count would only repeat the panel underneath (and the navigation badge hides at zero too), so it is left out.
+            r1_title("Follow-ups", stat_value=(len(fu) or None), stat_label="Open")
+            # With nothing open at all there is nothing to filter. A filter that matches nothing keeps its controls, so it can be changed.
+            if total_open:
+                with st.container(key="chips_followup_site"):
+                    st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
+                with st.container(key="seg_followup_priority"):
+                    st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
+            if fu.empty:
+                if total_open:
+                    st.markdown(design.message_html("info", "No open follow-ups match these filters."), unsafe_allow_html=True)
+                else:
+                    st.markdown(design.message_html("success", "All follow-up work is complete.", "There is nothing waiting for review."), unsafe_allow_html=True)
+            else:
+                if st.button("Review next task",type="primary",key="review_next_followup"):
+                    st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
+                several_sites = fu["Site ID"].nunique() > 1
+                task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
+                with st.container(key="cardlist_followups"):
+                    for position, (_, item_row) in enumerate(fu.iterrows()):
+                        row_fid=item_row["Follow-up ID"]
+                        task_type=str(item_row["Follow-up Type"])
+                        # What the person needs to find the task: the trap, its site only when the list spans sites, why it exists, and the
+                        # bag for a necropsy. Priority is plain words and only when it is not the ordinary one (no colour: that is a separate decision).
+                        bits=[html.escape(str(item_row["Trap ID"]))]
+                        if several_sites: bits.append(html.escape(site_name(data,item_row["Site ID"])))
+                        reason = str(item_row["Reason"]).strip()
+                        if reason and task_type != "Necropsy review" and reason.lower() != task_type.lower():  # not when it only repeats the task's own name
+                            bits.append(html.escape(reason))
+                        if task_type=="Necropsy review" and str(item_row.get("Bag ID", "")).strip(): bits.append("Bag " + html.escape(str(item_row["Bag ID"]).strip()))
+                        if str(item_row["Priority"]) in ("High", "Low"): bits.append(f"{html.escape(str(item_row['Priority']))} priority")
+                        row_key = f"listrow_{'next_' if position == 0 else ''}{'end_' if position == len(fu) - 1 else ''}followup_{row_fid}"
+                        with st.container(key=row_key):
+                            text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                            text_col.markdown(
+                                f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(task_icon.get(task_type, "warn-circle"), 22)}</div>'
+                                f'<div><div class="r1-row-title">{html.escape(task_type)}</div><div class="r1-meta">{" · ".join(bits)}</div></div></div>',
+                                unsafe_allow_html=True,
+                            )
+                            if button_col.button("Review",key=f"followup_review_{row_fid}"):
+                                st.session_state.followup_panel=row_fid; st.rerun()
     else:
         matches=data["Followups"][data["Followups"]["Follow-up ID"]==selected_followup_id]
         if matches.empty:
@@ -8400,7 +8296,7 @@ elif page == "followups":
                                 st.session_state.pop("followup_panel",None); st.rerun()
 
 elif page == "windows":
-    if st.button("← Back to Data Management"):
+    if st.button("← Back to Data & records"):
         go("data_management")
     header("Trial periods", "Review active and completed trial periods.")
     controls_left, action_right = st.columns([4, 1], vertical_alignment="bottom")
@@ -8480,7 +8376,7 @@ elif page == "data_quality":
     elif reviewing_id:
         candidate = next(c for c in candidates if c["Check ID"] == reviewing_id)
         position = next(i for i, c in enumerate(candidates) if c["Check ID"] == reviewing_id) + 1
-        if st.button("← Back to list", key="data_quality_back"):
+        if st.button("← Back to Data quality", key="data_quality_back"):
             st.session_state.pop("data_quality_review", None)
             st.rerun()
         st.caption(f"Reviewing candidate {position} of {len(candidates)}")
@@ -8541,295 +8437,290 @@ elif page == "data_quality":
 
 elif page == "results":
     install_grey_footer_tooltips()
-    header("Trial performance",
-        "Do we have enough evidence to launch? Efficacy against the humane-kill and time-to-kill targets, trial-wide.",
-        emphasize_subtitle=True,
-    )
-    with app_card():
-        product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
-        product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
-        builds=data["Builds"][data["Builds"]["Product"]==product]
-        current=builds[builds["Build Status"]=="Current"]["Build Version"].tolist()
-        selected=build_col.selectbox("Build to assess",["Latest active build"]+builds["Build Version"].tolist()+["Compare builds","All builds — use with care"])
-        site=site_col.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x))
+    # Phase 7b (8/8): the title, filters and the three summary cards are in the 7a language (the TrialPerformance board); the camera funnel's visuals
+    # and logic are untouched (the Trial performance brief locks them), as is every figure on the page. Nothing new is read from a sheet.
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        r1_title("Trial performance", "Do we have enough evidence to launch? Efficacy against the humane-kill and time-to-kill targets, trial-wide.")
+        with st.container(key="card_perf_filters"):
+            product_col,build_col,site_col,export_col=st.columns([1,1.65,1,0.8],vertical_alignment="bottom")
+            product=product_col.selectbox("Trap type",sorted(data["Builds"]["Product"].unique()))
+            builds=data["Builds"][data["Builds"]["Product"]==product]
+            current=builds[builds["Build Status"]=="Current"]["Build Version"].tolist()
+            selected=build_col.selectbox("Build to assess",["Latest active build"]+builds["Build Version"].tolist()+["Compare builds","All builds — use with care"])
+            site=site_col.selectbox("Site",["All sites"]+data["Sites"]["Site ID"].tolist(),format_func=lambda x:x if x=="All sites" else site_name(data,x))
 
-    windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")&(data["Windows"]["Excluded"]!="Yes")].copy()
-    windows=windows[windows["End Time"].astype(str).str.strip()!=""]
-    if selected=="Latest active build":
-        windows=windows[windows["Build Version"].isin(current)]; context_label=f"Current build: {', '.join(current) if current else 'not configured'}"
-    elif selected not in ["Compare builds","All builds — use with care"]:
-        windows=windows[windows["Build Version"]==selected]; context_label=f"Build: {selected}"
-    elif selected=="Compare builds": context_label="Comparing builds"
-    else: context_label="All builds pooled"
-    if site!="All sites": windows=windows[windows["Site ID"]==site]; context_label+=f" · {site_name(data,site)}"
-    export_col.download_button("Export",windows.to_csv(index=False).encode("utf-8"),file_name="DEMO_results_filtered.csv" if is_demo_data else "results_filtered.csv",mime="text/csv",key="export_filtered_results",use_container_width=True)
-    st.caption(context_label)
-    if selected=="All builds — use with care": st.warning("These results combine different builds. Use them for exploration, not a single performance conclusion.")
+        windows=data["Windows"][(data["Windows"]["Product"]==product)&(data["Windows"]["Status"]=="Closed")&(data["Windows"]["Excluded"]!="Yes")].copy()
+        windows=windows[windows["End Time"].astype(str).str.strip()!=""]
+        if selected=="Latest active build":
+            windows=windows[windows["Build Version"].isin(current)]; context_label=f"Current build: {', '.join(current) if current else 'not configured'}"
+        elif selected not in ["Compare builds","All builds — use with care"]:
+            windows=windows[windows["Build Version"]==selected]; context_label=f"Build: {selected}"
+        elif selected=="Compare builds": context_label="Comparing builds"
+        else: context_label="All builds pooled"
+        if site!="All sites": windows=windows[windows["Site ID"]==site]; context_label+=f" · {site_name(data,site)}"
+        export_col.download_button("Export",windows.to_csv(index=False).encode("utf-8"),file_name="DEMO_results_filtered.csv" if is_demo_data else "results_filtered.csv",mime="text/csv",key="export_filtered_results",use_container_width=True)
+        st.markdown(f'<div class="r1-meta">{html.escape(context_label)}</div>', unsafe_allow_html=True)
+        if selected=="All builds — use with care": st.markdown(design.message_html("warn", "", "These results combine different builds. Use them for exploration, not a single performance conclusion."), unsafe_allow_html=True)
 
-    def median_numeric(df,col):
-        vals=pd.to_numeric(df[col],errors="coerce").dropna()
-        return vals.median() if not vals.empty else None
+        def median_numeric(df,col):
+            vals=pd.to_numeric(df[col],errors="coerce").dropna()
+            return vals.median() if not vals.empty else None
 
-    # Explicit result populations keep whole-trial kill evidence separate from camera-sampled evidence.
-    physical_kills=physical_kill_population(windows)
-    confirmed_kills=physical_kills.copy()  # retained name for the breakdown and attention views
-    humane=physical_kills[physical_kills["Final Humane Kill"]=="Yes"]
-    non_humane=physical_kills[physical_kills["Final Humane Kill"]=="No"]
-    not_assessed=physical_kills[not_assessed_mask(physical_kills["Final Humane Kill"])]
-    final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(physical_kills["Final Humane Kill"])]
-    assessed_kills=len(humane)+len(non_humane)
-    humane_rate=len(humane)/assessed_kills*100 if assessed_kills else None
+        # Explicit result populations keep whole-trial kill evidence separate from camera-sampled evidence.
+        physical_kills=physical_kill_population(windows)
+        confirmed_kills=physical_kills.copy()  # retained name for the breakdown and attention views
+        humane=physical_kills[physical_kills["Final Humane Kill"]=="Yes"]
+        non_humane=physical_kills[physical_kills["Final Humane Kill"]=="No"]
+        not_assessed=physical_kills[not_assessed_mask(physical_kills["Final Humane Kill"])]
+        final_pending=physical_kills[~physical_kills["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(physical_kills["Final Humane Kill"])]
+        assessed_kills=len(humane)+len(non_humane)
+        humane_rate=len(humane)/assessed_kills*100 if assessed_kills else None
 
-    # Time-to-kill only uses physical kills with usable camera evidence and valid footage timestamps.
-    confirmed_kills["Interaction To Kill Numeric"]=pd.to_numeric(confirmed_kills["Interaction To Kill Min"],errors="coerce")
-    timed_kills=confirmed_kills[(confirmed_kills["Evidence Usable"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].notna()].copy()
-    within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES]
-    missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES]
-    timing_pending=physical_kills[~physical_kills["Window ID"].isin(timed_kills["Window ID"])]
-    target_rate=len(within_target)/len(timed_kills)*100 if len(timed_kills) else None
-    interaction_to_kill=timed_kills["Interaction To Kill Numeric"].median() if len(timed_kills) else None
+        # Time-to-kill only uses physical kills with usable camera evidence and valid footage timestamps.
+        confirmed_kills["Interaction To Kill Numeric"]=pd.to_numeric(confirmed_kills["Interaction To Kill Min"],errors="coerce")
+        timed_kills=confirmed_kills[(confirmed_kills["Evidence Usable"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].notna()].copy()
+        within_target=timed_kills[timed_kills["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES]
+        missed_target=timed_kills[timed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES]
+        timing_pending=physical_kills[~physical_kills["Window ID"].isin(timed_kills["Window ID"])]
+        target_rate=len(within_target)/len(timed_kills)*100 if len(timed_kills) else None
+        interaction_to_kill=timed_kills["Interaction To Kill Numeric"].median() if len(timed_kills) else None
 
-    kill_evidence_complete=physical_kills[physical_kills["Final Humane Kill"].isin(["Yes","No"])]
-    camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
-    camera_reviews_complete=camera_windows[camera_windows["Review Status"]=="Complete"]
-    camera_reviews_open=camera_windows[camera_windows["Review Status"]=="Open"]
-    unusable=camera_windows[camera_windows["Evidence Usable"]=="No"]
+        kill_evidence_complete=physical_kills[physical_kills["Final Humane Kill"].isin(["Yes","No"])]
+        camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
+        camera_reviews_complete=camera_windows[camera_windows["Review Status"]=="Complete"]
+        camera_reviews_open=camera_windows[camera_windows["Review Status"]=="Open"]
+        unusable=camera_windows[camera_windows["Evidence Usable"]=="No"]
 
-    outcome_card,time_card,evidence_card=st.columns(3)
-    with outcome_card:
+        outcome_card,time_card,evidence_card=st.columns(3)
+        with outcome_card:
+            with st.container(key="card_perf_kill"):
+                st.markdown('<div class="r1-card-title">Kill outcome</div>', unsafe_allow_html=True)
+                humane_text=f"{humane_rate:.0f}%" if humane_rate is not None else "—"
+                st.markdown(
+                    f'<div class="r1-stats2"><div><div class="r1-bigstat">{len(humane)}</div><div class="r1-bigstat-label">good kills</div></div>'
+                    f'<div><div class="r1-bigstat">{humane_text}</div><div class="r1-bigstat-label">humane</div></div></div>',
+                    unsafe_allow_html=True,
+                )
+                st.markdown(f'<div class="r1-meta">Based on {assessed_kills} assessed kill{"" if assessed_kills==1 else "s"} of {len(physical_kills)}.</div>', unsafe_allow_html=True)
+                if len(final_pending):
+                    st.markdown(design.message_html("warn", "", f"{len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention"), unsafe_allow_html=True)
+                if len(not_assessed):
+                    no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
+                    trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
+                    reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
+                    st.markdown(design.message_html("info", "", f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} not assessed ({', '.join(reasons)}): counted as {'kills' if len(not_assessed)!=1 else 'a kill'}, not in the humane rate."), unsafe_allow_html=True)
+        with time_card:
+            with st.container(key="card_perf_time"):
+                st.markdown('<div class="r1-card-title">Time to kill</div>', unsafe_allow_html=True)
+                met_text=f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—"
+                st.markdown(f'<div class="r1-stats2"><div><div class="r1-bigstat">{met_text}</div><div class="r1-bigstat-label">Met &lt;24 hr target</div></div></div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="r1-meta"><b>{"Median: " + html.escape(human_duration(minutes=interaction_to_kill)) if interaction_to_kill is not None else "No usable timing yet"}</b></div>', unsafe_allow_html=True)
+                # Coverage relative to the full physical-kill population, not just the met/missed split within the timed sample:
+                # "8 of 10 met target" reads very differently depending on whether that "10" is 90% or 15% of all confirmed kills.
+                if len(physical_kills):
+                    if len(timed_kills) == len(physical_kills):
+                        st.markdown(f'<div class="r1-meta">All {len(physical_kills)} confirmed kill{"s" if len(physical_kills)!=1 else ""} have usable timing</div>', unsafe_allow_html=True)
+                    else:
+                        st.markdown(f'<div class="r1-meta">{len(timed_kills)} of {len(physical_kills)} total kill{"s" if len(physical_kills)!=1 else ""} have usable timing</div>', unsafe_allow_html=True)
+        with evidence_card:
+            with st.container(key="card_perf_evidence"):
+                st.markdown('<div class="r1-card-title">Evidence</div>', unsafe_allow_html=True)
+                camera_reviews_unresolved=camera_windows[camera_windows["Review Status"]=="Unresolved"]
+                evidence_rows=[("Camera reviews complete", f"{len(camera_reviews_complete)} of {len(camera_windows)}")]
+                if len(camera_reviews_unresolved): evidence_rows.append(("Unresolved", str(len(camera_reviews_unresolved))))
+                st.markdown(r1_kv(evidence_rows), unsafe_allow_html=True)
+                if len(camera_reviews_unresolved):
+                    st.markdown('<div class="r1-meta">Unresolved = review given up on at trial end. Not counted as complete.</div>', unsafe_allow_html=True)
+                if not len(windows): st.markdown('<div class="r1-meta">No closed windows in this selection</div>', unsafe_allow_html=True)
+
+        # Only surface exceptions that could change the decision.
+        attention=confirmed_kills[
+            (confirmed_kills["Final Humane Kill"]=="No") |
+            (confirmed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES) |
+            (confirmed_kills["Final Humane Kill"].isin(["","Pending","Unclear","Not assessable"])) |
+            ((confirmed_kills["Camera Assigned"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].isna())
+        ].copy()
+
+        r1_section("Camera conversion funnel")
+        camera_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Camera ID"].astype(str).str.strip()!="")]
+        if site!="All sites": camera_traps=camera_traps[camera_traps["Site ID"]==site]
+        camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
+        reviewed_camera=camera_windows[(camera_windows["Review Status"]=="Complete") & (camera_windows["Evidence Usable"]=="Yes")]
+        interacted=reviewed_camera[reviewed_camera["Target Present"]=="Yes"]
+        entered=interacted[interacted["Entered Strike Area"]=="Yes"]
+        activated=entered[entered["Trap Activated"]=="Yes"]
+        killed=activated[activated["Kill Confirmed"]=="Yes"]
+        humane_funnel=killed[killed["Final Humane Kill"]=="Yes"]
+        total_product_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Status"]=="Active")]
+        if site!="All sites": total_product_traps=total_product_traps[total_product_traps["Site ID"]==site]
+        # Stage count, order, labels, conversion calculation and "main loss"
+        # selection logic below are unchanged from before this restyle - Trial
+        # performance brief 2h locks this section's visuals once shipped, and
+        # the brief is explicit that the underlying logic must stay
+        # byte-identical, not just look the same.
+        stages=[("Rat interacted",len(interacted)),("Meaningful entry",len(entered)),("Trap activated",len(activated)),("Rat killed",len(killed)),("Humane kill",len(humane_funnel))]
+        base=max(1,len(interacted))
         with app_card():
-            st.markdown("#### Kill outcome")
-            coequal_stats([
-                (len(humane), "good kills", ""),
-                (f"{humane_rate:.0f}%" if humane_rate is not None else "—", "humane", "success" if humane_rate is not None else ""),
-            ])
-            if len(final_pending):
-                action_callout(f"→ {len(final_pending)} kill{'s' if len(final_pending)!=1 else ''} awaiting final assessment — see Results needing attention")
-            if len(not_assessed):
-                no_carcass_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_NO_CARCASS).sum())
-                trial_ended_n=int((not_assessed["Final Humane Kill"]==NOT_ASSESSED_TRIAL_ENDED).sum())
-                reasons=[f"{n} {label}" for n,label in [(no_carcass_n,"no carcass"),(trial_ended_n,"trial ended")] if n]
-                st.caption(f"{len(not_assessed)} kill{'s' if len(not_assessed)!=1 else ''} counted but not assessed ({', '.join(reasons)}) — not in the humane rate.")
-            card_footer(
-                "Necropsy-dependent",
-                f"Necropsy = physical examination of the collected animal. Based on {assessed_kills} of {len(physical_kills)} confirmed kills with a completed necropsy assessment. All {len(physical_kills)} count as kills; only assessed kills count toward the humane rate.",
-            )
-    with time_card:
-        with app_card():
-            st.markdown("#### Time to kill")
-            st.metric("Met <24 hr target",f"{len(within_target)} of {len(timed_kills)}" if len(timed_kills) else "—")
-            st.write(f"**Median: {human_duration(minutes=interaction_to_kill)}**" if interaction_to_kill is not None else "**No usable timing yet**")
-            # Coverage relative to the full physical-kill population, not just the
-            # internal met/missed split within the timed sample - "8 of 10 met
-            # target" reads very differently depending on whether that "10" is
-            # 90% or 15% of all confirmed kills.
-            if len(physical_kills):
-                if len(timed_kills) == len(physical_kills):
-                    st.caption(f"All {len(physical_kills)} confirmed kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
+            rows_html=[]
+            for i,(label,count) in enumerate(stages):
+                prior=stages[i-1][1] if i else None
+                conversion=(count/prior*100) if prior else None
+                bar_pct=min(100,count/base*100)
+                if conversion is None:
+                    conversion_html='<div class="funnel-conversion base">base</div>'
                 else:
-                    st.caption(f"{len(timed_kills)} of {len(physical_kills)} total kill{'s' if len(physical_kills)!=1 else ''} have usable timing")
-            card_footer(
-                "Camera-dependent",
-                f"Camera review = watching footage of the event. Based on {len(timed_kills)} of {len(physical_kills)} confirmed kills with usable, camera-reviewed footage timing.",
-            )
-    with evidence_card:
-        with app_card():
-            st.markdown("#### Evidence")
-            st.metric("Kill assessments complete",f"{len(kill_evidence_complete)} of {len(physical_kills)}")
-            st.caption(f"Camera reviews complete: {len(camera_reviews_complete)} of {len(camera_windows)}")
-            camera_reviews_unresolved=camera_windows[camera_windows["Review Status"]=="Unresolved"]
-            if len(camera_reviews_unresolved):
-                st.caption(f"Unresolved: {len(camera_reviews_unresolved)} — review given up on at trial end. Not counted as complete.")
-            if not len(windows): st.caption("No closed windows in this selection")
-            card_footer(
-                "Coverage card",
-                f"Open camera reviews: {len(camera_reviews_open)} · Unusable footage: {len(unusable)} — explains the denominators on the other two cards.",
-            )
-
-    # Only surface exceptions that could change the decision.
-    attention=confirmed_kills[
-        (confirmed_kills["Final Humane Kill"]=="No") |
-        (confirmed_kills["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES) |
-        (confirmed_kills["Final Humane Kill"].isin(["","Pending","Unclear","Not assessable"])) |
-        ((confirmed_kills["Camera Assigned"]=="Yes") & confirmed_kills["Interaction To Kill Numeric"].isna())
-    ].copy()
-
-    st.subheader("Camera conversion funnel")
-    camera_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Camera ID"].astype(str).str.strip()!="")]
-    if site!="All sites": camera_traps=camera_traps[camera_traps["Site ID"]==site]
-    camera_windows=windows[windows["Camera Assigned"]=="Yes"].copy()
-    reviewed_camera=camera_windows[(camera_windows["Review Status"]=="Complete") & (camera_windows["Evidence Usable"]=="Yes")]
-    interacted=reviewed_camera[reviewed_camera["Target Present"]=="Yes"]
-    entered=interacted[interacted["Entered Strike Area"]=="Yes"]
-    activated=entered[entered["Trap Activated"]=="Yes"]
-    killed=activated[activated["Kill Confirmed"]=="Yes"]
-    humane_funnel=killed[killed["Final Humane Kill"]=="Yes"]
-    total_product_traps=data["Traps"][(data["Traps"]["Product"]==product) & (data["Traps"]["Status"]=="Active")]
-    if site!="All sites": total_product_traps=total_product_traps[total_product_traps["Site ID"]==site]
-    # Stage count, order, labels, conversion calculation and "main loss"
-    # selection logic below are unchanged from before this restyle - Trial
-    # performance brief 2h locks this section's visuals once shipped, and
-    # the brief is explicit that the underlying logic must stay
-    # byte-identical, not just look the same.
-    stages=[("Rat interacted",len(interacted)),("Meaningful entry",len(entered)),("Trap activated",len(activated)),("Rat killed",len(killed)),("Humane kill",len(humane_funnel))]
-    base=max(1,len(interacted))
-    with app_card():
-        rows_html=[]
-        for i,(label,count) in enumerate(stages):
-            prior=stages[i-1][1] if i else None
-            conversion=(count/prior*100) if prior else None
-            bar_pct=min(100,count/base*100)
-            if conversion is None:
-                conversion_html='<div class="funnel-conversion base">base</div>'
+                    conversion_html=f'<div class="funnel-conversion">{conversion:.0f}%<span class="sub">from prior</span></div>'
+                rows_html.append(
+                    '<div class="funnel-row">'
+                    f'<div><div class="funnel-label">{html.escape(label)}</div><div class="funnel-count">{count} window{"s" if count!=1 else ""}</div></div>'
+                    f'<div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
+                    f'{conversion_html}'
+                    '</div>'
+                )
+            st.markdown("".join(rows_html), unsafe_allow_html=True)
+            if len(interacted):
+                losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
+                loss_label,loss_count=max(losses,key=lambda x:x[1])
+                if loss_count>0:
+                    st.markdown(f'<div class="main-loss">Main loss: {loss_count} reviewed camera window{"s" if loss_count!=1 else ""} with rat interaction {loss_label}.</div>', unsafe_allow_html=True)
             else:
-                conversion_html=f'<div class="funnel-conversion">{conversion:.0f}%<span class="sub">from prior</span></div>'
-            rows_html.append(
-                '<div class="funnel-row">'
-                f'<div><div class="funnel-label">{html.escape(label)}</div><div class="funnel-count">{count} window{"s" if count!=1 else ""}</div></div>'
-                f'<div class="funnel-bar-track"><div class="funnel-bar-fill" style="width:{bar_pct:.0f}%"></div></div>'
-                f'{conversion_html}'
-                '</div>'
+                helper("No reviewed camera windows with target interaction are available for this selection.")
+            card_footer(
+                "Camera-sampled evidence",
+                f"{len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage. This funnel reflects that sample, not every kill trial-wide."
+                '<br><br><b>Terms:</b> a "window" is one monitoring period for a trap, between two checks — opens when a trap is set or reset, closes whenever the next check happens, whatever the outcome. Stages: Rat interacted (detected at/near the trap) → Meaningful entry (entered far enough to potentially trigger it) → Trap activated (mechanism fired) → Rat killed → Humane kill (met the humane standard). Each stage is a subset of the one before it.',
+                wide=True,
             )
-        st.markdown("".join(rows_html), unsafe_allow_html=True)
-        if len(interacted):
-            losses=[("did not make meaningful entry",len(interacted)-len(entered)),("entered but did not activate",len(entered)-len(activated)),("activated but were not killed",len(activated)-len(killed)),("were killed but not confirmed humane",len(killed)-len(humane_funnel))]
-            loss_label,loss_count=max(losses,key=lambda x:x[1])
-            if loss_count>0:
-                st.markdown(f'<div class="main-loss">Main loss: {loss_count} reviewed camera window{"s" if loss_count!=1 else ""} with rat interaction {loss_label}.</div>', unsafe_allow_html=True)
+
+        r1_section("What is driving the result?")
+        st.markdown('<div class="r1-meta">Use one breakdown at a time to see where bad kills or slow kills are clustering.</div>', unsafe_allow_html=True)
+        default_breakdown="Build" if selected=="Compare builds" else "Rodent weight"
+        breakdown_options=["Rodent weight","Rat type","Build","Site","Trap"]
+        breakdown=st.selectbox("Break down performance by",breakdown_options,index=breakdown_options.index(default_breakdown))
+
+        group_map={
+            "Rodent weight":"Animal Weight Range",
+            "Rat type":"Rat Type",
+            "Build":"Build Version",
+            "Site":"Site ID",
+            "Trap":"Trap ID",
+        }
+        group_col=group_map[breakdown]
+        breakdown_source=confirmed_kills.copy()
+        breakdown_source[group_col]=breakdown_source[group_col].fillna("").replace("","Unknown")
+
+        if breakdown_source.empty:
+            helper("No completed kills are available for this selection.")
         else:
-            helper("No reviewed camera windows with target interaction are available for this selection.")
-        card_footer(
-            "Camera-sampled evidence",
-            f"{len(camera_traps)} of {len(total_product_traps)} active traps have cameras · {len(reviewed_camera)} of {len(camera_windows)} closed camera windows reviewed with usable footage. This funnel reflects that sample, not every kill trial-wide."
-            '<br><br><b>Terms:</b> a "window" is one monitoring period for a trap, between two checks — opens when a trap is set or reset, closes whenever the next check happens, whatever the outcome. Stages: Rat interacted (detected at/near the trap) → Meaningful entry (entered far enough to potentially trigger it) → Trap activated (mechanism fired) → Rat killed → Humane kill (met the humane standard). Each stage is a subset of the one before it.',
-            wide=True,
-        )
+            rows=[]
+            for group_value,gp in breakdown_source.groupby(group_col,dropna=False):
+                good=len(gp[gp["Final Humane Kill"]=="Yes"])
+                bad=len(gp[gp["Final Humane Kill"]=="No"])
+                assessed=good+bad
+                gp_timed=gp[gp["Interaction To Kill Numeric"].notna()]
+                met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES])
+                missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES])
+                rows.append({
+                    breakdown: site_name(data,group_value) if breakdown=="Site" and group_value!="Unknown" else group_value,
+                    "Kills":len(gp),
+                    "Good":good,
+                    "Bad":bad,
+                    "Humane":f"{good/assessed*100:.0f}%" if assessed else "—",
+                    "Met <24 hr":met,
+                    "Missed <24 hr":missed,
+                    "Time target":f"{met/len(gp_timed)*100:.0f}%" if len(gp_timed) else "—",
+                    "Median interaction → kill":human_duration(minutes=gp_timed["Interaction To Kill Numeric"].median()) if len(gp_timed) else "—",
+                })
+            breakdown_df=pd.DataFrame(rows)
+            if breakdown=="Rodent weight":
+                # Rat and mouse bands are two different scales sharing one column
+                # (a mouse's "0–10 g" isn't the same band as a rat's "0–50 g"),
+                # so they can't be merged into one ascending-by-gram order without
+                # inventing a meaningless cross-species ranking. Keep them as two
+                # internally-ordered groups instead - rat bands first (unchanged
+                # from before mice had their own scale), then mouse bands, then
+                # Unknown last - rather than letting every mouse band collapse
+                # into the same "not found" bucket as genuinely unknown weights.
+                all_bands=RAT_WEIGHT_RANGES+MOUSE_WEIGHT_RANGES
+                order={band:i for i,band in enumerate(all_bands)}; order["Unknown"]=len(all_bands)
+                breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(len(all_bands))
+                breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
+            else:
+                breakdown_df=breakdown_df.sort_values(breakdown)
+            st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
+            if breakdown in ("Rat type","Rodent weight"):
+                # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
+                confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
+                st.caption(f"{confirmed_species_n} of {len(breakdown_source)} windows have necropsy-confirmed species. Remaining {len(breakdown_source)-confirmed_species_n} rest on unconfirmed field guesses.")
 
-    st.subheader("What is driving the result?")
-    st.caption("Use one breakdown at a time to see where bad kills or slow kills are clustering.")
-    default_breakdown="Build" if selected=="Compare builds" else "Rodent weight"
-    breakdown_options=["Rodent weight","Rat type","Build","Site","Trap"]
-    breakdown=st.selectbox("Break down performance by",breakdown_options,index=breakdown_options.index(default_breakdown))
+        if not attention.empty:
+            r1_section("Results needing attention")
+            bad_count=len(non_humane)
+            slow_count=len(missed_target)
+            missing_count=len(attention[
+                (~attention["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(attention["Final Humane Kill"])) |
+                ((attention["Camera Assigned"]=="Yes") & attention["Interaction To Kill Numeric"].isna())
+            ])
+            summary_parts=[]
+            if bad_count: summary_parts.append(f"{bad_count} bad kill{'s' if bad_count!=1 else ''}")
+            if slow_count: summary_parts.append(f"{slow_count} kill{'s' if slow_count!=1 else ''} missed the time target")
+            if missing_count: summary_parts.append(f"{missing_count} incomplete result{'s' if missing_count!=1 else ''}")
+            st.markdown(design.message_html("warn", "", " · ".join(summary_parts)), unsafe_allow_html=True)
+            with st.expander(f"Review {len(attention)} result{'s' if len(attention)!=1 else ''}"):
+                attention_display=attention.copy()
+                attention_display["Interaction → kill"]=attention_display["Interaction To Kill Numeric"].apply(lambda x: human_duration(minutes=x) if pd.notna(x) else "—")
+                cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Final Humane Kill","Interaction → kill","Review Status"]
+                st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
+        elif len(confirmed_kills):
+            st.markdown(design.message_html("success", "", "No bad kills, missed time targets or incomplete kill results in this selection."), unsafe_allow_html=True)
 
-    group_map={
-        "Rodent weight":"Animal Weight Range",
-        "Rat type":"Rat Type",
-        "Build":"Build Version",
-        "Site":"Site ID",
-        "Trap":"Trap ID",
-    }
-    group_col=group_map[breakdown]
-    breakdown_source=confirmed_kills.copy()
-    breakdown_source[group_col]=breakdown_source[group_col].fillna("").replace("","Unknown")
+        with st.expander("More detail"):
+            camera_assessed=windows[(windows["Camera Assigned"]=="Yes") & (windows["Review Status"]=="Complete") & (windows["Evidence Usable"]=="Yes") & (windows["Target Present"].isin(["Yes","No"]))]
+            interacted=camera_assessed[camera_assessed["Target Present"]=="Yes"]
+            activated=interacted[interacted["Trap Activated"]=="Yes"]
+            observed_activation=activated[activated["Activation Evidence"]=="Observed"]
+            killed=interacted[interacted["Kill Confirmed"]=="Yes"]
+            repeated_no_kill=interacted[(interacted["Interaction Level"].isin(["Repeated interaction","Heavy / repeated interaction"])) & (interacted["Kill Confirmed"]!="Yes")]
 
-    if breakdown_source.empty:
-        helper("No completed kills are available for this selection.")
-    else:
-        rows=[]
-        for group_value,gp in breakdown_source.groupby(group_col,dropna=False):
-            good=len(gp[gp["Final Humane Kill"]=="Yes"])
-            bad=len(gp[gp["Final Humane Kill"]=="No"])
-            assessed=good+bad
-            gp_timed=gp[gp["Interaction To Kill Numeric"].notna()]
-            met=len(gp_timed[gp_timed["Interaction To Kill Numeric"] < TIME_TO_KILL_TARGET_MINUTES])
-            missed=len(gp_timed[gp_timed["Interaction To Kill Numeric"] >= TIME_TO_KILL_TARGET_MINUTES])
-            rows.append({
-                breakdown: site_name(data,group_value) if breakdown=="Site" and group_value!="Unknown" else group_value,
-                "Kills":len(gp),
-                "Good":good,
-                "Bad":bad,
-                "Humane":f"{good/assessed*100:.0f}%" if assessed else "—",
-                "Met <24 hr":met,
-                "Missed <24 hr":missed,
-                "Time target":f"{met/len(gp_timed)*100:.0f}%" if len(gp_timed) else "—",
-                "Median interaction → kill":human_duration(minutes=gp_timed["Interaction To Kill Numeric"].median()) if len(gp_timed) else "—",
-            })
-        breakdown_df=pd.DataFrame(rows)
-        if breakdown=="Rodent weight":
-            # Rat and mouse bands are two different scales sharing one column
-            # (a mouse's "0–10 g" isn't the same band as a rat's "0–50 g"),
-            # so they can't be merged into one ascending-by-gram order without
-            # inventing a meaningless cross-species ranking. Keep them as two
-            # internally-ordered groups instead - rat bands first (unchanged
-            # from before mice had their own scale), then mouse bands, then
-            # Unknown last - rather than letting every mouse band collapse
-            # into the same "not found" bucket as genuinely unknown weights.
-            all_bands=RAT_WEIGHT_RANGES+MOUSE_WEIGHT_RANGES
-            order={band:i for i,band in enumerate(all_bands)}; order["Unknown"]=len(all_bands)
-            breakdown_df["_order"]=breakdown_df[breakdown].map(order).fillna(len(all_bands))
-            breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
-        else:
-            breakdown_df=breakdown_df.sort_values(breakdown)
-        st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
-        if breakdown in ("Rat type","Rodent weight"):
-            # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
-            confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
-            st.caption(f"{confirmed_species_n} of {len(breakdown_source)} windows have necropsy-confirmed species. Remaining {len(breakdown_source)-confirmed_species_n} rest on unconfirmed field guesses.")
+            attraction_rate=len(interacted)/len(camera_assessed)*100 if len(camera_assessed) else None
+            activation_rate=len(activated)/len(interacted)*100 if len(interacted) else None
+            conversion_rate=len(killed)/len(interacted)*100 if len(interacted) else None
+            deployment_to_interaction=median_numeric(interacted,"Time To First Interaction Hr")
+            interaction_to_activation=median_numeric(observed_activation,"Interaction To Trigger Min")
 
-    if not attention.empty:
-        st.subheader("Results needing attention")
-        bad_count=len(non_humane)
-        slow_count=len(missed_target)
-        missing_count=len(attention[
-            (~attention["Final Humane Kill"].isin(["Yes","No"]) & ~not_assessed_mask(attention["Final Humane Kill"])) |
-            ((attention["Camera Assigned"]=="Yes") & attention["Interaction To Kill Numeric"].isna())
-        ])
-        summary_parts=[]
-        if bad_count: summary_parts.append(f"{bad_count} bad kill{'s' if bad_count!=1 else ''}")
-        if slow_count: summary_parts.append(f"{slow_count} kill{'s' if slow_count!=1 else ''} missed the time target")
-        if missing_count: summary_parts.append(f"{missing_count} incomplete result{'s' if missing_count!=1 else ''}")
-        st.warning(" · ".join(summary_parts))
-        with st.expander(f"Review {len(attention)} result{'s' if len(attention)!=1 else ''}"):
-            attention_display=attention.copy()
-            attention_display["Interaction → kill"]=attention_display["Interaction To Kill Numeric"].apply(lambda x: human_duration(minutes=x) if pd.notna(x) else "—")
-            cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Final Humane Kill","Interaction → kill","Review Status"]
-            st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
-    elif len(confirmed_kills):
-        st.success("No bad kills, missed time targets or incomplete kill results in this selection.")
+            st.markdown("#### Diagnostic measures")
+            d1,d2,d3,d4=st.columns(4)
+            d1.metric("Target interaction",f"{attraction_rate:.0f}%" if attraction_rate is not None else "—")
+            d1.caption(f"{len(interacted)} of {len(camera_assessed)} assessed windows")
+            d2.metric("Interaction → activation",f"{activation_rate:.0f}%" if activation_rate is not None else "—")
+            d2.caption(f"{len(activated)} of {len(interacted)} interactions")
+            d3.metric("Interaction → kill",f"{conversion_rate:.0f}%" if conversion_rate is not None else "—")
+            d3.caption(f"{len(killed)} of {len(interacted)} interactions")
+            d4.metric("Repeated interaction, no kill",len(repeated_no_kill))
 
-    with st.expander("More detail"):
-        camera_assessed=windows[(windows["Camera Assigned"]=="Yes") & (windows["Review Status"]=="Complete") & (windows["Evidence Usable"]=="Yes") & (windows["Target Present"].isin(["Yes","No"]))]
-        interacted=camera_assessed[camera_assessed["Target Present"]=="Yes"]
-        activated=interacted[interacted["Trap Activated"]=="Yes"]
-        observed_activation=activated[activated["Activation Evidence"]=="Observed"]
-        killed=interacted[interacted["Kill Confirmed"]=="Yes"]
-        repeated_no_kill=interacted[(interacted["Interaction Level"].isin(["Repeated interaction","Heavy / repeated interaction"])) & (interacted["Kill Confirmed"]!="Yes")]
+            st.markdown("#### Diagnostic timing")
+            t1,t2=st.columns(2)
+            t1.metric("Median deployment → interaction",human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—")
+            t2.metric("Median interaction → observed activation",human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—")
+            t2.caption(f"Based on {len(observed_activation)} observed activations; inferred activations excluded")
 
-        attraction_rate=len(interacted)/len(camera_assessed)*100 if len(camera_assessed) else None
-        activation_rate=len(activated)/len(interacted)*100 if len(interacted) else None
-        conversion_rate=len(killed)/len(interacted)*100 if len(interacted) else None
-        deployment_to_interaction=median_numeric(interacted,"Time To First Interaction Hr")
-        interaction_to_activation=median_numeric(observed_activation,"Interaction To Trigger Min")
+            st.markdown("#### All closed result records")
+            cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Evidence Usable","Target Present","Interaction Level","Trap Activated","Activation Evidence","Kill Confirmed","Outcome","Interaction To Kill Min","Final Humane Kill","Review Status"]
+            st.dataframe(windows[cols],use_container_width=True,hide_index=True)
 
-        st.markdown("#### Diagnostic measures")
-        d1,d2,d3,d4=st.columns(4)
-        d1.metric("Target interaction",f"{attraction_rate:.0f}%" if attraction_rate is not None else "—")
-        d1.caption(f"{len(interacted)} of {len(camera_assessed)} assessed windows")
-        d2.metric("Interaction → activation",f"{activation_rate:.0f}%" if activation_rate is not None else "—")
-        d2.caption(f"{len(activated)} of {len(interacted)} interactions")
-        d3.metric("Interaction → kill",f"{conversion_rate:.0f}%" if conversion_rate is not None else "—")
-        d3.caption(f"{len(killed)} of {len(interacted)} interactions")
-        d4.metric("Repeated interaction, no kill",len(repeated_no_kill))
-
-        st.markdown("#### Diagnostic timing")
-        t1,t2=st.columns(2)
-        t1.metric("Median deployment → interaction",human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—")
-        t2.metric("Median interaction → observed activation",human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—")
-        t2.caption(f"Based on {len(observed_activation)} observed activations; inferred activations excluded")
-
-        st.markdown("#### All closed result records")
-        cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Evidence Usable","Target Present","Interaction Level","Trap Activated","Activation Evidence","Kill Confirmed","Outcome","Interaction To Kill Min","Final Humane Kill","Review Status"]
-        st.dataframe(windows[cols],use_container_width=True,hide_index=True)
-
-        st.markdown("#### Calculation definitions")
-        st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
-        st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
-        st.write("**Bad kill:** final humane-kill assessment is No.")
-        st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
-        st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
-        st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
-        st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
-        st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
+            st.markdown("#### Calculation definitions")
+            # The plain-language terms the summary cards' footers used to define (moved here in Phase 7b, 8/8).
+            st.write("**Necropsy:** physical examination of the collected animal.")
+            st.write("**Camera review:** watching footage of the event.")
+            st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
+            st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
+            st.write("**Bad kill:** final humane-kill assessment is No.")
+            st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
+            st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
+            st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
+            st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
+            st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
 
 
 elif page == "trap_edit":

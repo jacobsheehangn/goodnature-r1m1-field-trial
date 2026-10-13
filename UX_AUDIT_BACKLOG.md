@@ -108,11 +108,29 @@ have been fixed. See Medium/Low below for what's left.
   Move trap and Change build (same page, same card shape) don't.
 - No chronological guardrail on effective times across activate/deactivate/move/
   change-build — can silently create negative-duration windows.
+- **Needs a board first: the camera review and camera issue task pages (Follow-ups).** They are still the legacy forms: a bullet-list "Task context",
+  "Select…" dropdowns for short lists (Camera evidence usable, Camera outcome, Camera now ready, Past test-window evidence), date and time inputs, and a
+  "Saving this will update" heading. They look wrong beside the restyled Follow-ups list. Restyling them means converting those dropdowns to visible
+  controls, which the brief defers until it has its own mockup (field standard 12). Not restyled in Phase 7b (owner decision, 2026-10-08); needs a
+  canvas board first.
+- **Post-Deploy-A fix: `deactivate_trap` has no time floor.** It sets the open window's End Time to whatever effective time it is given
+  (`deactivate_trap`, app.py) without checking it against the window's Start Time or the latest check in it, and the Traps admin
+  "Deactivate" form passes the operator's entry straight in, so a time before the window opened (or before its last check) closes the
+  window before it began (a zero or negative-length window). End trial and Set up now have exactly this floor (`trial_end_floor_and_reason`,
+  `trial_set_up_floor`: the latest of the trial's start, the windows' starts, the visit and its checks; a refusal that names what sets it
+  and the time to use; a default never earlier than the floor), and End trial reaches `deactivate_trap` only through that floor. Wanted for
+  the admin path: the same floor, a refusal naming the window start or the latest check, a default that is never earlier, and a test that
+  fails without it. Ship after Deploy A; not built.
 - Traps list has no search or status filter, only site — a real gap heading toward
   50+ traps.
 - Every save is a full-workbook rewrite, cost scaling with total historical data —
   fine now, won't scale gracefully over months.
 - Single shared password, no per-operator identity or session timeout.
+- Confirm before starting a second visit the same day. Tapping Start checking at a site that was already checked today starts a
+  new visit at once and saves it (`start_checking_callback` -> `start_visit_now`), with no question asked. On Trap sites that card now
+  shows the button as secondary (7b, 2026-10-07), but a stray tap still writes a second visit. Wanted: a short confirm ("This site was
+  already checked today at 3:41 pm. Start another visit?") before the visit is created. Not built; raised by the owner during the
+  Trap sites review.
 
 ## Low severity — polish
 

@@ -109,7 +109,7 @@ def test_check_button_opens_the_check_page_in_one_step(
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
@@ -123,7 +123,7 @@ def test_save_check_button_shows_a_disabled_saving_state_before_navigating(
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 

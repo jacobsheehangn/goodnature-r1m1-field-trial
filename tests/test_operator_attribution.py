@@ -110,7 +110,7 @@ def test_setting_operator_in_admin_menu_attributes_the_recorded_visit(
     # Close the popover, then start a visit at the first site.
     page.keyboard.press("Escape")
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     workbook_path = data_dir / "field_trial_data_v8_6_5.xlsx"
     visits = pd.DataFrame()

@@ -19,7 +19,7 @@ def open_home(page: Page, local_app: str, viewport: dict) -> None:
 
 def start_first_site(page: Page) -> None:
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
 
 def main_scroll_top(page: Page) -> int:
@@ -65,9 +65,9 @@ def test_non_kill_check_returns_to_top_with_one_clear_checked_state(page: Page, 
     # distinct "✓ Just saved" (not the plain "✓ Checked" every other
     # completed card gets) - since this is the first and only check in a
     # fresh visit, that's the one indicator expected here, not "✓ Checked".
-    expect(page.get_by_text("✓ Just saved", exact=True)).to_be_visible(timeout=20_000)
-    assert page.get_by_text("✓ Just saved", exact=True).count() == 1
-    assert page.get_by_text("✓ Checked", exact=True).count() == 0
+    expect(page.get_by_text(re.compile(r"^Just saved \d"))).to_be_visible(timeout=20_000)
+    assert page.get_by_text(re.compile(r"^Just saved \d")).count() == 1
+    assert page.get_by_text(re.compile(r"^Checked \d")).count() == 0
     assert main_scroll_top(page) <= 8
     page.screenshot(path=SHOTS / "mobile_checked_state.png", full_page=True)
 
@@ -96,7 +96,7 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: str, tmp_p
     page.get_by_role("radiogroup", name="Camera working and covering the trap?").get_by_role("radio", name="Yes", exact=True).check(force=True)
     page.get_by_role("button", name="Save check").click()
 
-    expect(page.get_by_text("3 photos stored", exact=True)).to_be_visible(timeout=60_000)
+    expect(page.get_by_text("3 photos stored", exact=False)).to_be_visible(timeout=60_000)
     assert main_scroll_top(page) <= 8
 
 

@@ -140,7 +140,7 @@ def test_a_trap_with_history_can_reopen_its_window_inline_with_a_real_effective_
     # so it's the first "Start checking" button, same as every other test in
     # this suite relies on for its own first site.
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("This trap has no active test window.", exact=True)).to_be_visible(timeout=30_000)

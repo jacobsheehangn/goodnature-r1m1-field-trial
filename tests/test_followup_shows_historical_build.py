@@ -16,6 +16,8 @@ same already-correct historical value from the linked window.
 """
 from __future__ import annotations
 
+import re
+
 import json
 import os
 import socket
@@ -137,7 +139,7 @@ def test_followup_detail_shows_the_windows_own_build_not_the_traps_current_one(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    page.get_by_role("link", name="Follow-ups", exact=True).click()
+    page.get_by_role("link", name=re.compile(r"^Follow-ups( \d+)?$")).click()
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Review", exact=True).first.click()

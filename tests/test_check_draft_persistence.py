@@ -202,7 +202,7 @@ def test_resume_after_a_fresh_session_restores_finding_and_notes(
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Start checking", exact=False).first.click()
-    expect(page.get_by_text("Select the trap you are standing at.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
     expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
 
