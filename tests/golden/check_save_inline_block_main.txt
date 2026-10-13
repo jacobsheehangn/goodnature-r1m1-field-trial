@@ -1,0 +1,56 @@
+old_id = close_window(staged, trap_id, check_time, finding, bag_id)
+# Field report fix (2026-08-24): "Unable to check" means the
+# operator never reached the trap at all - nothing about its
+# physical state changed since the last visit, so monitoring
+# should continue uninterrupted, not strand the trap with no
+# open window until someone finds and fixes it via a manual
+# Deactivate-then-Activate round trip in Administration. "Trap
+# missing" stays deliberately different: the trap is physically
+# gone, so there is genuinely nothing to monitor until it's
+# found and redeployed.
+will_start = bool(assessable and service_ready and camera_ready) or finding == "Unable to check"
+new_id = start_window(staged, trap_id, check_time) if will_start else ""
+idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
+if idxs:
+    staged["Windows"].at[idxs[0], "Species"] = species
+    staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
+    # Phase 4: the guess made in the field, kept untouched; Species becomes the necropsy-confirmed value.
+    if not str(staged["Windows"].at[idxs[0], "Field-Recorded Species"]).strip():
+        staged["Windows"].at[idxs[0], "Field-Recorded Species"] = species
+        staged["Windows"].at[idxs[0], "Field-Recorded Rat Type"] = rat_type
+    if no_carcass:
+        staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
+        staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+        staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
+
+expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
+check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
+trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
+trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
+row = [
+    check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
+    condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
+    "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
+    "Yes" if service_ready else "No", trap_state,
+    trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
+    (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
+    "", "",
+]
+staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
+
+if assessable and camera_assigned:
+    priority = "High" if finding == "Trap fired, no animal" else "Normal"
+    add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
+                 "Confirm target interaction, activation, kill and video evidence", priority)
+if collected_animal:
+    add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
+                 "Dead animal collected",
+                 "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
+if assessable and not service_ready:
+    add_followup(staged, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
+                 service_reason, "Restore the trap to service and record the outcome", "High")
+if camera_issue_required(camera_assigned, camera, covers):
+    add_followup(staged, "Camera issue", sid, trap_id, vid, old_id, bag_id,
+                 "Camera issue", "Resolve camera condition and record the evidence gap", "High")
+
+refresh_review_status(staged, old_id)

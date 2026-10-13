@@ -1820,6 +1820,80 @@ def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag
     data["Followups"] = pd.concat([data["Followups"], pd.DataFrame([row], columns=SHEETS["Followups"])], ignore_index=True)
 
 
+def build_check_records(
+    staged, *, visit_id, site_id, trap_id, check_time, finding,
+    collected_animal, no_carcass, assessable,
+    species, rat_type, condition, bag_id, bag_labelled,
+    service_ready, service_reason,
+    camera_assigned, camera, covers, adjusted, camera_ready,
+    notes, photo_check_id, expected_photo_count,
+) -> dict:
+    """Everything Save check writes to the workbook frames for one check: closes the trap's open window, opens the next one, appends
+    the Checks row, adds the follow-up tasks the answers call for and refreshes the closed window's review status. Changes `staged`
+    in place and returns the IDs. No Streamlit, no disk, no photo files: the page validates the form first, and writes the result
+    (and any photos) through commit_staged_records_with_photos. The clock and the ID generator are the existing helpers' (make_id,
+    dtstr), so the golden-record tests pin those; they are the only non-pure parts.
+
+    Extracted unchanged from the check page: tests/test_check_save_golden.py holds its output to the frozen output of the old inline
+    code for every outcome x service x camera x carcass combination."""
+    old_id = close_window(staged, trap_id, check_time, finding, bag_id)
+    # Field report fix (2026-08-24): "Unable to check" means the
+    # operator never reached the trap at all - nothing about its
+    # physical state changed since the last visit, so monitoring
+    # should continue uninterrupted, not strand the trap with no
+    # open window until someone finds and fixes it via a manual
+    # Deactivate-then-Activate round trip in Administration. "Trap
+    # missing" stays deliberately different: the trap is physically
+    # gone, so there is genuinely nothing to monitor until it's
+    # found and redeployed.
+    will_start = bool(assessable and service_ready and camera_ready) or finding == "Unable to check"
+    new_id = start_window(staged, trap_id, check_time) if will_start else ""
+    idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
+    if idxs:
+        staged["Windows"].at[idxs[0], "Species"] = species
+        staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
+        # Phase 4: the guess made in the field, kept untouched; Species becomes the necropsy-confirmed value.
+        if not str(staged["Windows"].at[idxs[0], "Field-Recorded Species"]).strip():
+            staged["Windows"].at[idxs[0], "Field-Recorded Species"] = species
+            staged["Windows"].at[idxs[0], "Field-Recorded Rat Type"] = rat_type
+        if no_carcass:
+            staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
+            staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
+            staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
+
+    check_id = photo_check_id if expected_photo_count else make_id("CHK")
+    trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
+    trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
+    row = [
+        check_id, visit_id, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
+        condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
+        "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
+        "Yes" if service_ready else "No", trap_state,
+        trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
+        (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
+        "", "",
+    ]
+    staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
+
+    if assessable and camera_assigned:
+        priority = "High" if finding == "Trap fired, no animal" else "Normal"
+        add_followup(staged, "Camera review", site_id, trap_id, visit_id, old_id, bag_id, finding,
+                     "Confirm target interaction, activation, kill and video evidence", priority)
+    if collected_animal:
+        add_followup(staged, "Necropsy review", site_id, trap_id, visit_id, old_id, bag_id,
+                     "Dead animal collected",
+                     "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
+    if assessable and not service_ready:
+        add_followup(staged, "Trap not ready", site_id, trap_id, visit_id, old_id, bag_id,
+                     service_reason, "Restore the trap to service and record the outcome", "High")
+    if camera_issue_required(camera_assigned, camera, covers):
+        add_followup(staged, "Camera issue", site_id, trap_id, visit_id, old_id, bag_id,
+                     "Camera issue", "Resolve camera condition and record the evidence gap", "High")
+
+    refresh_review_status(staged, old_id)
+    return {"check_id": check_id, "old_window_id": old_id, "new_window_id": new_id}
+
+
 # ------------------------------------------------------------------------------------
 # Trial lifecycle (Phase 2): Set up, Adopt and End as atomic, previewed actions.
 #
@@ -7277,62 +7351,16 @@ elif page == "check":
 
             original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
             staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-            old_id = close_window(staged, trap_id, check_time, finding, bag_id)
-            # Field report fix (2026-08-24): "Unable to check" means the
-            # operator never reached the trap at all - nothing about its
-            # physical state changed since the last visit, so monitoring
-            # should continue uninterrupted, not strand the trap with no
-            # open window until someone finds and fixes it via a manual
-            # Deactivate-then-Activate round trip in Administration. "Trap
-            # missing" stays deliberately different: the trap is physically
-            # gone, so there is genuinely nothing to monitor until it's
-            # found and redeployed.
-            will_start = bool(assessable and service_ready and camera_ready) or finding == "Unable to check"
-            new_id = start_window(staged, trap_id, check_time) if will_start else ""
-            idxs = staged["Windows"].index[staged["Windows"]["Window ID"] == old_id].tolist()
-            if idxs:
-                staged["Windows"].at[idxs[0], "Species"] = species
-                staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
-                # Phase 4: the guess made in the field, kept untouched; Species becomes the necropsy-confirmed value.
-                if not str(staged["Windows"].at[idxs[0], "Field-Recorded Species"]).strip():
-                    staged["Windows"].at[idxs[0], "Field-Recorded Species"] = species
-                    staged["Windows"].at[idxs[0], "Field-Recorded Rat Type"] = rat_type
-                if no_carcass:
-                    staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
-                    staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
-                    staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
-
             expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
-            check_id = photo_gate.get("check_id") if expected_photo_count else make_id("CHK")
-            trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
-            trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
-            row = [
-                check_id, vid, trap_id, old_id, dtstr(check_time), finding, species, rat_type,
-                condition, bag_id, "Yes" if bag_id else "No", "Yes" if bag_labelled else "No",
-                "", "Yes" if service_ready else "No", "Yes" if assessable else "No",
-                "Yes" if service_ready else "No", trap_state,
-                trap_function, "", camera, covers, "Yes" if adjusted else "No", new_id,
-                (service_reason + (" · " if service_reason and notes else "") + notes).strip(),
-                "", "",
-            ]
-            staged["Checks"] = pd.concat([staged["Checks"], pd.DataFrame([row], columns=SHEETS["Checks"])], ignore_index=True)
-
-            if assessable and camera_assigned:
-                priority = "High" if finding == "Trap fired, no animal" else "Normal"
-                add_followup(staged, "Camera review", sid, trap_id, vid, old_id, bag_id, finding,
-                             "Confirm target interaction, activation, kill and video evidence", priority)
-            if collected_animal:
-                add_followup(staged, "Necropsy review", sid, trap_id, vid, old_id, bag_id,
-                             "Dead animal collected",
-                             "Add necropsy result, weight range, measurements and final humane-kill conclusion", "Normal")
-            if assessable and not service_ready:
-                add_followup(staged, "Trap not ready", sid, trap_id, vid, old_id, bag_id,
-                             service_reason, "Restore the trap to service and record the outcome", "High")
-            if camera_issue_required(camera_assigned, camera, covers):
-                add_followup(staged, "Camera issue", sid, trap_id, vid, old_id, bag_id,
-                             "Camera issue", "Resolve camera condition and record the evidence gap", "High")
-
-            refresh_review_status(staged, old_id)
+            record = build_check_records(
+                staged, visit_id=vid, site_id=sid, trap_id=trap_id, check_time=check_time, finding=finding,
+                collected_animal=collected_animal, no_carcass=no_carcass, assessable=assessable,
+                species=species, rat_type=rat_type, condition=condition, bag_id=bag_id, bag_labelled=bag_labelled,
+                service_ready=service_ready, service_reason=service_reason,
+                camera_assigned=camera_assigned, camera=camera, covers=covers, adjusted=adjusted, camera_ready=camera_ready,
+                notes=notes, photo_check_id=photo_gate.get("check_id"), expected_photo_count=expected_photo_count,
+            )
+            check_id = record["check_id"]
 
             def _verify_check_persisted(reloaded):
                 persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
