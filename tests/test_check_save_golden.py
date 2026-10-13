@@ -131,8 +131,15 @@ def test_the_photo_chain_matches_its_golden(tmp_path):
         import json, app, check_save_matrix as m
         print(json.dumps({r: m.compute_photo_chain(app, r) for r in ("extracted", "inline")}))
     """)
-    assert out["inline"] == frozen, "the frozen inline code no longer reproduces the photo-chain golden"
-    assert out["extracted"] == frozen, "the extracted function no longer reproduces the photo-chain golden"
+    changes_path = GOLDEN / "check_save_golden_photos_changes.json"
+    changes = json.loads(changes_path.read_text(encoding="utf-8"))["cases"] if changes_path.exists() else {}
+    # P6-7 (14 Oct 2026): exactly the two staged-then-dropped cases move, and only in what is left in the pending folder (now nothing).
+    assert set(changes) == {"staged_2_then_no_carcass", "staged_2_then_trap_fired"}
+    for case, moved in changes.items():
+        assert {k for k in moved if moved[k] != frozen[case][k]} == {"pending_files_after"} and moved["pending_files_after"] == []
+    current = {**frozen, **changes}
+    assert out["inline"] == current, "the frozen inline code no longer reproduces the photo-chain golden"
+    assert out["extracted"] == current, "the extracted function no longer reproduces the photo-chain golden"
     assert [len(frozen[c]["photos"]) for c in m.PHOTO_CASES] == [0, 1, 3, 1, 3, 0, 0]
 
 

@@ -49,6 +49,7 @@ from photo_integrity import (
     remove_photo as remove_pending_photo,
     rollback_final_copies,
     store_photo as store_pending_photo,
+    staged_photo_count,
     verify_pending as verify_pending_photo_transaction,
 )
 
@@ -3393,6 +3394,7 @@ def commit_staged_records_with_photos(
     record_noun: str,
     record_description: str,
     session_state_keys_to_clear_on_failure: Optional[list] = None,
+    pending_check_id: Optional[str] = None,
 ) -> int:
     """Finalise photos, append Photos rows, and commit staged sheets with full rollback safety.
 
@@ -3414,6 +3416,11 @@ def commit_staged_records_with_photos(
     verify_persisted(reloaded) is called only after the generic Photos checks
     pass; it must raise RuntimeError with a user-facing reason on failure, or
     return a dict of extra fields to log alongside the commit-verified event.
+
+    pending_check_id is the ID of the pending folder (photos, manifest, draft answers) when it is not the record's own ID. A check that
+    takes no photos is saved under a fresh random Check ID while its pending folder is named by the deterministic visit-and-trap ID, so
+    without it the folder was never cleared (the leftover-draft bug, 14 Oct 2026). It defaults to record_id, which is right for the
+    necropsy flows and for a check saved with photos.
     """
     saved_photo_files = []
     final_copies = []
@@ -3540,7 +3547,14 @@ def commit_staged_records_with_photos(
     # its draft file behind indefinitely instead of being cleaned up here
     # like everything else. delete_transaction() already no-ops safely on a
     # directory that was never created.
-    delete_transaction(DATA_ROOT, record_id)
+    pending_id = pending_check_id or record_id
+    if not expected_photo_count:
+        # P6-7 (owner, 14 Oct 2026): photos staged for a collected kill are dropped, with a record, when the check is saved with an outcome that
+        # takes none. The form said so above Save before this point; nothing is deleted before the save.
+        unattached = staged_photo_count(DATA_ROOT, pending_id)
+        if unattached:
+            log_photo_event(DATA_ROOT, "staged_photos_not_attached", count=unattached, pending_id=pending_id, **{"check_id": record_id, **log_fields})
+    delete_transaction(DATA_ROOT, pending_id)
 
     return len(saved_photo_files)
 
@@ -7391,6 +7405,7 @@ elif page == "check":
                 record_noun="check",
                 record_description="check, follow-up or photo record",
                 session_state_keys_to_clear_on_failure=[save_lock_key],
+                pending_check_id=deterministic_check_id(vid, trap_id),
             )
 
             for key in [
