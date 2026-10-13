@@ -2722,23 +2722,100 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     return False
 
 
+def scroll_state_keys() -> tuple:
+    """Which screen the session is on, from state alone: the Streamlit page, the app's own page, the site/visit/trap it is about
+    and the follow-up task open on the Follow-ups page (a task replaces the list in place, with no navigation)."""
+    native = globals().get("selected_navigation_page")
+    return (
+        getattr(native, "url_path", None),
+        st.session_state.get("page"),
+        *(st.session_state.get(key) for key in WORKFLOW_CONTEXT_QUERY_KEYS),
+        st.session_state.get("followup_panel"),
+    )
+
+
+def scroll_panel_anchor() -> None:
+    """First thing in a side panel (the Add/Edit forms and the test-window panel): where the page lands when the panel opens on a
+    phone, where the columns stack and the panel sits below the whole list."""
+    st.markdown('<span id="r1m1-panel-anchor"></span>', unsafe_allow_html=True)
+
+
+SCROLL_PANEL_KEYS = ("setup_mode", "setup_trap", "site_mode", "setup_site", "build_mode", "setup_build", "window_panel", "data_quality_review")
+
+
+def scroll_signature() -> tuple:
+    """scroll_state_keys() plus the title the screen drew. The title is what catches a screen swapped for another in place that
+    no key announces: it needs no list of which screens do that."""
+    return scroll_state_keys() + (SCREEN_TITLES[0] if SCREEN_TITLES else None, *(st.session_state.get(key) for key in SCROLL_PANEL_KEYS))
+
+
+HIDE_STALE_CSS = (
+    # Only while a marker drawn in THIS run is current (not stale): the rule ends with the run and can never touch the next tap's screen.
+    # 1. the old screen is faded and cannot be tapped (it shows the tap was received, and a late second tap lands on nothing);
+    'section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark) [data-stale="true"]'
+    '{opacity:.45 !important;pointer-events:none !important}'
+    # 2. once the new screen's title is drawn, whatever is left of the old screen is hidden (it would sit under the new screen).
+    'section[data-testid="stMain"]:has([data-testid="stElementContainer"]:not([data-stale="true"]) .r1-navmark)'
+    ':has([data-testid="stElementContainer"]:not([data-stale="true"]) :is(h1,.r1-title)) [data-stale="true"]{display:none !important}'
+)
+
+
+def hide_stale_screen_while_navigating() -> None:
+    """Streamlit keeps the previous run's elements on screen, marked stale, until the run ends, and draws the new screen over
+    them from the top. When the new screen is shorter, or slow, the old screen's last buttons sit under the new screen's first
+    ones: on a phone, Finish site check showed up as a second set of three buttons under Trap sites. While the screen is being
+    changed the old screen is faded and untappable until the new screen's title arrives (so on a weak signal the operator still
+    sees what they left, and a second tap cannot land on it), then its leftovers are hidden.
+
+    It applies to the one run that changes the screen: a navigation helper asked for the top (scroll_to_top_once), or the page,
+    site/visit/trap or follow-up task changed. A rerun of the same screen (a validation message, Saving…) never gets the marker.
+    The change is recorded here, at the start of the run, so a screen that stops early (st.stop) cannot make the next rerun of the
+    same screen look like a change. Always one element, so positions do not shift between runs."""
+    keys = scroll_state_keys()
+    seen = st.session_state.get("scroll_state_seen")
+    st.session_state["scroll_state_seen"] = keys
+    if seen not in (None, keys):
+        st.session_state["scroll_to_top_once"] = True  # a change no navigation helper announced: a task opening in place
+    asked = bool(st.session_state.get("scroll_to_top_once")) and not st.session_state.get("scroll_flag_hidden")
+    if asked:
+        st.session_state["scroll_flag_hidden"] = True  # this request has had its hide; if the run stops early the next rerun does not repeat it
+    st.markdown(f"<style>{HIDE_STALE_CSS}</style><span class=\"r1-navmark\"></span>" if asked else "<style></style>", unsafe_allow_html=True)
+
+
 def scroll_to_top_once():
-    """Reset Streamlit's current page after navigation and rerender settling."""
-    if not st.session_state.pop("scroll_to_top_once", False):
+    """Open the screen the operator has just moved to at its top, whatever position the screen they left was scrolled to.
+
+    Streamlit 1.60 scrolls section[data-testid="stMain"] and keeps that element between screens. When a screen is swapped
+    for another, the page briefly collapses and grows back, and how much of the old scroll position survives depends on
+    timing: on a phone a screen opened from half-way down another often opened half-way down itself. The reset therefore
+    targets stMain on every screen, and it is asked for by what changed on screen (scroll_signature) as well as by the
+    navigation helpers that set the flag, so a route that sets no flag (a direct switch_page, a resumed session) still opens
+    at the top. The one screen that asks to land part-way down, the check form restored on its Camera check, says so with
+    scroll_hold_for_anchor."""
+    flagged = st.session_state.pop("scroll_to_top_once", False)
+    st.session_state.pop("scroll_flag_hidden", None)
+    flagged = st.session_state.pop("scroll_message_pending", False) or flagged
+    signature = scroll_signature()
+    changed = st.session_state.get("scroll_signature_seen") not in (None, signature)
+    st.session_state["scroll_signature_seen"] = signature
+    if st.session_state.pop("scroll_hold_for_anchor", False) or not (flagged or changed):
         return
-    # Streamlit 1.60 scrolls section[data-testid="stMain"], which none of the long-standing targets below name, so on the
-    # existing pages this reset has no effect (measured on origin/main). That is left exactly as it was: the check page's
-    # resume-to-camera scroll and the forms on Data & records were built and tested around it. The trial journey screens
-    # are new, and they need the reset to work (a step opens at its top), so only they get the real target.
-    main_target = "doc.querySelector('section[data-testid=\"stMain\"]')," if st.session_state.get("page") in TRIAL_JOURNEY_PAGES else ""
     components.html(
         """
         <script>
         (() => {
+          // run %NONCE%: a fresh srcdoc each time so two resets in a row both run
           const parent = window.parent;
           const doc = parent.document;
 
+          // Once the operator touches, scrolls or types, the page is theirs: stop pulling it back to the top.
+          let handedOver = false;
+          const handOver = () => { handedOver = true; };
+          const gestures = ['touchstart', 'wheel', 'keydown', 'mousedown'];
+          gestures.forEach((name) => doc.addEventListener(name, handOver, {capture: true, passive: true, once: true}));
+
           const reset = () => {
+            if (handedOver) return;
             // Deliberately not using topAnchor.scrollIntoView() here: the
             // #r1m1-page-top marker sits after the top nav bar in the DOM
             // (app.py places it just below the nav container), so scrolling
@@ -2751,7 +2828,7 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
-              /*MAIN_TARGET*/
+              doc.querySelector('section[data-testid="stMain"]'),
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -2774,14 +2851,23 @@ def scroll_to_top_once():
             } catch (_) {
               parent.scrollTo(0, 0);
             }
+
+            // A side panel that opened below the first screen (the columns stack on a phone) is where the operator should land.
+            const anchor = doc.getElementById('r1m1-panel-anchor');
+            const main = doc.querySelector('section[data-testid="stMain"]');
+            if (anchor && main) {
+              const y = anchor.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
+              if (y > main.clientHeight * 0.5) main.scrollTo({top: Math.max(0, y - 12), left: 0, behavior: 'auto'});
+            }
           };
 
           reset();
           requestAnimationFrame(reset);
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
+          window.setTimeout(() => gestures.forEach((name) => doc.removeEventListener(name, handOver, true)), 1000);
         })();
         </script>
-        """.replace("/*MAIN_TARGET*/", main_target),
+        """.replace("%NONCE%", str(time.time_ns())),
         height=0,
         width=0,
     )
@@ -4481,12 +4567,16 @@ def success_state(title: str, recorded=None, updated=None, next_action=None):
         st.write(next_action)
 
 
+SCREEN_TITLES: list = []  # the titles drawn in this run, first is the screen's own (the script re-runs top to bottom, so this starts empty each run)
+
+
 def header(title, subtitle="", *, emphasize_subtitle=False):
     """emphasize_subtitle: Trial performance brief 2c — that page's subtitle
     reframes toward the question the page answers and needs more visual
     weight against its H1/cards than the shared .page-context style gives
     every other page's subtitle. Opt-in per call site, not a global change
     to .page-context, since no other page asked for this."""
+    SCREEN_TITLES.append(str(title))
     st.title(title)
     if subtitle:
         subtitle_class = "page-context page-context-emphasis" if emphasize_subtitle else "page-context"
@@ -4517,6 +4607,7 @@ def set_flash(kind: str, title: str, lines=None):
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
+        st.session_state.scroll_message_pending = True  # the message is at the top of the page: show it, wherever the operator was
         message_panel(flash["kind"], flash["title"], flash.get("lines", []))
 
 
@@ -4545,6 +4636,7 @@ def r1_stepper(current: int) -> None:
 
 
 def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = "") -> None:
+    SCREEN_TITLES.append(str(title))
     stat = (
         f'<div><div class="r1-stat">{html.escape(str(stat_value))}</div><div class="r1-stat-label">{html.escape(stat_label)}</div></div>'
         if stat_value is not None else ""
@@ -6401,6 +6493,7 @@ NAVIGATION_PAGES = {
 # routing, URLs and browser history remain framework-owned.
 selected_navigation_page = st.navigation(NAVIGATION_PAGES, position="hidden")
 selected_navigation_page.run()
+hide_stale_screen_while_navigating()
 
 PRIMARY_SECTION_BY_APP_PAGE = {
     "sites": "Trap sites",
@@ -6821,7 +6914,14 @@ elif page == "check":
     # both what was actually intended and a real, if minor, existing bug
     # fix on its own.
     def _render_check_page():
-        just_restored_draft = seed_check_draft(vid, trap_id)
+        # The "scroll to the Camera check where you left off" below is for arriving on this page with a saved draft. Streamlit drops the
+        # state of widgets that are not on screen, so seed_check_draft() can restore a field again on a later rerun of the same visit
+        # to the page (the form growing as it is answered): on a trap whose check had been started before, tapping "Carcass collected?
+        # Yes" threw the page down to the Camera check. It can only fire on the first render of each arrival.
+        arrival = (vid, trap_id, int(st.session_state.get("navigation_sequence", 0)))
+        first_render_of_arrival = st.session_state.get("check_arrival_seen") != arrival
+        st.session_state["check_arrival_seen"] = arrival
+        just_restored_draft = seed_check_draft(vid, trap_id) and first_render_of_arrival
         st.button(
             "← Back to trap selector",
             on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": vid},
@@ -6971,6 +7071,7 @@ elif page == "check":
             st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
             st.markdown("### Camera check")
             if just_restored_draft:
+                st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
                 # Field report fix (2026-08-17): "focus directly where you
                 # left off" - Camera check is specifically where the Arlo
                 # app-switch happens, so it's the one place worth landing on
@@ -8280,6 +8381,7 @@ elif page == "windows":
                         st.rerun()
     if panel is not None:
         with panel:
+            scroll_panel_anchor()
             wr=data["Windows"][data["Windows"]["Window ID"]==wid]
             if wr.empty:
                 st.session_state.pop("window_panel",None)
@@ -8956,6 +9058,7 @@ elif page == "setup":
                             go("trap_edit", trap_id=trap_id)
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
                 setup_title, setup_close = st.columns([1, 0.13], vertical_alignment="top")
                 with setup_title:
@@ -9166,6 +9269,7 @@ elif page == "setup":
                         st.session_state.setup_site=sid; st.session_state.site_mode="edit"; st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 ex=data["Sites"][data["Sites"]["Site ID"]==st.session_state.get("setup_site","")].iloc[0] if mode=="edit" else None
                 st.subheader("Edit site" if mode=="edit" else "Add site")
                 with st.form("site_setup_panel"):
@@ -9369,6 +9473,7 @@ elif page == "setup":
                         st.rerun()
         if panel is not None:
             with panel:
+                scroll_panel_anchor()
                 if mode=="edit":
                     selected_build_identity=st.session_state.get("setup_build","")
                     selected_product, selected_version = selected_build_identity.split("::", 1)
