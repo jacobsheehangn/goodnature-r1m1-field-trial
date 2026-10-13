@@ -250,6 +250,9 @@ def not_assessed_mask(final_humane_kill: pd.Series) -> pd.Series:
     return final_humane_kill.astype(str).str.startswith("Not assessed — ")
 LURE = ["Fresh", "Present/good", "Partly eaten", "Gone", "Dry", "Mouldy", "Contaminated", "Unknown"]
 CAMERA = ["Working", "Offline", "Battery low", "Poor view", "Blocked view", "Missing", "Unsure"]
+# What a camera trap's check records for the camera when the trap itself was not assessed ("Unable to check", "Trap missing"): the
+# camera was not looked at, which is neither "No camera" (there is one) nor a camera problem.
+CAMERA_NOT_ASSESSED = "Not assessed"
 SPECIES = ["Rat", "Mouse", "Non-target", "Unknown"]
 ANIMAL_CONDITION = ["Dead and apparently normal", "Dead with obvious injury concern", "Alive and trapped", "Alive and maimed", "Unable to assess"]
 RAT_WEIGHT_RANGES = ["0–50 g", "51–100 g", "101–150 g", "151–200 g", "201–250 g", "251–300 g", "301–350 g", "351–400 g", "400+ g"]
@@ -1861,6 +1864,11 @@ def build_check_records(
             staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
             staged["Windows"].at[idxs[0], "Necropsy Assessment"] = NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS
 
+    if camera_assigned and not assessable:
+        # S4 (13 Oct 2026): the operator never reached the trap, so its camera was not assessed. This used to be recorded as "No camera" /
+        # "Not applicable" (what a trap with no camera records) and, as the camera was then "not working", raised a High Camera issue.
+        camera, covers = CAMERA_NOT_ASSESSED, CAMERA_NOT_ASSESSED
+
     check_id = photo_check_id if expected_photo_count else make_id("CHK")
     trap_state = "Ready" if service_ready else ("Not ready" if assessable else "Not assessed")
     trap_function = "Ready after service" if service_ready else ("No" if assessable else "Unsure")
@@ -1886,7 +1894,7 @@ def build_check_records(
     if assessable and not service_ready:
         add_followup(staged, "Trap not ready", site_id, trap_id, visit_id, old_id, bag_id,
                      service_reason, "Restore the trap to service and record the outcome", "High")
-    if camera_issue_required(camera_assigned, camera, covers):
+    if assessable and camera_issue_required(camera_assigned, camera, covers):
         add_followup(staged, "Camera issue", site_id, trap_id, visit_id, old_id, bag_id,
                      "Camera issue", "Resolve camera condition and record the evidence gap", "High")
 

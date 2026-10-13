@@ -36,12 +36,23 @@ def _run(tmp_path: Path, script: str, timeout: int = 600) -> dict:
 
 
 def _golden_digests() -> dict:
+    """The golden frozen from main, as it was frozen."""
     out = {}
     for line in (GOLDEN / "check_save_golden_digests.tsv").read_text(encoding="utf-8").splitlines():
         if line and not line.startswith("#"):
             key, value = line.rsplit("\t", 1)
             out[key] = value
     return out
+
+
+def _changes() -> dict:
+    """The deliberate changes laid over the frozen golden (check_save_golden_changes.json), each with a reason."""
+    path = GOLDEN / "check_save_golden_changes.json"
+    return json.loads(path.read_text(encoding="utf-8"))["cells"] if path.exists() else {}
+
+
+def _current_golden_digests() -> dict:
+    return {**_golden_digests(), **{key: change["digest"] for key, change in _changes().items()}}
 
 
 def _diff(expected: dict, actual: dict, limit: int = 12) -> str:
@@ -66,7 +77,7 @@ def matrix_runs(tmp_path_factory) -> dict:
 
 
 def test_the_function_the_page_calls_reproduces_the_golden_for_the_whole_matrix(matrix_runs):
-    expected = _golden_digests()
+    expected = _current_golden_digests()
     actual = matrix_runs["extracted"]["digests"]
     assert actual == expected, _diff(expected, actual)
 
@@ -80,6 +91,7 @@ def test_the_frozen_inline_code_still_reproduces_the_golden(matrix_runs):
 
 def test_the_readable_rows_match_in_full(matrix_runs):
     frozen = json.loads((GOLDEN / "check_save_golden_rows.json").read_text(encoding="utf-8"))["cells"]
+    frozen.update({key: change["rows"] for key, change in _changes().items() if key in frozen})
     actual = matrix_runs["extracted"]["rows"]
     assert set(actual) == set(frozen)
     for key, rows in frozen.items():
@@ -93,7 +105,7 @@ def test_nothing_but_the_trap_checks_and_follow_ups_is_written(matrix_runs):
 
 def test_the_matrix_covers_every_dimension_and_cannot_shrink_quietly():
     cells = m.cells()
-    golden = _golden_digests()
+    golden = _current_golden_digests()
     assert {m.cell_key(c) for c in cells} == set(golden), "the matrix and the frozen golden list different cells"
     assert len(golden) == len(cells) >= 2700
     assert {c["finding"] for c in cells} == set(m.FINDINGS)
@@ -127,7 +139,7 @@ def test_the_photo_chain_matches_its_golden(tmp_path):
 def test_the_golden_notices_a_change_in_behaviour(tmp_path):
     """Negative controls: break the camera-issue rule, then the priority of a follow-up; the golden must see each, in exactly the cells
     where it matters, and in nothing else."""
-    expected = _golden_digests()
+    expected = _current_golden_digests()
     out = _run(tmp_path, """
         import json, app, check_save_matrix as m
         real_required, real_add = app.camera_issue_required, app.add_followup
@@ -143,7 +155,65 @@ def test_the_golden_notices_a_change_in_behaviour(tmp_path):
     """)
     cells = {m.cell_key(c): c for c in m.cells()}
     moved_issue = {k for k in expected if out["no_issue"][k] != expected[k]}
-    wanted_issue = {k for k, c in cells.items() if m.camera_issue_required_for(c)}
+    wanted_issue = {k for k, c in cells.items() if m.camera_issue_required_for(c) and c["finding"] not in m.NOT_ASSESSABLE}
     assert moved_issue == wanted_issue and moved_issue
     moved_priority = {k for k in expected if out["normal_priority"][k] != expected[k]}
     assert moved_priority == {k for k, c in cells.items() if c["finding"] not in m.NOT_ASSESSABLE and c["service"] == "No"}
+
+
+# ---------------------------------------------------------------- S4: the camera of a trap that was not assessed
+S4_REASON_WORDS = "Not assessed"
+
+
+def _s4_cells() -> set:
+    """The only cells the S4 fix may move: a trap with a camera, a finding that means the trap was not assessed."""
+    return {m.cell_key(c) for c in m.cells() if m.PROFILES[c["profile"]]["camera"] and c["finding"] in m.NOT_ASSESSABLE}
+
+
+def test_the_deliberate_changes_are_exactly_the_s4_cells_and_nothing_else():
+    changes = _changes()
+    assert set(changes) == _s4_cells() and len(changes) == 8
+    base = _golden_digests()
+    assert all(change["digest"] != base[key] for key, change in changes.items()), "a recorded change that is not a change"
+
+
+def test_s4_changes_only_the_camera_columns_and_the_camera_issue_task():
+    """Read against the frozen rows: the new rows equal the old ones except Camera Condition, Camera Covers Trap and the missing
+    Camera issue follow-up."""
+    frozen = json.loads((GOLDEN / "check_save_golden_rows.json").read_text(encoding="utf-8"))["cells"]
+    camera_condition, camera_covers = m_columns()
+    readable = [key for key in _changes() if key in frozen]  # the cells with notes have a digest, not stored rows
+    assert len(readable) == 4
+    for key in readable:
+        old, new = frozen[key], _changes()[key]["rows"]
+        assert old["checks_new"][0][camera_condition] == "No camera" and old["checks_new"][0][camera_covers] == "Not applicable"
+        assert new["checks_new"][0][camera_condition] == S4_REASON_WORDS and new["checks_new"][0][camera_covers] == S4_REASON_WORDS
+        patched = list(old["checks_new"][0])
+        patched[camera_condition], patched[camera_covers] = S4_REASON_WORDS, S4_REASON_WORDS
+        assert new["checks_new"][0] == patched, f"{key}: something besides the two camera columns changed in the Checks row"
+        assert new["windows"] == old["windows"], f"{key}: a window changed"
+        assert [f for f in old["followups_new"] if f[1] != "Camera issue"] == new["followups_new"]
+        assert [f[1] for f in old["followups_new"] if f[1] == "Camera issue"] == ["Camera issue"], f"{key}: the old code raised one Camera issue"
+        assert not [f for f in new["followups_new"] if f[1] == "Camera issue"], f"{key}: still raises a Camera issue"
+
+
+def test_a_trap_without_a_camera_is_unchanged_and_an_assessed_camera_still_raises_its_issue():
+    frozen = json.loads((GOLDEN / "check_save_golden_rows.json").read_text(encoding="utf-8"))["cells"]
+    for key, rows in frozen.items():
+        if key in _changes():
+            continue
+        row = rows["checks_new"][0]
+        camera_condition, camera_covers = m_columns()
+        if key.startswith("nocamera") and any(f in key for f in m.NOT_ASSESSABLE):
+            assert (row[camera_condition], row[camera_covers]) == ("No camera", "Not applicable"), key
+        if key.startswith("camera") and "camera=No" in key and not any(f in key for f in m.NOT_ASSESSABLE):
+            assert [f for f in rows["followups_new"] if f[1] == "Camera issue"], f"{key}: an assessed, failing camera lost its Camera issue"
+
+
+def m_columns() -> tuple:
+    columns = [
+        "Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID",
+        "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function",
+        "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes", "Excluded", "Exclusion Reason",
+    ]
+    return columns.index("Camera Condition"), columns.index("Camera Covers Trap")

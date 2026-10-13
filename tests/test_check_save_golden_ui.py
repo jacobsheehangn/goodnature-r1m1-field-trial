@@ -89,6 +89,7 @@ WANTED = [
     dict(profile="camera_trial", finding="Dead animal found", carcass="No", service="No", camera="No", issue="Missing", covers="No", adjusted=True),
     dict(profile="camera_trial", finding="Trap missing"),
     dict(profile="camera_trial", finding="Unable to check"),
+    dict(profile="nocamera_trial", finding="Unable to check"),
     dict(profile="nocamera_trial", finding="Trap still set, no animal", service="No"),
     dict(profile="nocamera_trial", finding="Dead animal found", carcass="Yes", service="Yes", photos=0, species="Rat", rat_type="Ship rat"),
     dict(profile="nocamera_trial", finding="Dead animal found", carcass="No", service="Yes", notes=m.NOTE),
@@ -141,9 +142,19 @@ def _frozen_rows(tmp_path: Path, cells: list) -> dict:
     return json.loads(result.stdout.strip().splitlines()[-1])
 
 
+def _changes() -> dict:
+    path = ROOT / "tests" / "golden" / "check_save_golden_changes.json"
+    return json.loads(path.read_text(encoding="utf-8"))["cells"] if path.exists() else {}
+
+
 @pytest.fixture(scope="module")
 def frozen(tmp_path_factory):
-    return _frozen_rows(tmp_path_factory.mktemp("frozen_ui"), UI_CELLS)
+    """The rows the page must write: the frozen inline code's, with the deliberate changes (S4) laid over."""
+    rows = _frozen_rows(tmp_path_factory.mktemp("frozen_ui"), UI_CELLS)
+    for key, change in _changes().items():
+        if key in rows:
+            rows[key] = {"rows": change["rows"], "digest": change["digest"]}
+    return rows
 
 
 def _radio(page: Page, group: str, option: str) -> None:
@@ -244,3 +255,8 @@ def test_the_check_page_writes_the_frozen_rows(cell, frozen, tmp_path: Path, pag
         actual = _normalise(written, bags, visits)
         for part in ("checks_new", "windows", "followups_new"):
             assert actual[part] == expected[part], f"{part} differ for {m.cell_key(cell)}"
+        if cell["finding"] in m.NOT_ASSESSABLE:  # S4, stated outright: the camera of a trap that was not reached
+            camera_trap = m.PROFILES[cell["profile"]]["camera"]
+            row = written["checks_new"][0]
+            assert (row[19], row[20]) == (("Not assessed", "Not assessed") if camera_trap else ("No camera", "Not applicable"))
+            assert not [f for f in written["followups_new"] if f[1] == "Camera issue"], "an unassessed trap raised a Camera issue"
