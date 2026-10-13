@@ -205,7 +205,7 @@ SHEETS = {
     "Traps": ["Trap ID", "Product", "Build Version", "Site ID", "Route Order", "Location", "Camera ID", "Deployment Start", "Setup Image Link", "Status", "Notes"],
     "Visits": ["Visit ID", "Site ID", "Operator", "Start Time", "End Time", "Status", "Notes"],
     "Checks": ["Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID", "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function", "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes", "Excluded", "Exclusion Reason"],
-    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason", "Trial ID"],
+    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason", "Trial ID", "Field-Recorded Species", "Field-Recorded Rat Type", "Species Confirmed"],
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
     "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
@@ -3138,7 +3138,7 @@ def followup_photo_transaction_context(item) -> dict:
     }
 
 
-def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: str, photo_kind: str = "Check evidence") -> dict:
+def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: str, photo_kind: str = "Check evidence", fit_content: bool = False) -> dict:
     """Prepare photos in-browser and persist each selected image before a final save.
 
     Shared by the check flow and the necropsy follow-up flow: same component,
@@ -3155,6 +3155,7 @@ def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: st
         retry_delays_ms=[1000, 2000, 4000],
         max_raw_bytes=MAX_RAW_PHOTO_BYTES,
         max_prepared_bytes=MAX_SAVED_PHOTO_BYTES,
+        fit_content=fit_content,
         key=widget_key,
         default=None,
     )
@@ -3258,6 +3259,7 @@ def render_followup_photo_capture(item) -> dict:
         widget_key=f"critical_photo_upload_followup_{fid}",
         event_key=f"photo_component_event_followup_{fid}",
         photo_kind="Necropsy evidence",
+        fit_content=True,
     )
     return {**result, "follow_up_id": fid}
 
@@ -3289,6 +3291,7 @@ def render_correction_necropsy_photo_capture(window_id: str, trap_id: str, site_
         widget_key=f"critical_photo_upload_corrnec_{window_id}",
         event_key=f"photo_component_event_corrnec_{window_id}",
         photo_kind="Necropsy evidence",
+        fit_content=True,
     )
     return {**result, "follow_up_id": context["follow_up_id"]}
 
@@ -4741,6 +4744,153 @@ def return_from_followup_task() -> bool:
         st.session_state[flow_key][field] = value  # land on the list, not on the task that was left
     st.switch_page(PAGE_TRAP_SITES)
     return True
+
+
+def render_necropsy_task(data, item) -> None:
+    """The necropsy review task page (Phase 4). Species and Rat type are confirmed here, before
+    the weight range, and stay live (outside the form) because the species decides which weight
+    scale is offered. Everything else is answered locally and saved once. The field-recorded
+    guess is kept in its own column; confirming or correcting needs no typed reason but is logged
+    automatically."""
+    fid = item["Follow-up ID"]
+    prefix = f"nec_{fid}"
+    linked = data["Windows"][data["Windows"]["Window ID"] == item["Window ID"]]
+    window = linked.iloc[0] if not linked.empty else None
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        from_end_trial = bool(st.session_state.get("return_to"))
+        if st.button("Back to End trial" if from_end_trial else "Back to task list", key="back_followup_list"):
+            if not return_from_followup_task():
+                st.session_state.pop("followup_panel", None)
+                st.rerun()
+        r1_title("Necropsy review")
+        context = [("Trap", html.escape(str(item["Trap ID"]))), ("Site", html.escape(site_name(data, item["Site ID"])))]
+        if str(item.get("Bag ID", "")).strip():
+            context.append(("Bag ID", html.escape(str(item["Bag ID"]))))
+        if window is not None and window_has_camera(data, window):
+            # What the footage showed, for the person entering the necropsy result. Display only.
+            context.append(("Camera review (video)", html.escape(str(window["Video Assessment"]).strip() or "Pending")))
+        with st.container(key="card_nec_context"):
+            st.markdown(r1_kv(context), unsafe_allow_html=True)
+
+        guess_species = str(window["Field-Recorded Species"]).strip() or str(window["Species"]).strip() if window is not None else ""
+        guess_rat = str(window["Field-Recorded Rat Type"]).strip() or str(window["Rat Type"]).strip() if window is not None else ""
+        current_species = str(window["Species"]).strip() if window is not None else ""
+        # LIVE: changing the species re-renders the weight range for the right scale.
+        species = st.radio("Species", SPECIES, index=SPECIES.index(current_species) if current_species in SPECIES else None, horizontal=True, key=f"species_nec_{fid}")
+        if guess_species:
+            st.markdown(f'<div class="r1-meta">Field-recorded guess: {html.escape(guess_species)}</div>', unsafe_allow_html=True)
+        rat_type = ""
+        if species == "Rat":
+            current_rat = str(window["Rat Type"]).strip() if window is not None else ""
+            rat_type = st.segmented_control("Rat type", RAT_TYPES, default=current_rat if current_rat in RAT_TYPES else None, key=f"seg_rat_nec_{fid}", selection_mode="single") or ""
+
+        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Attach photos of the animal. You can choose several.</div>', unsafe_allow_html=True)
+        photo_gate = render_followup_photo_capture(item)
+
+        # ONE FORM: the species is chosen above, so the weight scale below is always the right one.
+        with st.form(f"{prefix}_form", border=False):
+            status = st.radio("Necropsy status", ["Complete", "Not completed", "Unable to assess"], index=None, key=f"rows_nec_status_{fid}")
+            assessment = st.radio("Necropsy assessment", ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable"], index=None, key=f"rows_nec_assessment_{fid}")
+            weight_range = st.pills("Animal weight range", weight_ranges_for_species(species), selection_mode="single", key=f"chips_nec_weight_{fid}_{species}")
+            final = st.radio("Final humane-kill result", ["Yes", "No", "Unclear", "Not assessable"], index=None, key=f"rows2_nec_final_{fid}")
+            st.markdown('<div class="r1-meta">Saving this updates the kill result, the humane-kill figures, the review status and the photos.</div>', unsafe_allow_html=True)
+            photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+            if photo_gate.get("expected_count", 0):
+                if photo_gate.get("manual_failure_count", 0):
+                    count = int(photo_gate["manual_failure_count"])
+                    st.markdown(f'<div class="r1-meta">{count} photo{"s" if count != 1 else ""} could not upload</div>', unsafe_allow_html=True)
+                elif photo_gate.get("ready"):
+                    st.markdown(f'<div class="r1-meta">{photo_gate["file_count"]} photo{"s" if photo_gate["file_count"] != 1 else ""} saved</div>', unsafe_allow_html=True)
+                else:
+                    remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                    st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}…</div>', unsafe_allow_html=True)
+            # The same double-tap protection as every other photo-bearing save: a persistent lock, and the
+            # visible "Saving…" state comes from arming on the first submit and doing the work on the next run.
+            lock_key = f"{prefix}_saving"
+            arm_key = f"{prefix}_armed"
+            armed = st.session_state.get(arm_key, False)
+            already_saving = st.session_state.get(lock_key, False)
+            errors_slot = st.container()
+            submitted = st.form_submit_button(
+                "Saving…" if armed else ("Please wait" if photo_blocked else "Save necropsy review"),
+                type="primary", disabled=armed or photo_blocked or already_saving,
+            )
+        if submitted and not armed:
+            st.session_state[arm_key] = True
+            st.rerun()
+        if not armed:
+            return
+        st.session_state.pop(arm_key, None)
+        st.session_state[lock_key] = True
+        errors = []
+        if species is None:
+            errors.append("Choose the species.")
+        if species == "Rat" and not rat_type:
+            errors.append("Choose the rat type.")
+        if status is None or assessment is None or weight_range is None or final is None:
+            errors.append("Complete every necropsy field, including the weight range.")
+        else:
+            errors.extend(necropsy_consistency_errors(status, assessment, final))
+        idxs = data["Windows"].index[data["Windows"]["Window ID"] == item["Window ID"]].tolist()
+        if not idxs:
+            errors.append("The linked test window cannot be found.")
+        if errors:
+            st.session_state[lock_key] = False
+            with errors_slot:
+                st.markdown(design.message_html("error", "Please correct the necropsy review", "<br>".join(html.escape(e) for e in errors)), unsafe_allow_html=True)
+            return
+        expected_photo_count = int(photo_gate.get("expected_count", 0))
+        if expected_photo_count:
+            # Verify again at the final commit boundary using the durable pending manifest.
+            photo_gate = {**photo_gate, **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)}
+            if not (photo_gate.get("ready") and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")):
+                st.session_state[lock_key] = False
+                st.error("One or more selected photos are not safely stored yet.")
+                st.stop()
+        original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+        staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+        idx = idxs[0]
+        w = staged["Windows"]
+        prior_species, prior_rat = str(w.at[idx, "Species"]).strip(), str(w.at[idx, "Rat Type"]).strip()
+        # The field guess is kept exactly as first recorded; a window saved before this column existed
+        # is stamped now, from the value it held until this moment.
+        if not str(w.at[idx, "Field-Recorded Species"]).strip():
+            w.at[idx, "Field-Recorded Species"] = prior_species
+            w.at[idx, "Field-Recorded Rat Type"] = prior_rat
+        guess_species_now, guess_rat_now = str(w.at[idx, "Field-Recorded Species"]).strip(), str(w.at[idx, "Field-Recorded Rat Type"]).strip()
+        for k, v in {"Necropsy Status": status, "Necropsy Assessment": assessment, "Animal Weight Range": weight_range, "Final Humane Kill": final,
+                     "Species": species, "Rat Type": rat_type, "Species Confirmed": "Yes"}.items():
+            w.at[idx, k] = v
+        # Logged automatically, no typed reason: this is the intended first resolution of a provisional value.
+        audit_change(staged, "Window", item["Window ID"], "Species", guess_species_now, species, "Confirmed at necropsy" if species == guess_species_now else "Corrected at necropsy")
+        if species == "Rat":
+            audit_change(staged, "Window", item["Window ID"], "Rat Type", guess_rat_now, rat_type, "Confirmed at necropsy" if rat_type == guess_rat_now else "Corrected at necropsy")
+        fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"] == fid][0]
+        staged["Followups"].at[fidx, "Status"] = "Complete"
+        staged["Followups"].at[fidx, "Completed Time"] = dtstr()
+        refresh_review_status(staged, item["Window ID"])
+
+        def _verify_necropsy_persisted(reloaded):
+            persisted_followup = reloaded["Followups"][reloaded["Followups"]["Follow-up ID"].astype(str) == str(fid)]
+            if len(persisted_followup) != 1 or str(persisted_followup.iloc[0]["Status"]) != "Complete":
+                raise RuntimeError("The saved workbook did not show this necropsy review as complete.")
+            persisted_window = reloaded["Windows"][reloaded["Windows"]["Window ID"].astype(str) == str(item["Window ID"])]
+            if len(persisted_window) != 1 or str(persisted_window.iloc[0]["Species"]) != species:
+                raise RuntimeError("The saved workbook did not keep the confirmed species.")
+            return {}
+
+        commit_staged_records_with_photos(
+            data=data, staged=staged, original_data=original_data, photo_gate=photo_gate, expected_photo_count=expected_photo_count,
+            record_id=fid, photos_id_column="Follow-up ID", verify_persisted=_verify_necropsy_persisted, log_prefix="necropsy",
+            log_fields={"follow_up_id": fid, "trap_id": item["Trap ID"]}, record_noun="necropsy review",
+            record_description="necropsy review or photo record", session_state_keys_to_clear_on_failure=[lock_key],
+        )
+        st.session_state.pop(lock_key, None)
+        set_flash("success", "Necropsy review saved", [f"Final humane-kill result: {final}.", "The linked kill result and Performance metrics were updated.", "Next: review the next open task."])
+        if not return_from_followup_task():
+            st.session_state.pop("followup_panel", None)
+            st.rerun()
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -7267,6 +7417,10 @@ elif page == "check":
             if idxs:
                 staged["Windows"].at[idxs[0], "Species"] = species
                 staged["Windows"].at[idxs[0], "Rat Type"] = rat_type
+                # Phase 4: the guess made in the field, kept untouched; Species becomes the necropsy-confirmed value.
+                if not str(staged["Windows"].at[idxs[0], "Field-Recorded Species"]).strip():
+                    staged["Windows"].at[idxs[0], "Field-Recorded Species"] = species
+                    staged["Windows"].at[idxs[0], "Field-Recorded Rat Type"] = rat_type
                 if no_carcass:
                     staged["Windows"].at[idxs[0], "Final Humane Kill"] = NOT_ASSESSED_NO_CARCASS
                     staged["Windows"].at[idxs[0], "Necropsy Status"] = NECROPSY_NOT_APPLICABLE_NO_CARCASS
@@ -8029,9 +8183,10 @@ elif page == "trap_detail":
                 )
 
 elif page == "followups":
-    header("Follow-ups", "Complete tasks created during trap checks.")
-    fu=data["Followups"][data["Followups"]["Status"]=="Open"].copy()
     selected_followup_id=st.session_state.get("followup_panel")
+    if not selected_followup_id:
+        header("Follow-ups", "Complete tasks created during trap checks.")
+    fu=data["Followups"][data["Followups"]["Status"]=="Open"].copy()
 
     if not selected_followup_id:
         filter_left,action_right=st.columns([4,1],vertical_alignment="bottom")
@@ -8078,259 +8233,171 @@ elif page == "followups":
                 st.session_state.pop("followup_panel",None); st.rerun()
         else:
             item=matches.iloc[0]; fid=item["Follow-up ID"]; tr=trap_row(data,item["Trap ID"])
-            opened_from_end_trial = bool(st.session_state.get("return_to"))
-            if st.button("← Back to End trial" if opened_from_end_trial else "← Back to task list", key="back_followup_list"):
-                if not return_from_followup_task():
-                    st.session_state.pop("followup_panel",None); st.rerun()
-            header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}" + (f" · Bag {item['Bag ID']}" if str(item.get("Bag ID", "")).strip() else ""))
-
-            linked_windows=data["Windows"][data["Windows"]["Window ID"]==item["Window ID"]]
-            linked_window=linked_windows.iloc[0] if not linked_windows.empty else None
-            window_start=parse_dt(linked_window["Start Time"]) if linked_window is not None else None
-            window_end=parse_dt(linked_window["End Time"]) if linked_window is not None else None
-
-            # Field report fix (2026-09-16): "Build" used to read the trap's
-            # *current* Build Version, not what it was running when this
-            # window was actually open - so any trap whose build was changed
-            # since (e.g. reassigned for a new trial) showed its new build on
-            # every one of its old, still-open follow-ups, with an evidence
-            # period that predates that build even existing. Use the linked
-            # window's own recorded Build Version instead - it's captured at
-            # window-open time and never changes afterward.
-            historical_build = linked_window["Build Version"] if linked_window is not None else tr["Build Version"]
-            context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Build",historical_build),("Camera",str(tr["Camera ID"]).strip() or "No camera assigned"),("Bag ID",item["Bag ID"]),("Reason",item["Reason"] or "Not recorded")]
-            if window_start and window_end:
-                context_rows.append(("Evidence period",f"{human_dt(window_start)} to {human_dt(window_end)}"))
-            workflow_context(context_rows)
-            if window_start and window_end:
-                st.caption("Record when events occurred in the footage, not when you reviewed it.")
-            min_evidence_date=window_start.date() if window_start else None
-            max_evidence_date=window_end.date() if window_end else None
-
-            st.markdown("### Complete this review")
-            if item["Follow-up Type"]=="Camera review":
-                is_kill_review=bool(str(item.get("Bag ID", "")).strip()) or (linked_window is not None and linked_window.get("Finding At Close", "")=="Dead animal found")
-                prefix=f"cam_{fid}"
-                evidence_usable=st.selectbox("Camera evidence usable",["Select…","Yes","No"],index=0,key=f"{prefix}_usable")
-                target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; first_d=first_t=None
-                activated="Unclear"; trigger_d=trigger_t=None; kill_d=kill_t=None
-                assessment="Not applicable"
-
-                if evidence_usable=="No":
-                    st.info("No event timings are required. Add the evidence link or notes explaining the gap.")
-                elif evidence_usable=="Yes":
-                    if is_kill_review:
-                        target="Yes"
-                        st.write("**Target interaction:** Confirmed by this kill review")
-                    else:
-                        target=st.selectbox("Target animal interaction visible",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_target")
-                    if target=="Yes":
-                        interaction_level=st.selectbox("Interaction level",["Select…","Single interaction","Repeated interaction","Heavy / repeated interaction"],index=0,key=f"{prefix}_level")
-                        first_d=st.date_input("First target interaction date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_first_d")
-                        first_t=st.time_input("First target interaction time",value=None,key=f"{prefix}_first_t")
-                        if is_kill_review:
-                            strike_area="Yes"
-                        else:
-                            strike_area=st.selectbox("Entered the strike area",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_strike")
-                    elif target=="No":
-                        interaction_level="Not applicable"; strike_area="Not applicable"
-                    elif target=="Unclear":
-                        interaction_level="Unclear"; strike_area="Unclear"
-
-                    if is_kill_review:
-                        st.caption("Activation and kill are implied by this confirmed-kill task.")
-                        activated="Yes"
-                        kill_d=st.date_input("Kill date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_kill_d")
-                        kill_t=st.time_input("Kill time",value=None,key=f"{prefix}_kill_t")
-                        assessment=st.selectbox("Video humane-kill indicator",["Select…","Humane","Not humane","Unclear","No usable video"],index=0,key=f"{prefix}_assessment")
-                    elif target=="Yes":
-                        if strike_area=="Yes":
-                            activated=st.selectbox("Trap activated",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_activated")
-                            if activated=="Yes":
-                                trigger_d=st.date_input("First activation date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_trigger_d")
-                                trigger_t=st.time_input("First activation time",value=None,key=f"{prefix}_trigger_t")
-                        elif strike_area=="No":
-                            activated="No"
-                            st.caption("Activation is not applicable because meaningful entry did not occur.")
-                        elif strike_area=="Unclear":
-                            activated="Unclear"
-                    else:
-                        activated="No" if target=="No" else "Unclear"
-
-                link=st.text_input("Video link",key=f"{prefix}_link")
-                notes=st.text_area("Notes",key=f"{prefix}_notes")
-
-                saving_update("Attraction, interaction-to-kill speed, video assessment and the linked test-window review status." if is_kill_review else "Attraction, conversion, missed-kill classification and the linked test-window review status.")
-                # Field report (2026-08-18): "same issues, seems like nothing is
-                # happening" - same fix as Save check / the trap-list Check
-                # button, applied consistently rather than left as a one-off.
-                submit=two_phase_button("Save camera review",f"{prefix}_save","Saving…",type="primary")
-                if submit:
-                    errors=[]
-                    if evidence_usable=="Select…": errors.append("Select whether the camera evidence is usable.")
-                    if evidence_usable=="Yes" and not is_kill_review and target=="Select…": errors.append("Select whether target interaction is visible.")
-                    if target=="Yes" and interaction_level=="Select…": errors.append("Select an interaction level.")
-                    if not is_kill_review and target=="Yes" and strike_area=="Select…": errors.append("Select whether the animal entered the strike area.")
-                    if target=="Yes" and (first_d is None or first_t is None): errors.append("Enter the first target interaction date and time.")
-                    if is_kill_review and evidence_usable=="Yes":
-                        if kill_d is None or kill_t is None: errors.append("Enter the kill date and time.")
-                        if assessment=="Select…": errors.append("Select the video humane-kill indicator.")
-                    if not is_kill_review and evidence_usable=="Yes" and target=="Yes" and strike_area=="Yes":
-                        if activated=="Select…": errors.append("Select whether the trap activated.")
-                        if activated=="Yes" and (trigger_d is None or trigger_t is None): errors.append("Enter the first activation date and time.")
-                    if not is_kill_review and strike_area=="No" and activated=="Yes": errors.append("A trap cannot activate when meaningful entry did not occur.")
-                    if not is_kill_review and target=="No" and strike_area not in ["Not applicable","Unclear"]: errors.append("Entry cannot be recorded when no target interaction occurred.")
-
-                    first_dt=datetime.combine(first_d,first_t).replace(microsecond=0) if first_d is not None and first_t is not None else None
-                    trigger_dt=datetime.combine(trigger_d,trigger_t).replace(microsecond=0) if trigger_d is not None and trigger_t is not None else None
-                    kill_dt=datetime.combine(kill_d,kill_t).replace(microsecond=0) if kill_d is not None and kill_t is not None else None
-                    idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
-                    if not idxs: errors.append("The linked test window cannot be found.")
-                    else:
-                        idx=idxs[0]; start_dt=parse_dt(data["Windows"].at[idx,"Start Time"]); end_dt=parse_dt(data["Windows"].at[idx,"End Time"])
-                        for label,val in [("First interaction",first_dt),("Activation",trigger_dt),("Kill",kill_dt)]:
-                            if val and start_dt and val<start_dt: errors.append(f"{label} time cannot be before the window started.")
-                            if val and end_dt and val>end_dt: errors.append(f"{label} time cannot be after the field check closed the window.")
-                        if first_dt and trigger_dt and trigger_dt<first_dt: errors.append("Activation time cannot be before first interaction.")
-                        if first_dt and kill_dt and kill_dt<first_dt: errors.append("Kill time cannot be before first interaction.")
-                    if errors:
-                        st.error("Please correct the camera review:\n\n" + "\n".join(f"- {err}" for err in errors))
-                    else:
-                        if evidence_usable=="No":
-                            target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
-                            assessment="No usable video" if is_kill_review else "Not applicable"
-                        outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
-                        idx=idxs[0]
-                        kill_confirmed="Yes" if is_kill_review else "No"
-                        activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
-                        values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
-                        for k,v in values.items(): data["Windows"].at[idx,k]=v
-                        recalculate_window(data,idx)
-                        fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                        data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
-                        refresh_review_status(data,item["Window ID"]); save_data(data)
-                        speed_line=f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx,'Interaction To Kill Min'])}." if is_kill_review and first_dt else "No interaction-to-kill time recorded."
-                        set_flash("success","Camera review saved",[f"{item['Trap ID']} was updated.",speed_line,"Next: review the next open task."])
-                        if not return_from_followup_task():
-                            st.session_state.pop("followup_panel",None); st.rerun()
-
-            elif item["Follow-up Type"]=="Necropsy review":
-                prefix=f"nec_{fid}"
-                st.markdown("### Photos")
-                st.caption("Attach photos of the animal for the trial record. Same upload behaviour as trap-check photos — select multiple, each uploads independently.")
-                photo_gate=render_followup_photo_capture(item)
-                status=st.selectbox("Necropsy status",["Select…","Complete","Not completed","Unable to assess"],index=0,key=f"{prefix}_status")
-                assessment=st.selectbox("Necropsy assessment",["Select…","Supports humane kill","Does not support humane kill","Unclear","Not assessable"],index=0,key=f"{prefix}_assessment")
-                weight_range=st.selectbox("Animal weight range",["Select…"]+weight_ranges_for_species(linked_window["Species"] if linked_window is not None else None),index=0,key=f"{prefix}_weight")
-                final=st.selectbox("Final humane-kill result",["Select…","Yes","No","Unclear","Not assessable"],index=0,key=f"{prefix}_final")
-                saving_update("The linked kill result, humane-kill KPI, test-window review status and the attached photos.")
-                photo_blocked=bool(photo_gate.get("expected_count",0) and not photo_gate.get("ready"))
-                if photo_gate.get("expected_count",0):
-                    if photo_gate.get("manual_failure_count",0):
-                        count=int(photo_gate["manual_failure_count"])
-                        st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
-                    elif photo_gate.get("ready"):
-                        st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
-                    else:
-                        remaining=max(1,photo_gate.get("expected_count",0)-photo_gate.get("file_count",0))
-                        st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
-                # Same two-phase visible-feedback fix as Save check, plus the
-                # same persistent lock (not just the two-phase helper's own,
-                # which clears itself the instant the slow work starts) -
-                # this save goes through commit_staged_records_with_photos,
-                # same as Save check, so it needs the same protection against
-                # a rapid double-tap during that slower, failure-prone path,
-                # and the same failure-clear hook so a deep commit failure
-                # can't strand this button disabled forever.
-                nec_save_lock_key=f"{prefix}_saving"
-                nec_already_saving=st.session_state.get(nec_save_lock_key,False)
-                save_label="Please wait" if photo_blocked else "Save necropsy review"
-                submit=two_phase_button(save_label,f"{prefix}_save","Saving…",type="primary",disabled=photo_blocked or nec_already_saving)
-                if submit:
-                    st.session_state[nec_save_lock_key]=True
-                    errors=[]
-                    if "Select…" in [status,assessment,weight_range,final]: errors.append("Complete all required necropsy fields.")
-                    errors.extend(necropsy_consistency_errors(status,assessment,final))
-                    idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
-                    if not idxs: errors.append("The linked test window cannot be found.")
-                    if errors:
-                        st.session_state[nec_save_lock_key]=False
-                        st.error("Please correct the necropsy review:\n\n" + "\n".join(f"- {err}" for err in errors))
-                    else:
-                        expected_photo_count=int(photo_gate.get("expected_count",0))
-                        if expected_photo_count:
-                            # Verify again at the final commit boundary using the durable pending manifest.
-                            photo_gate={
-                                **photo_gate,
-                                **verify_pending_photo_transaction(DATA_ROOT,photo_gate["context"],MAX_SAVED_PHOTO_BYTES),
-                            }
-                            if not (
-                                photo_gate.get("ready")
-                                and photo_gate.get("expected_count")==photo_gate.get("file_count")==photo_gate.get("row_count")
-                            ):
-                                st.error("One or more selected photos are not safely stored yet.")
-                                st.stop()
-
-                        original_data={name: frame.copy(deep=True) for name, frame in data.items()}
-                        staged={name: frame.copy(deep=True) for name, frame in data.items()}
-                        idx=idxs[0]
-                        for k,v in {"Necropsy Status":status,"Necropsy Assessment":assessment,"Animal Weight Range":weight_range,"Final Humane Kill":final}.items(): staged["Windows"].at[idx,k]=v
-                        fidx=staged["Followups"].index[staged["Followups"]["Follow-up ID"]==fid][0]
-                        staged["Followups"].at[fidx,"Status"]="Complete"; staged["Followups"].at[fidx,"Completed Time"]=dtstr()
-                        refresh_review_status(staged,item["Window ID"])
-
-                        def _verify_necropsy_persisted(reloaded):
-                            persisted_followup=reloaded["Followups"][reloaded["Followups"]["Follow-up ID"].astype(str)==str(fid)]
-                            if len(persisted_followup)!=1 or str(persisted_followup.iloc[0]["Status"])!="Complete":
-                                raise RuntimeError("The saved workbook did not show this necropsy review as complete.")
-                            return {}
-
-                        commit_staged_records_with_photos(
-                            data=data,
-                            staged=staged,
-                            original_data=original_data,
-                            photo_gate=photo_gate,
-                            expected_photo_count=expected_photo_count,
-                            record_id=fid,
-                            photos_id_column="Follow-up ID",
-                            verify_persisted=_verify_necropsy_persisted,
-                            log_prefix="necropsy",
-                            log_fields={"follow_up_id": fid, "trap_id": item["Trap ID"]},
-                            record_noun="necropsy review",
-                            record_description="necropsy review or photo record",
-                            session_state_keys_to_clear_on_failure=[nec_save_lock_key],
-                        )
-
-                        st.session_state.pop(nec_save_lock_key,None)
-                        set_flash("success","Necropsy review saved",[f"Final humane-kill result: {final}.","The linked kill result and Performance metrics were updated.","Next: review the next open task."])
-                        if not return_from_followup_task():
-                            st.session_state.pop("followup_panel",None); st.rerun()
+            if item["Follow-up Type"]=="Necropsy review":
+                render_necropsy_task(data, item)
             else:
-                prefix=f"issue_{fid}"
-                resolution=st.selectbox("Camera outcome",["Select…","Fixed and now working","Adjusted and now covering trap","Replaced","Could not fix"],index=0,key=f"{prefix}_resolution")
-                current_ready=st.selectbox("Camera now ready and covering the trap",["Select…","Yes","No","Could not assess"],index=0,key=f"{prefix}_ready")
-                evidence_gap=st.selectbox("Past test-window evidence",["Select…","Still usable","Partly usable","Not usable","Could not assess"],index=0,key=f"{prefix}_gap")
-                notes=st.text_area("Resolution notes",key=f"{prefix}_notes")
-                saving_update("The task status, current camera readiness and the linked test-window evidence status.")
-                if two_phase_button("Save camera resolution",f"{prefix}_save","Saving…",type="primary"):
-                    errors=[]
-                    if "Select…" in [resolution,current_ready,evidence_gap]: errors.append("Complete all camera-resolution fields.")
-                    if resolution=="Could not fix" and current_ready=="Yes": errors.append("A camera that could not be fixed cannot be marked ready.")
-                    if not notes.strip(): errors.append("Add a short resolution note.")
-                    if errors:
-                        st.error("Please correct the camera resolution:\n\n" + "\n".join(f"- {e}" for e in errors))
-                    else:
-                        fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                        summary=f"{resolution}. Camera ready: {current_ready}. Past evidence: {evidence_gap}. {notes.strip()}"
-                        data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=summary
+                opened_from_end_trial = bool(st.session_state.get("return_to"))
+                if st.button("← Back to End trial" if opened_from_end_trial else "← Back to task list", key="back_followup_list"):
+                    if not return_from_followup_task():
+                        st.session_state.pop("followup_panel",None); st.rerun()
+                header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}" + (f" · Bag {item['Bag ID']}" if str(item.get("Bag ID", "")).strip() else ""))
+
+                linked_windows=data["Windows"][data["Windows"]["Window ID"]==item["Window ID"]]
+                linked_window=linked_windows.iloc[0] if not linked_windows.empty else None
+                window_start=parse_dt(linked_window["Start Time"]) if linked_window is not None else None
+                window_end=parse_dt(linked_window["End Time"]) if linked_window is not None else None
+
+                # Field report fix (2026-09-16): "Build" used to read the trap's
+                # *current* Build Version, not what it was running when this
+                # window was actually open - so any trap whose build was changed
+                # since (e.g. reassigned for a new trial) showed its new build on
+                # every one of its old, still-open follow-ups, with an evidence
+                # period that predates that build even existing. Use the linked
+                # window's own recorded Build Version instead - it's captured at
+                # window-open time and never changes afterward.
+                historical_build = linked_window["Build Version"] if linked_window is not None else tr["Build Version"]
+                context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Bag ID",item["Bag ID"])]
+                if window_start and window_end:
+                    context_rows.append(("Evidence period",f"{human_dt(window_start)} to {human_dt(window_end)}"))
+                workflow_context(context_rows)
+                if window_start and window_end and item["Follow-up Type"]=="Camera review":
+                    st.caption("Record when events occurred in the footage, not when you reviewed it.")
+                min_evidence_date=window_start.date() if window_start else None
+                max_evidence_date=window_end.date() if window_end else None
+
+                st.markdown("### Complete this review")
+                if item["Follow-up Type"]=="Camera review":
+                    is_kill_review=bool(str(item.get("Bag ID", "")).strip()) or (linked_window is not None and linked_window.get("Finding At Close", "")=="Dead animal found")
+                    prefix=f"cam_{fid}"
+                    evidence_usable=st.selectbox("Camera evidence usable",["Select…","Yes","No"],index=0,key=f"{prefix}_usable")
+                    target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; first_d=first_t=None
+                    activated="Unclear"; trigger_d=trigger_t=None; kill_d=kill_t=None
+                    assessment="Not applicable"
+
+                    if evidence_usable=="No":
+                        st.info("No event timings are required. Add the evidence link or notes explaining the gap.")
+                    elif evidence_usable=="Yes":
+                        if is_kill_review:
+                            target="Yes"
+                            st.write("**Target interaction:** Confirmed by this kill review")
+                        else:
+                            target=st.selectbox("Target animal interaction visible",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_target")
+                        if target=="Yes":
+                            interaction_level=st.selectbox("Interaction level",["Select…","Single interaction","Repeated interaction","Heavy / repeated interaction"],index=0,key=f"{prefix}_level")
+                            first_d=st.date_input("First target interaction date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_first_d")
+                            first_t=st.time_input("First target interaction time",value=None,key=f"{prefix}_first_t")
+                            if is_kill_review:
+                                strike_area="Yes"
+                            else:
+                                strike_area=st.selectbox("Entered the strike area",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_strike")
+                        elif target=="No":
+                            interaction_level="Not applicable"; strike_area="Not applicable"
+                        elif target=="Unclear":
+                            interaction_level="Unclear"; strike_area="Unclear"
+
+                        if is_kill_review:
+                            st.caption("Activation and kill are implied by this confirmed-kill task.")
+                            activated="Yes"
+                            kill_d=st.date_input("Kill date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_kill_d")
+                            kill_t=st.time_input("Kill time",value=None,key=f"{prefix}_kill_t")
+                            assessment=st.selectbox("Video humane-kill indicator",["Select…","Humane","Not humane","Unclear","No usable video"],index=0,key=f"{prefix}_assessment")
+                        elif target=="Yes":
+                            if strike_area=="Yes":
+                                activated=st.selectbox("Trap activated",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_activated")
+                                if activated=="Yes":
+                                    trigger_d=st.date_input("First activation date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_trigger_d")
+                                    trigger_t=st.time_input("First activation time",value=None,key=f"{prefix}_trigger_t")
+                            elif strike_area=="No":
+                                activated="No"
+                                st.caption("Activation is not applicable because meaningful entry did not occur.")
+                            elif strike_area=="Unclear":
+                                activated="Unclear"
+                        else:
+                            activated="No" if target=="No" else "Unclear"
+
+                    link=st.text_input("Video link",key=f"{prefix}_link")
+                    notes=st.text_area("Notes",key=f"{prefix}_notes")
+
+                    saving_update("Attraction, interaction-to-kill speed, video assessment and the linked test-window review status." if is_kill_review else "Attraction, conversion, missed-kill classification and the linked test-window review status.")
+                    # Field report (2026-08-18): "same issues, seems like nothing is
+                    # happening" - same fix as Save check / the trap-list Check
+                    # button, applied consistently rather than left as a one-off.
+                    submit=two_phase_button("Save camera review",f"{prefix}_save","Saving…",type="primary")
+                    if submit:
+                        errors=[]
+                        if evidence_usable=="Select…": errors.append("Select whether the camera evidence is usable.")
+                        if evidence_usable=="Yes" and not is_kill_review and target=="Select…": errors.append("Select whether target interaction is visible.")
+                        if target=="Yes" and interaction_level=="Select…": errors.append("Select an interaction level.")
+                        if not is_kill_review and target=="Yes" and strike_area=="Select…": errors.append("Select whether the animal entered the strike area.")
+                        if target=="Yes" and (first_d is None or first_t is None): errors.append("Enter the first target interaction date and time.")
+                        if is_kill_review and evidence_usable=="Yes":
+                            if kill_d is None or kill_t is None: errors.append("Enter the kill date and time.")
+                            if assessment=="Select…": errors.append("Select the video humane-kill indicator.")
+                        if not is_kill_review and evidence_usable=="Yes" and target=="Yes" and strike_area=="Yes":
+                            if activated=="Select…": errors.append("Select whether the trap activated.")
+                            if activated=="Yes" and (trigger_d is None or trigger_t is None): errors.append("Enter the first activation date and time.")
+                        if not is_kill_review and strike_area=="No" and activated=="Yes": errors.append("A trap cannot activate when meaningful entry did not occur.")
+                        if not is_kill_review and target=="No" and strike_area not in ["Not applicable","Unclear"]: errors.append("Entry cannot be recorded when no target interaction occurred.")
+
+                        first_dt=datetime.combine(first_d,first_t).replace(microsecond=0) if first_d is not None and first_t is not None else None
+                        trigger_dt=datetime.combine(trigger_d,trigger_t).replace(microsecond=0) if trigger_d is not None and trigger_t is not None else None
+                        kill_dt=datetime.combine(kill_d,kill_t).replace(microsecond=0) if kill_d is not None and kill_t is not None else None
                         idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
-                        if idxs and evidence_gap in ["Not usable","Could not assess"]:
-                            data["Windows"].at[idxs[0],"Evidence Usable"]="No"
-                            recalculate_window(data,idxs[0])
-                        refresh_review_status(data,item["Window ID"]); save_data(data)
-                        set_flash("success","Camera resolution saved",[f"Current camera readiness: {current_ready}.",f"Past evidence: {evidence_gap}.","Next: review the next open task."])
-                        if not return_from_followup_task():
-                            st.session_state.pop("followup_panel",None); st.rerun()
+                        if not idxs: errors.append("The linked test window cannot be found.")
+                        else:
+                            idx=idxs[0]; start_dt=parse_dt(data["Windows"].at[idx,"Start Time"]); end_dt=parse_dt(data["Windows"].at[idx,"End Time"])
+                            for label,val in [("First interaction",first_dt),("Activation",trigger_dt),("Kill",kill_dt)]:
+                                if val and start_dt and val<start_dt: errors.append(f"{label} time cannot be before the window started.")
+                                if val and end_dt and val>end_dt: errors.append(f"{label} time cannot be after the field check closed the window.")
+                            if first_dt and trigger_dt and trigger_dt<first_dt: errors.append("Activation time cannot be before first interaction.")
+                            if first_dt and kill_dt and kill_dt<first_dt: errors.append("Kill time cannot be before first interaction.")
+                        if errors:
+                            st.error("Please correct the camera review:\n\n" + "\n".join(f"- {err}" for err in errors))
+                        else:
+                            if evidence_usable=="No":
+                                target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
+                                assessment="No usable video" if is_kill_review else "Not applicable"
+                            outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
+                            idx=idxs[0]
+                            kill_confirmed="Yes" if is_kill_review else "No"
+                            activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
+                            values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
+                            for k,v in values.items(): data["Windows"].at[idx,k]=v
+                            recalculate_window(data,idx)
+                            fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
+                            data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
+                            refresh_review_status(data,item["Window ID"]); save_data(data)
+                            speed_line=f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx,'Interaction To Kill Min'])}." if is_kill_review and first_dt else "No interaction-to-kill time recorded."
+                            set_flash("success","Camera review saved",[f"{item['Trap ID']} was updated.",speed_line,"Next: review the next open task."])
+                            if not return_from_followup_task():
+                                st.session_state.pop("followup_panel",None); st.rerun()
+
+                else:
+                    prefix=f"issue_{fid}"
+                    resolution=st.selectbox("Camera outcome",["Select…","Fixed and now working","Adjusted and now covering trap","Replaced","Could not fix"],index=0,key=f"{prefix}_resolution")
+                    current_ready=st.selectbox("Camera now ready and covering the trap",["Select…","Yes","No","Could not assess"],index=0,key=f"{prefix}_ready")
+                    evidence_gap=st.selectbox("Past test-window evidence",["Select…","Still usable","Partly usable","Not usable","Could not assess"],index=0,key=f"{prefix}_gap")
+                    notes=st.text_area("Resolution notes",key=f"{prefix}_notes")
+                    saving_update("The task status, current camera readiness and the linked test-window evidence status.")
+                    if two_phase_button("Save camera resolution",f"{prefix}_save","Saving…",type="primary"):
+                        errors=[]
+                        if "Select…" in [resolution,current_ready,evidence_gap]: errors.append("Complete all camera-resolution fields.")
+                        if resolution=="Could not fix" and current_ready=="Yes": errors.append("A camera that could not be fixed cannot be marked ready.")
+                        if not notes.strip(): errors.append("Add a short resolution note.")
+                        if errors:
+                            st.error("Please correct the camera resolution:\n\n" + "\n".join(f"- {e}" for e in errors))
+                        else:
+                            fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
+                            summary=f"{resolution}. Camera ready: {current_ready}. Past evidence: {evidence_gap}. {notes.strip()}"
+                            data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=summary
+                            idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
+                            if idxs and evidence_gap in ["Not usable","Could not assess"]:
+                                data["Windows"].at[idxs[0],"Evidence Usable"]="No"
+                                recalculate_window(data,idxs[0])
+                            refresh_review_status(data,item["Window ID"]); save_data(data)
+                            set_flash("success","Camera resolution saved",[f"Current camera readiness: {current_ready}.",f"Past evidence: {evidence_gap}.","Next: review the next open task."])
+                            if not return_from_followup_task():
+                                st.session_state.pop("followup_panel",None); st.rerun()
 
 elif page == "windows":
     if st.button("← Back to Data Management"):
@@ -8694,6 +8761,10 @@ elif page == "results":
         else:
             breakdown_df=breakdown_df.sort_values(breakdown)
         st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
+        if breakdown in ("Rat type","Rodent weight"):
+            # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
+            confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
+            st.caption(f"{confirmed_species_n} of {len(breakdown_source)} windows have necropsy-confirmed species. Remaining {len(breakdown_source)-confirmed_species_n} rest on unconfirmed field guesses.")
 
     if not attention.empty:
         st.subheader("Results needing attention")
@@ -9785,6 +9856,10 @@ elif page == "data_management":
                         current = str(row[field])
                         index = choices.index(current) if current in choices else 0
                         changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
+                        if field in ("Species", "Rat Type"):
+                            # The preserved field guess, read-only, beside the editable (necropsy-confirmed) value.
+                            guess = str(row["Field-Recorded " + field]).strip()
+                            st.caption(f"Field-recorded: {guess or 'not recorded'}" + (" · confirmed at necropsy" if row["Species Confirmed"] == "Yes" else ""))
                     reason = st.text_area("Correction reason", key=f"corr_reason_{selected_id}")
                     corr_save_lock_key = f"correct_necropsy_evidence_saving_{selected_id}"
                     corr_already_saving = st.session_state.get(corr_save_lock_key, False)

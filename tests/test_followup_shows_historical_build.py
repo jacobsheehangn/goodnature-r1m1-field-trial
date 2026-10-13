@@ -143,5 +143,8 @@ def test_followup_detail_shows_the_windows_own_build_not_the_traps_current_one(
     page.get_by_role("button", name="Review", exact=True).first.click()
     expect(page.get_by_text("Task context", exact=True)).to_be_visible(timeout=15_000)
 
-    expect(page.get_by_text("Build: R1 Build ORIGINAL", exact=False)).to_be_visible(timeout=10_000)
-    expect(page.get_by_text("Build: R1 Build REASSIGNED", exact=False)).not_to_be_visible()
+    # Phase 4 (the brief's value test): the Task context no longer carries a Build row at all, so the trap's
+    # *current* build can never be shown against an old window. The guarantee this test exists for - the
+    # reassigned build must not appear on the task - still holds.
+    expect(page.get_by_text("Build:", exact=False)).to_have_count(0)
+    expect(page.get_by_text("R1 Build REASSIGNED", exact=False)).to_have_count(0)
