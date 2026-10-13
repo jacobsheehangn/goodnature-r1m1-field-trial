@@ -91,6 +91,8 @@ def test_activating_the_repaired_trap_opens_exactly_one_window() -> None:
         """
         app.close_stray_window(data, "STRAY-1")
         r = app.load_data()
+        trap_row = r["Traps"][r["Traps"]["Trap ID"] == stray_trap].iloc[0]
+        app.create_trial(r, site, [app.trial_build_label(trap_row["Product"], trap_row["Build Version"])], datetime.datetime(2026, 10, 6, 8, 0))
         app.activate_trap(r, stray_trap, datetime.datetime(2026, 10, 6, 9, 0), "new trial")
         final = app.load_data()
         w = final["Windows"]

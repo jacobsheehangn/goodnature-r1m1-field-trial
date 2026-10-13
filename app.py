@@ -5,9 +5,11 @@ from time import perf_counter as _probe_perf_counter
 _PROBE_T0 = _probe_perf_counter()
 
 import bisect
+import filecmp
 import functools
 import uuid
 import hashlib
+import json
 import hmac
 import logging
 import os
@@ -26,6 +28,8 @@ import streamlit as st
 import streamlit.components.v1 as components
 import html
 from PIL import Image, ImageOps
+
+import r1m1_design as design
 
 from photo_integrity import (
     PhotoPermanentError,
@@ -201,15 +205,19 @@ SHEETS = {
     "Traps": ["Trap ID", "Product", "Build Version", "Site ID", "Route Order", "Location", "Camera ID", "Deployment Start", "Setup Image Link", "Status", "Notes"],
     "Visits": ["Visit ID", "Site ID", "Operator", "Start Time", "End Time", "Status", "Notes"],
     "Checks": ["Check ID", "Visit ID", "Trap ID", "Window Closed", "Check Time", "Finding", "Species", "Rat Type", "Animal Condition When Found", "Bag ID", "Animal Cleared", "Animal Bagged", "Lure Condition", "Relured", "Reset Required", "Trap Reset", "Trap Ready After Check", "Trap Function", "Site Condition", "Camera Condition", "Camera Covers Trap", "Camera Adjusted", "New Window", "Notes", "Excluded", "Exclusion Reason"],
-    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason"],
+    "Windows": ["Window ID", "Trap ID", "Product", "Build Version", "Site ID", "Camera Assigned", "Start Time", "End Time", "Status", "End Reason", "Finding At Close", "Species", "Rat Type", "Evidence Usable", "Target Present", "Interaction Level", "Entered Strike Area", "Trap Activated", "Activation Evidence", "Kill Confirmed", "Outcome", "First Target Time", "First Interaction Time", "Trigger Time", "Kill Time", "Time To First Target Hr", "Time To First Interaction Hr", "Interaction To Trigger Min", "Interaction To Kill Min", "Time To Kill Hr", "Video Assessment", "Video Link", "Necropsy Status", "Necropsy Assessment", "Animal Weight Range", "Necropsy Data Link", "Necropsy Measurements", "Final Humane Kill", "Valid", "Bag ID", "Review Status", "Notes", "Excluded", "Exclusion Reason", "Trial ID"],
     "Followups": ["Follow-up ID", "Follow-up Type", "Site ID", "Trap ID", "Visit ID", "Window ID", "Bag ID", "Created Time", "Priority", "Reason", "Data Required", "Status", "Completed Time", "Notes"],
     "Audit Log": ["Change ID", "Changed Time", "Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"],
     "Photos": ["Photo ID", "Check ID", "Follow-up ID", "Window ID", "Trap ID", "Site ID", "Bag ID", "Capture Time", "Photo Type", "File Path", "Notes"],
+    # One row per trial: a bounded comparison at one site (a start, an end, 1-3
+    # declared builds). At most one is Open per site. Status: Open | Ended.
+    # Origin: Started | Adopted. Declared Builds: "Product · Build" labels joined by "; ".
+    "Trials": ["Trial ID", "Site ID", "Status", "Start Time", "End Time", "Declared Builds", "Origin", "Notes"],
     # Derived, read-only sheets - documentation written from code, never a
     # second source of truth. See _derived_sheet_data() for what populates
     # them; no UI form or widget may write to either.
     "Trial Config": ["Parameter", "Value", "Source", "Set Date"],
-    "Kills": ["Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time", "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment", "Animal Weight Range", "Bag ID"],
+    "Kills": ["Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time", "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment", "Animal Weight Range", "Bag ID", "Trial ID"],
 }
 
 FINDINGS = ["Trap still set, no animal", "Dead animal found", "Trap fired, no animal", "Trap disturbed", "Trap missing", "Unable to check"]
@@ -226,6 +234,15 @@ NECROPSY_NOT_APPLICABLE_NO_CARCASS = "Not applicable — no carcass"
 # so neither reads as "Pending" forever.
 NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS = NECROPSY_NOT_APPLICABLE_NO_CARCASS
 FOLLOWUP_NO_CARCASS_STATUS = "Resolved — no carcass collected"
+# Trial End (Phase 2). A review given up on at trial end must never read as done:
+# the follow-up gets its own status, the window's Review Status becomes "Unresolved",
+# and a kill whose necropsy is given up on is "Not assessed — trial ended".
+FOLLOWUP_UNRESOLVABLE = "Unresolvable — trial ended before review"
+FOLLOWUP_REMOVED_AT_TRIAL_END = "Resolved — removed at trial end"
+REVIEW_STATUS_UNRESOLVED = "Unresolved"
+# A visit closed at trial end with some traps unchecked. Not "In progress", not a
+# completed visit for scheduling.
+VISIT_STATUS_PARTIAL = "Partial"
 
 
 def not_assessed_mask(final_humane_kill: pd.Series) -> pd.Series:
@@ -286,7 +303,7 @@ def make_id(prefix: str) -> str:
     return f"{prefix}-{now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4].upper()}"
 
 
-SITE_CODE_LINKED_SHEETS = ["Traps", "Visits", "Windows", "Followups", "Photos"]
+SITE_CODE_LINKED_SHEETS = ["Traps", "Visits", "Windows", "Followups", "Photos", "Trials"]
 
 
 def normalise_site_code(value: str) -> str:
@@ -439,7 +456,7 @@ def rename_site_code(data: Dict[str, pd.DataFrame], old_id: str, new_id: str, re
     site_mask = updated["Sites"]["Site ID"].astype(str).str.upper() == old_code
     updated["Sites"].loc[site_mask, "Site ID"] = new_code
 
-    for sheet_name in ["Traps", "Visits", "Windows", "Followups"]:
+    for sheet_name in ["Traps", "Visits", "Windows", "Followups", "Trials"]:
         frame = updated.get(sheet_name)
         if frame is None or "Site ID" not in frame.columns:
             continue
@@ -545,7 +562,7 @@ def permanently_remove_site(data: Dict[str, pd.DataFrame], site_id: str, reason:
                 photo_files_to_delete.append(DATA_ROOT / rel_path)
         updated["Photos"] = photos_frame.loc[~photo_mask].reset_index(drop=True)
 
-    for sheet_name in ["Traps", "Visits", "Windows", "Followups"]:
+    for sheet_name in ["Traps", "Visits", "Windows", "Followups", "Trials"]:
         frame = updated.get(sheet_name)
         if frame is None or "Site ID" not in frame.columns:
             continue
@@ -618,6 +635,9 @@ def refresh_review_status(data, window_id: str) -> None:
         status = "Needs recreation" if followup_genuinely_warranted(w) else "Not required"
     elif (tasks["Status"] == "Open").any():
         status = "Open"
+    elif (tasks["Status"] == FOLLOWUP_UNRESOLVABLE).any():
+        # A review given up on is not a review done: it must never count as Complete.
+        status = REVIEW_STATUS_UNRESOLVED
     else:
         status = "Complete"
     data["Windows"].at[idxs[0], "Review Status"] = status
@@ -828,6 +848,142 @@ def storage_is_potentially_ephemeral() -> bool:
 DATA_LOADED_MTIME_KEY = "_data_loaded_mtime"
 
 
+# Pinned backups. The automatic backups rotate: every save keeps one and only the newest 20 survive, so on a working day the workbook as
+# it was before a new version first wrote to it is gone within hours. A pin is a byte-for-byte copy of the live file, taken immediately
+# before the first save that writes a layout (the sheets and their columns) the file does not have. It is never overwritten once it
+# exists, and it is keyed by the layout being written, so each version that adds a sheet or columns gets its own pin. Its name does not
+# start with the workbook's name, so the rotation (which globs that prefix) never sees it; available_backups() lists it so the in-app
+# restore can use it. Making it is failure-isolated: nothing here can stop a save.
+PINNED_BACKUP_PREFIX = "pinned_"
+_LAYOUT_VERIFIED: Optional[tuple] = None  # (layout key, mtime_ns, size) of a file this process knows is in the layout it writes
+
+
+def schema_layout() -> Dict[str, tuple]:
+    """The sheets and columns this version of the app writes."""
+    return {name: tuple(cols) for name, cols in SHEETS.items()}
+
+
+def layout_key(layout: Dict[str, tuple]) -> str:
+    return hashlib.sha1(json.dumps([[name, list(cols)] for name, cols in sorted(layout.items())]).encode("utf-8")).hexdigest()[:10]
+
+
+def workbook_layout_of(path: Path) -> Dict[str, tuple]:
+    """The sheets and header rows of a workbook on disk (headers only: read-only, about 12 ms)."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        layout = {}
+        for ws in wb.worksheets:
+            header = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            cols = ["" if value is None else str(value) for value in header]
+            while cols and cols[-1] == "":
+                cols.pop()
+            layout[ws.title] = tuple(cols)
+        return layout
+    finally:
+        wb.close()
+
+
+def describe_layout_change(old: Dict[str, tuple], new: Dict[str, tuple]) -> str:
+    """What writing `new` over a file laid out as `old` adds and drops, in words."""
+    parts = []
+    added_sheets = [n for n in new if n not in old]
+    dropped_sheets = [n for n in old if n not in new]
+    added_cols = [f"{n}.{c}" for n in new if n in old for c in new[n] if c not in old[n]]
+    dropped_cols = [f"{n}.{c}" for n in new if n in old for c in old[n] if c not in new[n]]
+    for verb, items in (("adds sheet", added_sheets), ("adds column", added_cols), ("drops sheet", dropped_sheets), ("drops column", dropped_cols)):
+        if items:
+            parts.append(f"{verb} " + ", ".join(items[:4]) + (f" and {len(items) - 4} more" if len(items) > 4 else ""))
+    return "; ".join(parts) or "reorders columns"
+
+
+def pinned_backup_path(key: str) -> Path:
+    return BACKUP_DIR / f"{PINNED_BACKUP_PREFIX}{DATA_FILE.stem}_before_layout_{key}.xlsx"
+
+
+def _write_pin(source: Path, final: Path, note: dict) -> bool:
+    """Copy `source` to `final` byte for byte, atomically, and never replace a file that is already there. True when `final` now exists."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    temp = BACKUP_DIR / f".pin_{uuid.uuid4().hex}.tmp"
+    try:
+        shutil.copyfile(source, temp)
+        if not filecmp.cmp(source, temp, shallow=False):
+            raise OSError("the pinned copy does not match the file it was copied from")
+        try:
+            os.link(temp, final)  # fails if `final` exists, so an existing pin is never replaced
+        except FileExistsError:
+            return True
+        except OSError:  # a file system without hard links: the same rule, in two steps
+            if final.exists():
+                return True
+            os.replace(temp, final)
+        try:
+            note = {**note, "sha256": hashlib.sha256(final.read_bytes()).hexdigest(), "bytes": final.stat().st_size}
+            final.with_suffix(".json").write_text(json.dumps(note, indent=1), encoding="utf-8")
+        except Exception:
+            _logger.exception("Pinned backup %s was made but its description could not be written.", final.name)
+        return True
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def pin_backup_before_layout_change() -> Optional[dict]:
+    """Called by save_data immediately before it replaces the workbook. Never raises.
+
+    Returns None when nothing needs pinning or the pin was made; returns what is still owed (`final`, `note`) when a pin was needed
+    but could not be made, so save_data can try once more from the automatic backup it takes in the same save."""
+    try:
+        target = schema_layout()
+        key = layout_key(target)
+        final = pinned_backup_path(key)
+        if final.exists():
+            return None
+        stat = DATA_FILE.stat()
+        if _LAYOUT_VERIFIED == (key, stat.st_mtime_ns, stat.st_size):
+            return None  # this process wrote the file in this layout
+        current = workbook_layout_of(DATA_FILE)
+        if current == target:
+            return None
+        note = {"pinned_at": dtstr(), "change": describe_layout_change(current, target), "layout": key, "left_layout": layout_key(current)}
+        try:
+            if _write_pin(DATA_FILE, final, note):
+                return None
+        except Exception:
+            _logger.exception("Could not pin a backup before the workbook layout changed (%s); trying again from the automatic backup.", note["change"])
+        return {"final": final, "note": note}
+    except Exception:
+        _logger.exception("Could not work out whether the workbook layout is changing; the save goes ahead without a pin.")
+        return None
+
+
+def finish_pin_from_backup(owed: dict, backup_file: Path) -> None:
+    """The second chance: the automatic backup taken in the same save is the same bytes as the live file was. Never raises."""
+    try:
+        _write_pin(backup_file, owed["final"], owed["note"])
+    except Exception:
+        _logger.exception("Could not pin a backup before the workbook layout changed (%s). The automatic backup %s holds the old file until it rotates out.",
+                          owed["note"].get("change", ""), backup_file.name)
+
+
+def pinned_backups() -> list:
+    ensure_storage_ready()
+    return sorted(BACKUP_DIR.glob(f"{PINNED_BACKUP_PREFIX}{DATA_FILE.stem}_*.xlsx"), key=lambda path: path.stat().st_mtime)
+
+
+def backup_label(path: Path) -> str:
+    """How the in-app restore names a backup: a pin says what it was kept for."""
+    path = Path(path)
+    if not path.name.startswith(PINNED_BACKUP_PREFIX):
+        return path.name
+    note = {}
+    try:
+        note = json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    kept_for = f"just before the first save that {note['change']} ({note.get('pinned_at', '')})" if note.get("change") else "just before a layout change"
+    return f"PINNED, never rotated out: the workbook {kept_for} · {path.name}"
+
+
 def save_data(data: Dict[str, pd.DataFrame]) -> None:
     """Atomically replace the workbook and retain a timestamped recovery copy.
 
@@ -864,10 +1020,20 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
                     if c not in df.columns:
                         df[c] = ""
                 df[cols].to_excel(writer, sheet_name=name, index=False)
+        pin_owed = None
         if DATA_FILE.exists():
+            pin_owed = pin_backup_before_layout_change()
             backup_file = BACKUP_DIR / f"{DATA_FILE.stem}_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid.uuid4().hex[:6]}.xlsx"
             shutil.copy2(DATA_FILE, backup_file)
         os.replace(temp_file, DATA_FILE)
+        if pin_owed is not None and backup_file is not None:
+            finish_pin_from_backup(pin_owed, backup_file)
+        try:
+            global _LAYOUT_VERIFIED
+            _stat = DATA_FILE.stat()
+            _LAYOUT_VERIFIED = (layout_key(schema_layout()), _stat.st_mtime_ns, _stat.st_size)
+        except Exception:
+            _LAYOUT_VERIFIED = None
         backups = sorted(BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"), key=lambda x: x.stat().st_mtime, reverse=True)
         for old_backup in backups[20:]:
             old_backup.unlink(missing_ok=True)
@@ -973,6 +1139,75 @@ def open_window(data, trap_id):
     return None if r.empty else r.sort_values("Start Time").iloc[-1]
 
 
+TRIAL_STATUS_OPEN = "Open"
+TRIAL_STATUS_ENDED = "Ended"
+MAX_DECLARED_BUILDS = 3
+
+
+def trial_build_label(product, build_version) -> str:
+    """The label form the app already uses in its build selectors."""
+    return f"{product} · {build_version}"
+
+
+def open_trial(data, site_id):
+    """The site's Open trial (a Series), or None. At most one can be open (T1)."""
+    trials = data["Trials"]
+    matches = trials[(trials["Site ID"].astype(str) == str(site_id)) & (trials["Status"] == TRIAL_STATUS_OPEN)]
+    return None if matches.empty else matches.iloc[0]
+
+
+def trial_declared_builds(trial) -> list:
+    return [label for label in str(trial["Declared Builds"]).split("; ") if label]
+
+
+def next_trial_id(data, site_id) -> str:
+    """TRIAL-<SITE>-<NN>, a per-site sequence. Deliberately unlike a bag ID
+    (TR-001 is the Te Raekaihau bag prefix), trap ID or window ID."""
+    prefix = f"TRIAL-{str(site_id).upper()}-"
+    used = [
+        int(m.group(1)) for m in (re.fullmatch(rf"{re.escape(prefix)}(\d+)", str(t)) for t in data["Trials"]["Trial ID"]) if m
+    ]
+    return f"{prefix}{(max(used) + 1) if used else 1:02d}"
+
+
+def create_trial(data, site_id, declared_builds, start_time, origin="Started", notes="", reason=""):
+    """Adds an Open trial row (no save). Enforces T1 (one open trial per site),
+    1-3 distinct declared builds that exist, and T8 (a site runs one product).
+    Returns the new Trial ID. Used by Set up and Adopt."""
+    if data["Sites"][data["Sites"]["Site ID"] == site_id].empty:
+        raise ValueError("That site could not be found.")
+    if open_trial(data, site_id) is not None:
+        raise ValueError("This site already has a trial running.")
+    labels = validate_declared_builds(data, declared_builds)
+    trial_id = next_trial_id(data, site_id)
+    row = [trial_id, site_id, TRIAL_STATUS_OPEN, dtstr(start_time), "", "; ".join(labels), origin, notes]
+    data["Trials"] = pd.concat([data["Trials"], pd.DataFrame([row], columns=SHEETS["Trials"])], ignore_index=True)
+    audit_change(data, "Trial", trial_id, "Status", "", TRIAL_STATUS_OPEN, reason or f"Trial {origin.lower()} at {site_id}")
+    return trial_id
+
+
+def no_open_trial_message(data, site_id) -> str:
+    """Copy for "this site has no trial" - shown by the activation guard and by
+    the bulk-activate screen. Display only; enforcement is in activate_trap()."""
+    return f"No trial is running at {site_name(data, site_id)}. Start a trial first. Every active trap belongs to a trial."
+
+
+def site_trial_id_for_window(data, site_id) -> str:
+    """The Trial ID to stamp on a window opened at this site, or "" if the site
+    has no open trial. This runs inside the check-save flow, the most protected
+    path in the app, so it must never raise: a trial lookup failing must never
+    cost a field operator a saved check. User-facing refusals live in
+    activate_trap(), not here."""
+    try:
+        if os.environ.get("R1M1_TEST_FORCE_TRIAL_LOOKUP_FAILURE") == "1":
+            raise RuntimeError("forced trial lookup failure (test-only)")
+        trial = open_trial(data, site_id)
+        return "" if trial is None else str(trial["Trial ID"])
+    except Exception:
+        _logger.warning("Trial lookup failed while opening a window; leaving it unstamped.", exc_info=True)
+        return ""
+
+
 def start_window(data, trap_id, when):
     t = trap_row(data, trap_id)
     wid = make_id(f"{trap_id}-W")
@@ -1000,6 +1235,7 @@ def start_window(data, trap_id, when):
         "Valid": "Pending",
         "Review Status": "Not required",
         "Notes": "Started after line check and relure",
+        "Trial ID": site_trial_id_for_window(data, t["Site ID"]),
     })
     data["Windows"] = pd.concat([data["Windows"], pd.DataFrame([record])], ignore_index=True)
     data["Windows"] = data["Windows"][SHEETS["Windows"]]
@@ -1434,15 +1670,20 @@ def repair_missing_window(data, trap_id, effective_time=None, reason="Missing te
 
 
 def move_trap(data, trap_id, destination_site, effective_time, reason, route_order, location, camera_id, commit=True):
-    """Moves a trap to another site. An Active trap has its open window closed
-    and a new one opened at the destination; an Inactive trap only has its
-    fields updated and audited - it has no monitoring window, and giving it one
-    would break the "an Inactive trap has none open" assumption that
-    activate_trap() relies on. `commit=False` leaves the save to the caller so
-    several changes can be written together (same as activate_trap and
-    change_trap_build)."""
+    """Moves an Inactive trap to another site (T6). An Active trap is refused:
+    moving a live trap between sites mid-trial would hop it between trials, so
+    the path is deactivate, move, then activate it into the destination site's
+    trial. An Inactive trap has no monitoring window, so only its fields are
+    updated and audited - giving it a window would break the "an Inactive trap
+    has none open" assumption that activate_trap() relies on. `commit=False`
+    leaves the save to the caller so several changes can be written together
+    (same as activate_trap and change_trap_build)."""
     tr = trap_row(data, trap_id)
-    is_active = str(tr["Status"]) == "Active"
+    if str(tr["Status"]) == "Active":
+        raise ValueError(
+            "Deactivate this trap before moving it. Leaving a trial ends its part in it. "
+            "Deactivate, move, then activate it into the destination site's trial."
+        )
     old_site = str(tr["Site ID"])
     if old_site == destination_site:
         raise ValueError("Choose a different destination site.")
@@ -1455,37 +1696,39 @@ def move_trap(data, trap_id, destination_site, effective_time, reason, route_ord
     ]
     if not active_visits.empty:
         raise ValueError("Finish or pause active visits at the source and destination sites before moving this trap.")
-    current = open_window(data, trap_id) if is_active else None
-    if current is not None:
-        idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
-        data["Windows"].at[idx, "End Time"] = dtstr(effective_time)
-        data["Windows"].at[idx, "Status"] = "Closed"
-        data["Windows"].at[idx, "End Reason"] = "Trap moved"
-        data["Windows"].at[idx, "Review Status"] = "Not required"
     idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
     data["Traps"].at[idx, "Site ID"] = destination_site
     data["Traps"].at[idx, "Route Order"] = str(route_order)
     data["Traps"].at[idx, "Location"] = location
     data["Traps"].at[idx, "Camera ID"] = camera_id
-    new_window = start_window(data, trap_id, effective_time) if is_active else ""
     audit_change(data, "Trap", trap_id, "Site ID", old_site, destination_site, reason)
     audit_change(data, "Trap", trap_id, "Route Order", tr["Route Order"], route_order, reason)
     audit_change(data, "Trap", trap_id, "Location", tr["Location"], location, reason)
     if commit:
         save_data(data)
-    return new_window
+    return ""
 
 
 def change_trap_build(data, trap_id, new_product, new_build, effective_time, reason, commit=True):
-    """Changes a trap's build. An Active trap has its open window closed and a
-    new one opened on the new build; an Inactive trap only has its build
-    updated and audited (this is how builds are staged before a trial) - it has
-    no monitoring window, and must not be given one."""
+    """Changes a trap's build. A build never changes inside a trial (T5): an
+    Active trap at a site with an Open trial is refused - changing a build
+    starts a new trial. An Active trap at a site with no trial (not yet
+    adopted) still has its open window closed and a new one opened on the new
+    build, as before. An Inactive trap only has its build updated and audited
+    (this is how builds are staged before a trial) - it has no monitoring
+    window, and must not be given one."""
     tr = trap_row(data, trap_id)
     is_active = str(tr["Status"]) == "Active"
     old_product, old_build = str(tr["Product"]), str(tr["Build Version"])
     if old_product == new_product and old_build == new_build:
         raise ValueError("Choose a different build.")
+    if is_active:
+        trial = open_trial(data, tr["Site ID"])
+        if trial is not None:
+            raise ValueError(
+                "A build can't change inside a trial. Changing a build starts a new trial. "
+                f"End {trial['Trial ID']}, then start a new trial with the builds you want — the roster carries over."
+            )
     current = open_window(data, trap_id) if is_active else None
     if current is not None:
         idx = data["Windows"].index[data["Windows"]["Window ID"] == current["Window ID"]][0]
@@ -1519,11 +1762,31 @@ def activate_trap(data, trap_id, effective_time, reason, commit=True):
     a consequential, window-affecting status change gets its own function
     with its own effective-timestamp capture, not folded into the generic
     edit path. Opens exactly one window; there is nothing to close since an
-    Inactive trap has none open."""
+    Inactive trap has none open.
+
+    This is the ONE place that enforces "a trap can be Active only at a site
+    with an Open trial, on one of that trial's declared builds" (T2/T3).
+    Single-trap Activate, the bulk-activate expander and trial Set up all call
+    it, so one guard covers all three. It checks before changing anything, so a
+    refused trap leaves `data` untouched."""
     idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
     if data["Traps"].at[idx, "Status"] == "Active":
         raise ValueError("Trap is already active.")
+    site_id = data["Traps"].at[idx, "Site ID"]
+    trial = open_trial(data, site_id)
+    if trial is None:
+        raise ValueError(no_open_trial_message(data, site_id))
+    label = trial_build_label(data["Traps"].at[idx, "Product"], data["Traps"].at[idx, "Build Version"])
+    declared = trial_declared_builds(trial)
+    if label not in declared:
+        raise ValueError(
+            f"{label} isn't part of {trial['Trial ID']}. Declared builds: {', '.join(declared)}. "
+            "Change this trap's build first (allowed while it's Inactive), then activate it."
+        )
     data["Traps"].at[idx, "Status"] = "Active"
+    if not str(data["Traps"].at[idx, "Deployment Start"]).strip():
+        data["Traps"].at[idx, "Deployment Start"] = dtstr(effective_time)
+        audit_change(data, "Trap", trap_id, "Deployment Start", "", dtstr(effective_time), reason)
     start_window(data, trap_id, effective_time)
     audit_change(data, "Trap", trap_id, "Status", "Inactive", "Active", reason)
     if commit:
@@ -1555,6 +1818,742 @@ def deactivate_trap(data, trap_id, effective_time, reason, commit=True):
 def add_followup(data, followup_type, site_id, trap_id, visit_id, window_id, bag_id, reason, required, priority):
     row = [make_id("FU"), followup_type, site_id, trap_id, visit_id, window_id, bag_id, dtstr(), priority, reason, required, "Open", "", ""]
     data["Followups"] = pd.concat([data["Followups"], pd.DataFrame([row], columns=SHEETS["Followups"])], ignore_index=True)
+
+
+# ------------------------------------------------------------------------------------
+# Trial lifecycle (Phase 2): Set up, Adopt and End as atomic, previewed actions.
+#
+# Each action builds a staged copy of the workbook, applies every change to the copy,
+# and writes once with save_data(): if anything raises, nothing was written. Each
+# returns the Change IDs of the audit entries it created (Phase 3's Undo reverses
+# exactly those, never a snapshot).
+# ------------------------------------------------------------------------------------
+
+TRIAL_REASON_STARTED = "Trial started at site"
+TRIAL_REASON_ADOPTED = "Adopted into trial"
+TRIAL_REASON_ENDED = "Trial ended at site"
+FINAL_PERIOD_REASON = "Final period — trial ended"
+EVIDENCE_REVIEW_TYPES = ["Camera review", "Necropsy review"]
+HARDWARE_TASK_TYPES = ["Trap not ready", "Camera issue"]
+
+
+def _staged_copy(data) -> Dict[str, pd.DataFrame]:
+    return {name: frame.copy(deep=True) for name, frame in data.items()}
+
+
+def _adopt_staged(data, staged) -> None:
+    for name in data:
+        data[name] = staged[name]
+
+
+def _trial_action_test_failure(action: str, step: int) -> None:
+    """Test-only: R1M1_TEST_FAIL_TRIAL_ACTION="<action>:<step>" raises at that step so a
+    test can prove a failure part-way through leaves the workbook untouched."""
+    spec = os.environ.get("R1M1_TEST_FAIL_TRIAL_ACTION", "")
+    if spec == f"{action}:{step}":
+        raise RuntimeError(f"forced failure in {action} at step {step} (test-only)")
+    delay = os.environ.get("R1M1_TEST_TRIAL_ACTION_DELAY_MS", "")
+    if delay.isdigit() and step == 0:
+        time.sleep(int(delay) / 1000)  # test-only: holds a long confirm open so its "Saving…" state can be captured
+
+
+def _audit_ids_since(staged, start_row_count: int) -> list:
+    return staged["Audit Log"].iloc[start_row_count:]["Change ID"].astype(str).tolist()
+
+
+def trial_day(trial, today=None) -> int:
+    """Day N of a trial: today minus its start date, plus one."""
+    start = parse_dt(trial["Start Time"])
+    if start is None:
+        return 1
+    return max(1, ((today or now()).date() - start.date()).days + 1)
+
+
+def latest_ended_trial(data, site_id):
+    trials = data["Trials"]
+    ended = trials[(trials["Site ID"].astype(str) == str(site_id)) & (trials["Status"] == TRIAL_STATUS_ENDED)].copy()
+    if ended.empty:
+        return None
+    ended["_end"] = ended["End Time"].apply(parse_dt)
+    return ended.sort_values("_end", na_position="first").iloc[-1]
+
+
+def trial_visits(data, trial) -> pd.DataFrame:
+    """The trial's finished visits: Complete or Partial, at its site, started within it."""
+    visits = data["Visits"]
+    start = parse_dt(trial["Start Time"])
+    end = parse_dt(trial["End Time"]) if str(trial["End Time"]).strip() else None
+    rows = visits[(visits["Site ID"].astype(str) == str(trial["Site ID"])) & visits["Status"].isin(["Complete", VISIT_STATUS_PARTIAL])].copy()
+    if rows.empty:
+        return rows
+    rows["_start"] = rows["Start Time"].apply(parse_dt)
+    rows = rows[rows["_start"].notna()]
+    if start is not None:
+        rows = rows[rows["_start"] >= start]
+    if end is not None:
+        rows = rows[rows["_start"] <= end]
+    return rows.sort_values("_start")
+
+
+def visit_traps_checked(data, visit_id) -> int:
+    """Distinct traps checked in a visit (a trap re-checked in one visit counts once)."""
+    return int(data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Trap ID"].astype(str).nunique())
+
+
+def site_open_followups(data, site_id) -> pd.DataFrame:
+    """Open follow-ups at a site, site-wide (not only tagged windows) so the hub never
+    shows a different number from what End trial will block on."""
+    fu = data["Followups"]
+    return fu[(fu["Site ID"].astype(str) == str(site_id)) & (fu["Status"] == "Open")]
+
+
+def window_trial_id(data, window_id) -> str:
+    rows = data["Windows"][data["Windows"]["Window ID"].astype(str) == str(window_id)]
+    return "" if rows.empty else str(rows.iloc[0]["Trial ID"])
+
+
+def trial_hub_summary(data, trial) -> dict:
+    """Everything the hub shows, derived from data and nothing else (no stored state)."""
+    site_id = trial["Site ID"]
+    traps = data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]
+    labels = traps.apply(lambda r: trial_build_label(r["Product"], r["Build Version"]), axis=1) if not traps.empty else pd.Series(dtype=str)
+    chips = [(label, int((labels == label).sum())) for label in trial_declared_builds(trial)]
+    visits = trial_visits(data, trial)
+    completed = visits[visits["Status"] == "Complete"]
+    partial = visits[visits["Status"] == VISIT_STATUS_PARTIAL]
+    last = completed.iloc[-1] if not completed.empty else None
+    site = data["Sites"][data["Sites"]["Site ID"] == site_id].iloc[0]
+    interval = int(float(site["Visit Interval Days"] or 3))
+    latest = latest_completed_visit(data, site_id)
+    latest_dt = parse_dt(latest["End Time"]) if latest is not None else None
+    next_due = (latest_dt + timedelta(days=interval)) if latest_dt else now()
+    open_fu = site_open_followups(data, site_id)
+    return {
+        "day": trial_day(trial),
+        "chips": chips,
+        "completed_count": int(len(completed)),
+        "partial": [{"date": r["_start"], "note": str(r["Notes"])} for _, r in partial.iterrows()],
+        "last_date": parse_dt(last["End Time"]) if last is not None else None,
+        "last_traps_checked": visit_traps_checked(data, last["Visit ID"]) if last is not None else 0,
+        "next_due_date": next_due,
+        "open_followups": int(len(open_fu)),
+        "necropsy_open": int((open_fu["Follow-up Type"] == "Necropsy review").sum()),
+        "camera_open": int((open_fu["Follow-up Type"] == "Camera review").sum()),
+        "active_trap_count": int(len(traps)),
+        "in_progress_visit": active_visit(data, site_id),
+    }
+
+
+# ---- Set up -----------------------------------------------------------------------
+
+def validate_declared_builds(data, declared_builds) -> list:
+    """1-3 distinct, existing builds of one product (T8). Returns the cleaned labels."""
+    labels = list(dict.fromkeys(str(b) for b in declared_builds))
+    if not 1 <= len(labels) <= MAX_DECLARED_BUILDS:
+        raise ValueError(f"A trial compares 1 to {MAX_DECLARED_BUILDS} builds.")
+    known = {trial_build_label(r["Product"], r["Build Version"]) for _, r in data["Builds"].iterrows()}
+    unknown = [b for b in labels if b not in known]
+    if unknown:
+        raise ValueError(f"Unknown build: {', '.join(unknown)}.")
+    if len({b.split(" · ")[0] for b in labels}) > 1:
+        raise ValueError("A trial's builds must all be the same product. A site that runs both R1 and M1 is set up as two sites.")
+    return labels
+
+
+def set_up_pool(data, site_id, product=None) -> dict:
+    """Inactive traps that Set up can bring into a trial at `site_id`, grouped as
+    carried over / new / relocated. Active traps elsewhere cannot be pulled (C4).
+    Carried over = Inactive traps here whose latest window belongs to this site's most
+    recent Ended trial. `product` limits the pool to one product (a trial is single-product)."""
+    traps = data["Traps"][data["Traps"]["Status"] == "Inactive"].copy()
+    if product:
+        traps = traps[traps["Product"] == product]
+    last = latest_ended_trial(data, site_id)
+    last_id = "" if last is None else str(last["Trial ID"])
+    windows = data["Windows"]
+
+    def latest_window_trial(trap_id) -> str:
+        rows = windows[windows["Trap ID"].astype(str) == str(trap_id)].copy()
+        if rows.empty:
+            return ""
+        rows["_start"] = rows["Start Time"].apply(parse_dt)
+        return str(rows.sort_values("_start", na_position="first").iloc[-1]["Trial ID"])
+
+    here = traps[traps["Site ID"] == site_id]
+    carried_mask = here["Trap ID"].apply(lambda t: bool(last_id) and latest_window_trial(t) == last_id) if not here.empty else pd.Series(dtype=bool)
+    carried = here[carried_mask] if not here.empty else here
+    new = here[~carried_mask] if not here.empty else here
+    relocated = traps[traps["Site ID"] != site_id]
+
+    def ordered(frame):
+        if frame.empty:
+            return frame
+        frame = frame.copy()
+        frame["_route"] = pd.to_numeric(frame["Route Order"], errors="coerce")
+        return frame.sort_values(["_route", "Trap ID"])
+
+    return {"carried": ordered(carried), "new": ordered(new), "relocated": ordered(relocated)}
+
+
+def set_up_default_build(trap, declared) -> str:
+    """A carried-over trap inherits its previous build only if that build is declared;
+    otherwise "" (Needs assignment) - never a silent default outside the trial's design."""
+    label = trial_build_label(trap["Product"], trap["Build Version"])
+    return label if label in declared else ""
+
+
+def unused_declared_builds_message(declared, rows) -> str:
+    """Set up's Preview warning (warn, never block) when a declared build ends up with no trap, e.g.
+    "Build 4.2 has no traps. This trial will only record Build 4.3." Names come from the plan; "" if none apply."""
+    used = [b for b in declared if any(r["Build"] == b for r in rows)]
+    unused = [b for b in declared if b not in used]
+    if not unused or not used:
+        return ""
+    names = [r1_short_build(b) for b in unused]
+    lead = f"{names[0]} has no traps." if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]} have no traps."
+    return f"{lead} This trial will only record {' and '.join(r1_short_build(b) for b in used)}."
+
+
+def trial_set_up_floor(data, site_id, trap_ids=()):
+    """The earliest time a new trial can start here: not before this site's last trial ended, and not before the latest
+    window of a trap being brought in closed (a window opening earlier would overlap it). Derived from the data, no fixed
+    offset. Returns (moment, reason), or (None, "") when there is nothing to order against."""
+    candidates = []
+    last = latest_ended_trial(data, site_id)
+    if last is not None and parse_dt(last["End Time"]) is not None:
+        candidates.append((parse_dt(last["End Time"]), f"the last trial at {site_name(data, site_id)} ended"))
+    wanted = {str(t) for t in trap_ids}
+    if wanted:
+        windows = data["Windows"]
+        closed = windows[windows["Trap ID"].astype(str).isin(wanted) & (windows["End Time"].astype(str).str.strip() != "")]
+        for trap_id, group in closed.groupby(closed["Trap ID"].astype(str)):
+            ends = [t for t in group["End Time"].apply(parse_dt) if t is not None]
+            if ends:
+                candidates.append((max(ends), f"{trap_id}'s last window closed"))
+    return max(candidates, key=lambda c: c[0]) if candidates else (None, "")
+
+
+def plan_set_up(data, site_id, declared_builds, effective_time, assignments) -> dict:
+    """Validates a Set up and describes what confirming would do. Writes nothing.
+    `assignments` maps each selected trap ID to a declared build label ("" = not chosen).
+    Raises ValueError with the message the operator should see."""
+    if data["Sites"][data["Sites"]["Site ID"] == site_id].empty:
+        raise ValueError("That site could not be found.")
+    if open_trial(data, site_id) is not None:
+        raise ValueError("This site already has a trial running.")
+    declared = validate_declared_builds(data, declared_builds)
+    if not assignments:
+        raise ValueError("Choose at least one trap.")
+    missing = sorted(t for t, label in assignments.items() if str(label) not in declared)
+    if missing:
+        n = len(missing)
+        raise ValueError(f"{n} trap{'s' if n != 1 else ''} need{'' if n != 1 else 's'} a build before you can continue: {', '.join(missing)}")
+    product = declared[0].split(" · ")[0]
+    pool = set_up_pool(data, site_id, product=product)
+    eligible = pd.concat([pool["carried"], pool["new"], pool["relocated"]], ignore_index=True)
+    eligible_ids = set(eligible["Trap ID"].astype(str)) if not eligible.empty else set()
+    not_available = sorted(t for t in assignments if str(t) not in eligible_ids)
+    if not_available:
+        raise ValueError(f"Not available for this trial: {', '.join(not_available)}. Only Inactive traps of {product} can be brought in.")
+    floor, floor_reason = trial_set_up_floor(data, site_id, assignments.keys())
+    if floor is not None and effective_time < floor:
+        raise ValueError(f"The start can't be earlier than {ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')} ({floor_reason}). Choose that time or later.")
+    rows = []
+    for trap_id in sorted(assignments):
+        tr = trap_row(data, trap_id)
+        new_label = str(assignments[trap_id])
+        relocating = str(tr["Site ID"]) != str(site_id)
+        old_label = trial_build_label(tr["Product"], tr["Build Version"])
+        rows.append({
+            "Trap ID": trap_id,
+            "From": site_name(data, tr["Site ID"]) if relocating else "",
+            "Previous build": old_label,
+            "Build": new_label,
+            "Changes": [x for x in (("moves here" if relocating else ""), ("build changes" if new_label != old_label else ""), "activates") if x],
+            "relocating": relocating,
+        })
+    return {"declared": declared, "effective_time": effective_time, "rows": rows}
+
+
+def commit_set_up(data, site_id, declared_builds, effective_time, assignments, note="") -> dict:
+    """Creates the trial and brings every selected trap in - moves, build changes and
+    activations - in one atomic save. Raises (and writes nothing) on any failure."""
+    plan = plan_set_up(data, site_id, declared_builds, effective_time, assignments)
+    staged = _staged_copy(data)
+    audit_start = len(staged["Audit Log"])
+    trial_id = create_trial(staged, site_id, plan["declared"], effective_time, origin="Started", notes=note.strip(), reason=TRIAL_REASON_STARTED)
+    for step, row in enumerate(plan["rows"]):
+        _trial_action_test_failure("set_up", step)
+        trap_id = row["Trap ID"]
+        tr = trap_row(staged, trap_id)
+        if row["relocating"]:
+            move_trap(staged, trap_id, site_id, effective_time, TRIAL_REASON_STARTED, tr["Route Order"], tr["Location"], tr["Camera ID"], commit=False)
+        if row["Build"] != row["Previous build"]:
+            product, build = row["Build"].split(" · ", 1)
+            change_trap_build(staged, trap_id, product, build, effective_time, TRIAL_REASON_STARTED, commit=False)
+        activate_trap(staged, trap_id, effective_time, TRIAL_REASON_STARTED, commit=False)
+    _trial_action_test_failure("set_up", len(plan["rows"]))
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"trial_id": trial_id, "trap_count": len(plan["rows"]), "rows": plan["rows"], "change_ids": _audit_ids_since(staged, audit_start)}
+
+
+# ---- Adopt ("Track as a trial") ------------------------------------------------------
+
+def classify_windowless_active_traps(data, site_id) -> dict:
+    """Active traps with no open window, classified rather than lumped (Phase 0 rules):
+    awaiting service / trap missing are legitimate states; the rest are defects."""
+    traps = data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]
+    open_ids = set(data["Windows"][data["Windows"]["Status"] == "Open"]["Trap ID"].astype(str))
+    fu = data["Followups"]
+    awaiting_ids = set(fu[(fu["Status"] == "Open") & fu["Follow-up Type"].isin(HARDWARE_TASK_TYPES)]["Trap ID"].astype(str))
+    out = {"awaiting_service": [], "trap_missing": [], "defect": []}
+    for trap_id in traps["Trap ID"].astype(str):
+        if trap_id in open_ids:
+            continue
+        mine = data["Windows"][data["Windows"]["Trap ID"].astype(str) == trap_id].copy()
+        latest_finding = ""
+        if not mine.empty:
+            mine["_start"] = mine["Start Time"].apply(parse_dt)
+            latest_finding = str(mine.sort_values("_start", na_position="first").iloc[-1]["Finding At Close"])
+        if trap_id in awaiting_ids:
+            out["awaiting_service"].append(trap_id)
+        elif latest_finding == "Trap missing":
+            out["trap_missing"].append(trap_id)
+        else:
+            out["defect"].append(trap_id)
+    return out
+
+
+def adoption_plan(data, site_id, start_time=None) -> dict:
+    """What "Track as a trial" would do at a running site. Writes nothing.
+    Builds are read from the Active traps (read-only). The start defaults to when the
+    current builds began at this site. Tags windows of the site's Active traps that are
+    on that trap's current build and started at or after the trial start."""
+    if data["Sites"][data["Sites"]["Site ID"] == site_id].empty:
+        raise ValueError("That site could not be found.")
+    if open_trial(data, site_id) is not None:
+        raise ValueError("This site already has a trial running.")
+    traps = data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")].copy()
+    if traps.empty:
+        raise ValueError("There are no active traps at this site to track.")
+    traps["_label"] = traps.apply(lambda r: trial_build_label(r["Product"], r["Build Version"]), axis=1)
+    if traps["Product"].nunique() > 1:
+        raise ValueError("This site runs more than one product. Trials are single-product — move one product's traps to its own site first, then track each.")
+    builds = [(label, int((traps["_label"] == label).sum())) for label in sorted(traps["_label"].unique())]
+    if len(builds) > MAX_DECLARED_BUILDS:
+        raise ValueError(f"{len(builds)} builds are running here. A trial compares up to {MAX_DECLARED_BUILDS}, so this site can't be tracked until that is resolved.")
+    windows = data["Windows"][data["Windows"]["Site ID"] == site_id].copy()
+    windows["_start"] = windows["Start Time"].apply(parse_dt)
+    current_label = dict(zip(traps["Trap ID"].astype(str), traps["_label"]))
+    windows["_label"] = windows.apply(lambda r: trial_build_label(r["Product"], r["Build Version"]), axis=1)
+    on_current = windows[
+        windows["Trap ID"].astype(str).isin(current_label)
+        & (windows["_label"] == windows["Trap ID"].astype(str).map(current_label))
+        & windows["_start"].notna()
+    ]
+    default_start = on_current["_start"].min() if not on_current.empty else None
+    if default_start is None:
+        default_start = now()
+    effective_start = start_time or default_start
+    eligible = on_current[(on_current["_start"] >= effective_start) & (on_current["Trial ID"].astype(str).str.strip() == "")]
+    return {
+        "builds": builds,
+        "declared": [label for label, _ in builds],
+        "default_start": default_start,
+        "start_time": effective_start,
+        "tag_window_ids": eligible["Window ID"].astype(str).tolist(),
+        "windows_to_tag": int(len(eligible)),
+        "traps_with_tags": int(eligible["Trap ID"].astype(str).nunique()),
+        "windows_left_untagged": int(len(windows) - len(eligible)),
+        "audit_entries": int(eligible["Trap ID"].astype(str).nunique()) + 1,
+        "windowless": classify_windowless_active_traps(data, site_id),
+    }
+
+
+def commit_adoption(data, site_id, start_time, note="") -> dict:
+    """Creates an Adopted trial and stamps the in-scope windows, atomically."""
+    plan = adoption_plan(data, site_id, start_time)
+    staged = _staged_copy(data)
+    audit_start = len(staged["Audit Log"])
+    trial_id = create_trial(staged, site_id, plan["declared"], start_time, origin="Adopted", notes=note.strip(), reason=TRIAL_REASON_ADOPTED)
+    tag_ids = set(plan["tag_window_ids"])
+    mask = staged["Windows"]["Window ID"].astype(str).isin(tag_ids)
+    _trial_action_test_failure("adopt", 0)
+    staged["Windows"].loc[mask, "Trial ID"] = trial_id
+    for trap_id, group in staged["Windows"][mask].groupby(staged["Windows"][mask]["Trap ID"].astype(str)):
+        audit_change(staged, "Trap", trap_id, "Windows tagged to trial", "", f"{trial_id}: {len(group)} window{'s' if len(group) != 1 else ''}", TRIAL_REASON_ADOPTED)
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"trial_id": trial_id, "windows_tagged": int(mask.sum()), "traps_tagged": plan["traps_with_tags"], "change_ids": _audit_ids_since(staged, audit_start)}
+
+
+# ---- End trial ("Close-out") ---------------------------------------------------------
+
+def trial_end_gate(data, site_id) -> dict:
+    """What End trial has to deal with at a site: evidence reviews need a person's decision;
+    hardware tasks resolve themselves. Both are site-wide."""
+    fu = site_open_followups(data, site_id)
+    evidence = fu[fu["Follow-up Type"].isin(EVIDENCE_REVIEW_TYPES)].copy()
+    evidence["Trial ID"] = evidence["Window ID"].apply(lambda w: window_trial_id(data, w))
+    hardware = fu[fu["Follow-up Type"].isin(HARDWARE_TASK_TYPES)].copy()
+    return {"evidence": evidence, "hardware": hardware, "visit": active_visit(data, site_id)}
+
+
+def not_checked_this_visit(data, site_id, visit_id) -> pd.DataFrame:
+    """Active traps with no check in this visit: last-checked date and whether a camera
+    review for the final period can be queued (camera-equipped traps only)."""
+    traps = data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")].copy()
+    done = set(data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Trap ID"].astype(str))
+    traps = traps[~traps["Trap ID"].astype(str).isin(done)]
+    if traps.empty:
+        return traps.assign(**{"Last checked": [], "Has camera": []})
+    checks = data["Checks"]
+    def last_checked(trap_id):
+        rows = checks[checks["Trap ID"].astype(str) == str(trap_id)]
+        times = [t for t in rows["Check Time"].apply(parse_dt) if t is not None]
+        return max(times) if times else None
+    traps["Last checked"] = traps["Trap ID"].apply(last_checked)
+    traps["Has camera"] = traps["Trap ID"].apply(lambda t: trap_has_camera(data, str(t)))
+    traps["_route"] = pd.to_numeric(traps["Route Order"], errors="coerce")
+    return traps.sort_values(["_route", "Trap ID"])
+
+
+def trial_end_floor_and_reason(data, site_id, visit_id=""):
+    """The earliest time a trial can end here, and what sets it: the latest of this trial's own start, the start of a window
+    about to close, the start of the visit being finished, and each check saved in it. The time inputs work in whole minutes,
+    so a trial ended within a minute of the last check would otherwise close windows (and the visit) before they started; and
+    with no window open (every trap awaiting service) the trial's own start is all there is to order against.
+    Returns (moment, reason), or (None, "") when there is nothing to order against."""
+    candidates = []
+    trial = open_trial(data, site_id)
+    if trial is not None and parse_dt(trial["Start Time"]) is not None:
+        candidates.append((parse_dt(trial["Start Time"]), "this trial started"))
+    active = set(data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]["Trap ID"].astype(str))
+    windows = data["Windows"]
+    opened = [parse_dt(t) for t in windows[windows["Trap ID"].astype(str).isin(active) & (windows["Status"] == "Open")]["Start Time"]]
+    candidates += [(t, "the latest window at this site opened") for t in opened if t is not None]
+    if visit_id:
+        candidates += [(parse_dt(t), "this visit began") for t in data["Visits"][data["Visits"]["Visit ID"] == visit_id]["Start Time"] if parse_dt(t) is not None]
+        candidates += [(parse_dt(t), "the latest check in this visit") for t in data["Checks"][data["Checks"]["Visit ID"] == visit_id]["Check Time"] if parse_dt(t) is not None]
+    return max(candidates, key=lambda c: c[0]) if candidates else (None, "")
+
+
+def trial_end_floor(data, site_id, visit_id=""):
+    """The moment alone (see trial_end_floor_and_reason)."""
+    return trial_end_floor_and_reason(data, site_id, visit_id)[0]
+
+
+def ceil_to_minute(moment):
+    """The next whole minute (the time inputs have no seconds); an exact minute is returned as it is."""
+    floored = moment.replace(second=0, microsecond=0)
+    return floored if floored == moment else floored + timedelta(minutes=1)
+
+
+def plan_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id="", final_period_traps=()) -> dict:
+    """Validates End trial and describes it. Writes nothing. Raises ValueError with the
+    message the operator should see."""
+    trial = open_trial(data, site_id)
+    if trial is None:
+        raise ValueError("This site has no trial running.")
+    gate = trial_end_gate(data, site_id)
+    in_progress = gate["visit"]
+    if in_progress is not None and str(in_progress["Visit ID"]) != str(visit_id):
+        raise ValueError("A visit is in progress. Finish it, or use Finish visit and end trial… on the visit page.")
+    if visit_id:
+        v = data["Visits"][data["Visits"]["Visit ID"] == visit_id]
+        if v.empty or str(v.iloc[0]["Site ID"]) != str(site_id) or str(v.iloc[0]["Status"]) != "In progress":
+            raise ValueError("That visit is no longer in progress.")
+    floor, floor_reason = trial_end_floor_and_reason(data, site_id, visit_id)
+    if floor is not None and effective_time < floor:
+        raise ValueError(f"The end time can't be earlier than {ceil_to_minute(floor).strftime('%d/%m/%Y %H:%M')} ({floor_reason}). Choose that time or later.")
+    evidence_ids = set(gate["evidence"]["Follow-up ID"].astype(str))
+    unresolvable = {str(x) for x in unresolvable_ids} & evidence_ids
+    undecided = gate["evidence"][~gate["evidence"]["Follow-up ID"].astype(str).isin(unresolvable)]
+    if not undecided.empty:
+        n = len(undecided)
+        raise ValueError(f"{n} evidence review{'s' if n != 1 else ''} still need{'' if n != 1 else 's'} a decision before this trial can end.")
+    active_traps = data["Traps"][(data["Traps"]["Site ID"] == site_id) & (data["Traps"]["Status"] == "Active")]
+    unchecked = not_checked_this_visit(data, site_id, visit_id) if visit_id else active_traps.iloc[0:0]
+    camera_unchecked = set(unchecked[unchecked["Has camera"]]["Trap ID"].astype(str)) if not unchecked.empty else set()
+    bad = sorted(str(t) for t in final_period_traps if str(t) not in camera_unchecked)
+    if bad:
+        raise ValueError(f"A final-period camera review can only be queued for an unchecked trap with a camera: {', '.join(bad)}.")
+    total = int(len(active_traps))
+    checked = total - int(len(unchecked))
+    return {
+        "trial": trial,
+        "trap_ids": active_traps["Trap ID"].astype(str).tolist(),
+        "windows_closing": int(data["Windows"][data["Windows"]["Trap ID"].astype(str).isin(set(active_traps["Trap ID"].astype(str))) & (data["Windows"]["Status"] == "Open")].shape[0]),
+        "hardware": gate["hardware"],
+        "unresolvable": sorted(unresolvable),
+        "final_period_traps": sorted(str(t) for t in final_period_traps),
+        "visit_id": visit_id,
+        "visit_status": (VISIT_STATUS_PARTIAL if len(unchecked) else "Complete") if visit_id else "",
+        "checked": checked,
+        "total": total,
+        "effective_time": effective_time,
+    }
+
+
+def _audit_window_changes(staged, before_rows: dict, reason: str) -> None:
+    """One audit entry per changed field of each window in `before_rows` (id -> row)."""
+    for window_id, before in before_rows.items():
+        after = staged["Windows"][staged["Windows"]["Window ID"] == window_id].iloc[0]
+        for field in ("End Time", "Status", "End Reason", "Review Status"):
+            if str(before[field]) != str(after[field]):
+                audit_change(staged, "Window", window_id, field, before[field], after[field], reason)
+
+
+def commit_trial_end(data, site_id, effective_time, unresolvable_ids=(), visit_id="", final_period_traps=(), note="") -> dict:
+    """Ends the trial in one atomic save: gives up the evidence reviews the operator marked
+    unresolvable, auto-resolves hardware tasks, queues the ticked final-period camera
+    reviews, deactivates every active trap (closing its window), closes the visit (Partial
+    if any trap was unchecked), and sets the trial to Ended. Every field it changes is
+    audited so Undo can put it back exactly."""
+    plan = plan_trial_end(data, site_id, effective_time, unresolvable_ids, visit_id, final_period_traps)
+    trial = plan["trial"]
+    staged = _staged_copy(data)
+    audit_start = len(staged["Audit Log"])
+    when = dtstr(effective_time)
+    step = 0
+
+    # 1. Evidence reviews the operator gave up on. Never "Complete".
+    for fid in plan["unresolvable"]:
+        _trial_action_test_failure("end", step); step += 1
+        fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+        row = staged["Followups"].loc[fidx]
+        for field, new in (("Status", FOLLOWUP_UNRESOLVABLE), ("Completed Time", when), ("Notes", "Marked unresolvable when the trial ended")):
+            audit_change(staged, "Follow-up", fid, field, row[field], new, TRIAL_REASON_ENDED)
+            staged["Followups"].at[fidx, field] = new
+        window_id = str(row["Window ID"])
+        widx = staged["Windows"].index[staged["Windows"]["Window ID"].astype(str) == window_id]
+        if len(widx) and row["Follow-up Type"] == "Necropsy review" and str(staged["Windows"].at[widx[0], "Final Humane Kill"]) not in ("Yes", "No"):
+            audit_change(staged, "Window", window_id, "Final Humane Kill", staged["Windows"].at[widx[0], "Final Humane Kill"], NOT_ASSESSED_TRIAL_ENDED, TRIAL_REASON_ENDED)
+            staged["Windows"].at[widx[0], "Final Humane Kill"] = NOT_ASSESSED_TRIAL_ENDED
+        if len(widx):
+            before = str(staged["Windows"].at[widx[0], "Review Status"])
+            refresh_review_status(staged, window_id)
+            after = str(staged["Windows"].at[widx[0], "Review Status"])
+            if before != after:
+                audit_change(staged, "Window", window_id, "Review Status", before, after, TRIAL_REASON_ENDED)
+
+    # 2. Hardware tasks: resolved by the removal itself, with their own status.
+    for _, task in plan["hardware"].iterrows():
+        _trial_action_test_failure("end", step); step += 1
+        fid = str(task["Follow-up ID"])
+        fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+        for field, new in (("Status", FOLLOWUP_REMOVED_AT_TRIAL_END), ("Completed Time", when)):
+            audit_change(staged, "Follow-up", fid, field, staged["Followups"].at[fidx, field], new, TRIAL_REASON_ENDED)
+            staged["Followups"].at[fidx, field] = new
+
+    # 3. Deactivate every active trap, closing its open window.
+    open_before = {
+        str(w["Window ID"]): w
+        for _, w in staged["Windows"][(staged["Windows"]["Status"] == "Open") & staged["Windows"]["Trap ID"].astype(str).isin(set(plan["trap_ids"]))].iterrows()
+    }
+    window_by_trap = {str(w["Trap ID"]): wid for wid, w in open_before.items()}
+    for trap_id in plan["trap_ids"]:
+        _trial_action_test_failure("end", step); step += 1
+        deactivate_trap(staged, trap_id, effective_time, TRIAL_REASON_ENDED, commit=False)
+    _audit_window_changes(staged, open_before, TRIAL_REASON_ENDED)
+
+    # 4. Final-period camera reviews the operator ticked: created on the window just closed.
+    for trap_id in plan["final_period_traps"]:
+        window_id = window_by_trap.get(trap_id, "")
+        if not window_id:
+            continue
+        add_followup(staged, "Camera review", site_id, trap_id, visit_id, window_id, "", FINAL_PERIOD_REASON,
+                     "Confirm target interaction, activation, kill and video evidence", "Normal")
+        before = str(staged["Windows"][staged["Windows"]["Window ID"] == window_id].iloc[0]["Review Status"])
+        refresh_review_status(staged, window_id)
+        after = str(staged["Windows"][staged["Windows"]["Window ID"] == window_id].iloc[0]["Review Status"])
+        if before != after:
+            audit_change(staged, "Window", window_id, "Review Status", before, after, FINAL_PERIOD_REASON)
+        audit_change(staged, "Follow-up", staged["Followups"].iloc[-1]["Follow-up ID"], "Created", "", f"Camera review · {trap_id}", FINAL_PERIOD_REASON)
+
+    # 5. The visit closes (Partial if any active trap was unchecked).
+    if visit_id:
+        vidx = staged["Visits"].index[staged["Visits"]["Visit ID"] == visit_id][0]
+        partial_note = f"Partial: {plan['checked']} of {plan['total']} traps checked at trial end"
+        old_notes = str(staged["Visits"].at[vidx, "Notes"]).strip()
+        new_notes = (old_notes + " · " + partial_note).strip(" ·") if plan["visit_status"] == VISIT_STATUS_PARTIAL else old_notes
+        for field, new in (("End Time", when), ("Status", plan["visit_status"]), ("Notes", new_notes)):
+            if str(staged["Visits"].at[vidx, field]) != str(new):
+                audit_change(staged, "Visit", visit_id, field, staged["Visits"].at[vidx, field], new, TRIAL_REASON_ENDED)
+                staged["Visits"].at[vidx, field] = new
+
+    # 6. The trial ends.
+    _trial_action_test_failure("end", step); step += 1
+    tidx = staged["Trials"].index[staged["Trials"]["Trial ID"] == trial["Trial ID"]][0]
+    for field, new in (("Status", TRIAL_STATUS_ENDED), ("End Time", when)):
+        audit_change(staged, "Trial", trial["Trial ID"], field, staged["Trials"].at[tidx, field], new, TRIAL_REASON_ENDED)
+        staged["Trials"].at[tidx, field] = new
+    if note.strip():
+        old_trial_notes = str(staged["Trials"].at[tidx, "Notes"])
+        new_trial_notes = (old_trial_notes.strip() + " · " + note.strip()).strip(" ·")
+        audit_change(staged, "Trial", trial["Trial ID"], "Notes", old_trial_notes, new_trial_notes, TRIAL_REASON_ENDED)
+        staged["Trials"].at[tidx, "Notes"] = new_trial_notes
+    _trial_action_test_failure("end", step + 1)
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {
+        "trial_id": str(trial["Trial ID"]),
+        "traps_deactivated": len(plan["trap_ids"]),
+        "hardware_resolved": int(len(plan["hardware"])),
+        "unresolvable": len(plan["unresolvable"]),
+        "final_period_reviews": len(plan["final_period_traps"]),
+        "visit_status": plan["visit_status"],
+        "change_ids": _audit_ids_since(staged, audit_start),
+    }
+
+
+# ---- Undo (Phase 3) -------------------------------------------------------------------
+# Set up, Track as a trial and End trial can each be undone from their result screen, for as
+# long as the operator stays on it. Undo reverses exactly the audit entries that action wrote
+# (by Change ID) - never a snapshot - so anything saved by another action in the meantime is
+# untouched. Every reversal first checks the record still holds the value the action wrote; if
+# anything has moved on, nothing is changed at all.
+
+_UNDO_RECORDS = {
+    "Trap": ("Traps", "Trap ID"),
+    "Window": ("Windows", "Window ID"),
+    "Follow-up": ("Followups", "Follow-up ID"),
+    "Visit": ("Visits", "Visit ID"),
+    "Trial": ("Trials", "Trial ID"),
+}
+_UNDO_PLAIN_FIELDS = {
+    "Trap": {"Status", "Site ID", "Route Order", "Location", "Deployment Start"},
+    "Window": {"End Time", "Status", "End Reason", "Review Status", "Final Humane Kill"},
+    "Follow-up": {"Status", "Completed Time", "Notes"},
+    "Visit": {"Status", "End Time", "Notes"},
+    "Trial": {"Status", "End Time", "Notes"},
+}
+
+
+def undo_trial_action(data, kind: str, trial_id: str, change_ids) -> dict:
+    """Reverses a Set up ("set_up"), Track as a trial ("adopt") or End trial ("end") using only
+    the audit entries it created. Raises ValueError (with nothing written) if the action can no
+    longer be undone cleanly."""
+    if kind not in ("set_up", "adopt", "end"):
+        raise ValueError("Unknown action.")
+    cannot = "Undo isn't possible any more: "
+    _trial_action_test_failure("undo", 0)
+    staged = _staged_copy(data)
+    audit = staged["Audit Log"]
+    ids = [str(c) for c in change_ids]
+    rows = audit[audit["Change ID"].astype(str).isin(ids)]
+    if rows.empty or len(set(rows["Change ID"].astype(str))) != len(set(ids)):
+        raise ValueError(cannot + "this action's record could not be found.")
+    trial_rows = staged["Trials"][staged["Trials"]["Trial ID"] == trial_id]
+    if trial_rows.empty:
+        raise ValueError(cannot + "the trial no longer exists.")
+    expected_status = TRIAL_STATUS_ENDED if kind == "end" else TRIAL_STATUS_OPEN
+    if str(trial_rows.iloc[0]["Status"]) != expected_status:
+        raise ValueError(cannot + "the trial has changed since.")
+    site_id = str(trial_rows.iloc[0]["Site ID"])
+    stamped = staged["Windows"][staged["Windows"]["Trial ID"] == trial_id]
+    stamped_per_trap = stamped.groupby(stamped["Trap ID"].astype(str)).size().to_dict()
+
+    if kind == "end":
+        # Reopening this trial next to a newer one would leave two open at the site.
+        if not staged["Trials"][(staged["Trials"]["Site ID"] == site_id) & (staged["Trials"]["Status"] == TRIAL_STATUS_OPEN)].empty:
+            raise ValueError(cannot + "another trial has started at this site since.")
+    elif kind == "adopt":
+        # Adoption wrote one stamp per tagged window and said how many per trap. Any other window that now carries
+        # this Trial ID (a check saved since opened a new one) is not this action's to undo.
+        wrote = {}
+        for _, entry in rows.iterrows():
+            if str(entry["Record Type"]) == "Trap" and str(entry["Field"]) == "Windows tagged to trial":
+                match = re.search(r":\s*(\d+) window", str(entry["New Value"]))
+                wrote[str(entry["Record ID"])] = int(match.group(1)) if match else -1
+        if stamped_per_trap != wrote:
+            raise ValueError(cannot + "a check has been recorded at this site since it was tracked as a trial.")
+
+    created_windows = set()
+    if kind == "set_up":
+        created = staged["Windows"][staged["Windows"]["Trial ID"] == trial_id]
+        created_windows = set(created["Window ID"].astype(str))
+        if (created["Status"] != "Open").any():
+            raise ValueError(cannot + "a window this trial opened has since been closed.")
+        referenced = (
+            staged["Checks"]["Window Closed"].astype(str).isin(created_windows).any()
+            or staged["Followups"]["Window ID"].astype(str).isin(created_windows).any()
+            or staged["Photos"]["Window ID"].astype(str).isin(created_windows).any()
+        )
+        if referenced:
+            raise ValueError(cannot + "a check has been recorded since this trial started.")
+        # Set up opened exactly one window per trap it activated. A trap activated, or a window opened, since is not its to remove.
+        brought_in = {str(e["Record ID"]) for _, e in rows.iterrows() if str(e["Record Type"]) == "Trap" and str(e["Field"]) == "Status" and str(e["New Value"]) == "Active"}
+        if set(stamped_per_trap) != brought_in or any(n != 1 for n in stamped_per_trap.values()):
+            raise ValueError(cannot + "a trap or window has been added to this trial since it started.")
+
+    problems, undone, delete_trial = [], 0, False
+    for _, entry in rows.iloc[::-1].iterrows():
+        rtype, rid, field = str(entry["Record Type"]), str(entry["Record ID"]), str(entry["Field"])
+        previous, new, reason = str(entry["Previous Value"]), str(entry["New Value"]), str(entry["Reason"])
+        if rtype == "Trap" and field == "Windows tagged to trial":
+            continue  # reversed below by clearing the stamps
+        if rtype not in _UNDO_RECORDS:
+            problems.append(f"an unexpected {rtype} entry")
+            continue
+        sheet, id_col = _UNDO_RECORDS[rtype]
+        frame = staged[sheet]
+        idxs = frame.index[frame[id_col].astype(str) == rid].tolist()
+        if field == "Created" and rtype == "Follow-up":
+            if not idxs:
+                problems.append(f"follow-up {rid} is gone")
+                continue
+            if str(frame.at[idxs[0], "Status"]) != "Open":
+                problems.append(f"follow-up {rid} has been worked on")
+                continue
+            staged[sheet] = frame.drop(index=idxs[0]).reset_index(drop=True)
+            audit_change(staged, rtype, rid, "Created", new, "", f"Undo: {reason}")
+            undone += 1
+            continue
+        if not idxs:
+            problems.append(f"{rtype} {rid} is gone")
+            continue
+        i = idxs[0]
+        if rtype == "Trial" and field == "Status" and previous == "":
+            delete_trial = True
+            audit_change(staged, rtype, rid, field, new, "", f"Undo: {reason}")
+            undone += 1
+            continue
+        if rtype == "Trap" and field == "Build Version":
+            current = f"{frame.at[i, 'Product']} · {frame.at[i, 'Build Version']}"
+            if current != new:
+                problems.append(f"{rid}'s build has changed since")
+                continue
+            product, build = previous.split(" · ", 1)
+            frame.at[i, "Product"], frame.at[i, "Build Version"] = product, build
+        elif field in _UNDO_PLAIN_FIELDS.get(rtype, set()):
+            if str(frame.at[i, field]) != new:
+                problems.append(f"{rtype} {rid}'s {field.lower()} has changed since")
+                continue
+            frame.at[i, field] = previous
+        else:
+            problems.append(f"an unexpected {rtype} change ({field})")
+            continue
+        audit_change(staged, rtype, rid, field, new, previous, f"Undo: {reason}")
+        undone += 1
+    if problems:
+        raise ValueError(cannot + problems[0][0].lower() + problems[0][1:] + ".")
+
+    windows_removed = windows_unstamped = 0
+    if kind == "set_up":
+        keep = ~staged["Windows"]["Window ID"].astype(str).isin(created_windows)
+        windows_removed = int((~keep).sum())
+        staged["Windows"] = staged["Windows"][keep].reset_index(drop=True)
+    elif kind == "adopt":
+        stamped = staged["Windows"]["Trial ID"] == trial_id
+        windows_unstamped = int(stamped.sum())
+        staged["Windows"].loc[stamped, "Trial ID"] = ""
+    if delete_trial:
+        staged["Trials"] = staged["Trials"][staged["Trials"]["Trial ID"] != trial_id].reset_index(drop=True)
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"kind": kind, "entries_reversed": undone, "windows_removed": windows_removed, "windows_unstamped": windows_unstamped}
 
 
 def sync_workflow_query_params(page: str) -> None:
@@ -1727,6 +2726,11 @@ def scroll_to_top_once():
     """Reset Streamlit's current page after navigation and rerender settling."""
     if not st.session_state.pop("scroll_to_top_once", False):
         return
+    # Streamlit 1.60 scrolls section[data-testid="stMain"], which none of the long-standing targets below name, so on the
+    # existing pages this reset has no effect (measured on origin/main). That is left exactly as it was: the check page's
+    # resume-to-camera scroll and the forms on Data & records were built and tested around it. The trial journey screens
+    # are new, and they need the reset to work (a step opens at its top), so only they get the real target.
+    main_target = "doc.querySelector('section[data-testid=\"stMain\"]')," if st.session_state.get("page") in TRIAL_JOURNEY_PAGES else ""
     components.html(
         """
         <script>
@@ -1747,6 +2751,7 @@ def scroll_to_top_once():
             // known scroll container directly to (0,0) with no dependency
             // on any element's position, which is what was needed all along.
             const targets = [
+              /*MAIN_TARGET*/
               doc.querySelector('[data-testid="stMainScrollContainer"]'),
               doc.querySelector('[data-testid="stAppViewContainer"] .main'),
               doc.querySelector('section.main'),
@@ -1776,7 +2781,7 @@ def scroll_to_top_once():
           [80, 200, 450, 900].forEach((delay) => window.setTimeout(reset, delay));
         })();
         </script>
-        """,
+        """.replace("/*MAIN_TARGET*/", main_target),
         height=0,
         width=0,
     )
@@ -2369,6 +3374,9 @@ def commit_staged_records_with_photos(
     return len(saved_photo_files)
 
 
+RESTORE_OPTIONAL_SHEETS = {"Trials", "Trial Config", "Kills"}
+
+
 def workbook_summary(path: Path) -> Dict[str, int]:
     summary = {}
     try:
@@ -2382,7 +3390,8 @@ def workbook_summary(path: Path) -> Dict[str, int]:
 
 def available_backups():
     ensure_storage_ready()
-    return sorted(
+    # Pinned backups first (they are the ones that must stay available), then the rotating ones, newest first.
+    return pinned_backups() + sorted(
         BACKUP_DIR.glob(f"{DATA_FILE.stem}_*.xlsx"),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
@@ -2404,7 +3413,9 @@ def restore_backup(backup_path: Path):
     try:
         # Validate all expected sheets before replacing the live workbook.
         restored = pd.read_excel(temp_restore, sheet_name=None, dtype=str)
-        missing = [name for name in SHEETS if name not in restored]
+        # A backup made before a sheet existed must stay restorable: load_data()
+        # creates a missing sheet blank, and the derived sheets are rebuilt on save.
+        missing = [name for name in SHEETS if name not in restored and name not in RESTORE_OPTIONAL_SHEETS]
         if missing:
             raise ValueError("Backup is missing sheets: " + ", ".join(missing))
         os.replace(temp_restore, DATA_FILE)
@@ -3507,6 +4518,137 @@ def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
         message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+
+
+# ---- Trial journey screens (Phase 2): shared helpers ------------------------------------
+# The four trial-level screens (hub, Set up, Track as a trial, End trial) are built in the
+# Phase 7a components, scoped to one container so nothing else in the app changes look.
+
+def r1_short_build(label: str) -> str:
+    """"R1 · R1 Build 4.3" -> "Build 4.3"; "R1 · 19" -> "Build 19"."""
+    version = label.split(" · ", 1)[-1]
+    product = label.split(" · ", 1)[0]
+    if version.startswith(f"{product} Build "):
+        return version[len(product) + 1:]
+    if version[:1].isdigit():
+        return f"Build {version}"
+    return version
+
+
+def r1_screen_css(hide_nav: bool = False) -> None:
+    """Journey screens that hide the top navigation also read as one narrow column."""
+    st.markdown(design.SCREEN_CSS + ((design.HIDE_TOP_NAV_CSS + design.NARROW_CSS) if hide_nav else ""), unsafe_allow_html=True)
+
+
+def r1_stepper(current: int) -> None:
+    st.markdown(design.stepper_html(current), unsafe_allow_html=True)
+
+
+def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = "") -> None:
+    stat = (
+        f'<div><div class="r1-stat">{html.escape(str(stat_value))}</div><div class="r1-stat-label">{html.escape(stat_label)}</div></div>'
+        if stat_value is not None else ""
+    )
+    sub = f'<div class="r1-meta" style="margin-top:4px">{html.escape(subtitle)}</div>' if subtitle else ""
+    st.markdown(
+        f'<div class="r1-titlerow"><div><div class="r1-title" role="heading" aria-level="1">{html.escape(title)}</div>{sub}</div>{stat}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def r1_back(label: str, page: str, key: str, **kwargs) -> None:
+    """A back pill: always names its destination."""
+    st.button(label, key=f"back_{key}", on_click=set_page, args=(page,), kwargs=kwargs)
+
+
+def r1_kv(rows) -> str:
+    return "".join(
+        f'<div class="r1-kv"><span class="k">{html.escape(str(k))}</span><span class="v">{v}</span></div>'
+        for k, v in rows
+    )
+
+
+def r1_count(n: int, noun: str) -> str:
+    """"1 trap", "5 traps"."""
+    return f"{n} {noun}{'' if n == 1 else 's'}"
+
+
+def r1_short_date(value) -> str:
+    return value.strftime("%d %b").lstrip("0") if value else "—"
+
+
+def r1_step(flow: str, **updates) -> None:
+    """Move a journey flow to another step and ask for the top of the page, as navigation does. Without it a step
+    entered from the bottom of a long list (Preview after the traps) opens part-way down."""
+    st.session_state[flow].update(updates)
+    st.session_state.scroll_to_top_once = True
+
+
+def begin_trial_start(site_id: str) -> None:
+    st.session_state["ts"] = {"step": 1}
+    navigate("trial_start", rerun=False, site_id=site_id)
+
+
+def begin_trial_adopt(site_id: str) -> None:
+    st.session_state["ta"] = {"step": 1}
+    navigate("trial_adopt", rerun=False, site_id=site_id)
+
+
+def begin_trial_end(site_id: str, visit_id: str = "") -> None:
+    st.session_state["te"] = {"step": "list", "unresolvable": [], "visit_id": visit_id}
+    navigate("trial_end", rerun=False, site_id=site_id)
+
+
+def leave_trial_flow(key: str) -> None:
+    """Drop a flow's state when leaving it (back to Trap sites)."""
+    st.session_state.pop(key, None)
+    navigate("sites", rerun=False)
+
+
+if SPEED_PROBE:
+    begin_trial_start = _probe_callback(begin_trial_start)
+    begin_trial_adopt = _probe_callback(begin_trial_adopt)
+    begin_trial_end = _probe_callback(begin_trial_end)
+
+
+def r1_undo_section(state_key: str, kind: str, trial_id: str, change_ids, busy_label: str = "Undoing…") -> bool:
+    """The Undo card on a result screen. It lasts only while the operator stays on that screen
+    (leaving the flow drops its state). Returns True once the action has been undone."""
+    state = st.session_state[state_key]
+    if state.get("undone"):
+        st.markdown(design.message_html("success", "Undone", "Everything this action changed has been put back."), unsafe_allow_html=True)
+        return True
+    with st.container(key=f"card_undo_{kind}"):
+        st.markdown('<div class="r1-card-title">Undo</div><div class="r1-meta">Undo ends when you leave this screen or lock your phone.</div>', unsafe_allow_html=True)
+        if state.get("undo_error"):
+            st.markdown(design.message_html("error", "Nothing was changed.", html.escape(state["undo_error"])), unsafe_allow_html=True)
+        if two_phase_button("Undo this action", f"undo_{kind}", busy_label):
+            try:
+                undo_trial_action(data, kind, trial_id, change_ids)
+                state.update({"undone": True, "undo_error": ""})
+            except ValueError as exc:
+                state["undo_error"] = str(exc)
+            except Exception:
+                _logger.exception("Undo failed")
+                state["undo_error"] = "Check your signal and try again."
+            st.rerun()
+    return False
+
+
+def return_from_followup_task() -> bool:
+    """A review opened from End trial returns there when it is saved or left, never to the
+    Follow-ups list. Returns True when a return was started (the caller reruns)."""
+    target = st.session_state.pop("return_to", None)
+    if not target:
+        return False
+    st.session_state.pop("followup_panel", None)
+    st.session_state["site_id"] = target["site_id"]
+    st.session_state["page"] = target["page"]
+    flow_key, field, value = target.get("reset", (None, None, None))
+    if flow_key and isinstance(st.session_state.get(flow_key), dict):
+        st.session_state[flow_key][field] = value  # land on the list, not on the task that was left
+    st.switch_page(PAGE_TRAP_SITES)
+    return True
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -5146,6 +6288,10 @@ if not st.session_state.get("photo_cleanup_done"):
     st.session_state.photo_cleanup_done = True
 
 WORKFLOW_PAGES = {"site", "start_visit", "visit", "check", "check_confirm"}
+# Trial-level screens: not workflow pages (their state is derived from data or held in a
+# per-flow session dict, nothing is resumed from the URL), but they belong to the Trap sites
+# section so its nav pill stays current.
+TRIAL_JOURNEY_PAGES = {"trial", "trial_start", "trial_adopt", "trial_end"}
 
 if "page" not in st.session_state:
     _resume_site_id = st.query_params.get(WORKFLOW_QUERY_KEY_SITE, "")
@@ -5193,7 +6339,7 @@ def select_top_navigation(target: str, allowed_pages: set[str]) -> None:
 
 
 def top_nav_trap_sites() -> None:
-    select_top_navigation("sites", {"sites", "site", "start_visit", "visit", "check", "check_confirm"})
+    select_top_navigation("sites", {"sites", "site", "start_visit", "visit", "check", "check_confirm", *TRIAL_JOURNEY_PAGES})
 
 
 def top_nav_traps() -> None:
@@ -5263,6 +6409,10 @@ PRIMARY_SECTION_BY_APP_PAGE = {
     "visit": "Trap sites",
     "check": "Trap sites",
     "check_confirm": "Trap sites",
+    "trial": "Trap sites",
+    "trial_start": "Trap sites",
+    "trial_adopt": "Trap sites",
+    "trial_end": "Trap sites",
     "network": "Traps",
     "trap_detail": "Traps",
     "followups": "Follow-ups",
@@ -5409,6 +6559,8 @@ if page == "sites":
             # any other site with time before its next check — the pale
             # green card background below is still its own, separate signal.
             status_text, status_kind = site_urgency_pill(next_dt.date(), now().date())
+        site_trial = open_trial(data, sid)
+        no_trial_no_traps = site_trial is None and len(traps) == 0
         with app_card():
             if completed_today and active is None:
                 st.markdown('<span class="site-complete-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
@@ -5421,6 +6573,8 @@ if page == "sites":
                 f"{checked_trap_count} of {len(traps)} traps checked" if active is not None
                 else f"{len(traps)} active traps"
             )
+            if no_trial_no_traps:
+                trap_count_text = "No trial running"
             st.markdown(
                 '<div class="shared-card-copy site-card-compact">'
                 f'<div class="shared-card-heading"><strong>{html.escape(str(s["Site Name"]))}</strong>{status_pill(status_text, status_kind)}</div>'
@@ -5428,16 +6582,26 @@ if page == "sites":
                 '</div>',
                 unsafe_allow_html=True,
             )
-            if active is not None:
-                st.button(
-                    "Resume checking", key=f"resume_{sid}", type="primary",
-                    on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": active["Visit ID"]},
-                )
+            if site_trial is None and len(traps) > 0:
+                # Field work never waits on a migration: Start checking still works at an untracked site.
+                message_panel("warning", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial.")
+            if no_trial_no_traps:
+                st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
             else:
-                st.button(
-                    "Start checking", key=f"open_{sid}", type="primary",
-                    on_click=start_checking_callback, args=(sid,),
-                )
+                if active is not None:
+                    st.button(
+                        "Resume checking", key=f"resume_{sid}", type="primary",
+                        on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": active["Visit ID"]},
+                    )
+                else:
+                    st.button(
+                        "Start checking", key=f"open_{sid}", type="primary",
+                        on_click=start_checking_callback, args=(sid,),
+                    )
+                if site_trial is not None:
+                    st.button("Trial overview", key=f"trial_overview_{sid}", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+                else:
+                    st.button("Track as a trial", key=f"track_{sid}", on_click=begin_trial_adopt, args=(sid,))
 
 elif page == "site":
     sid = st.session_state.site_id
@@ -5618,7 +6782,15 @@ elif page == "visit":
             save_data(data)
             set_flash("success", f"{site_name(data, sid)} site check completed", [f"All {total_traps} traps were checked."])
             st.session_state.completed_site_id = sid
+            # At a tracked site the finished visit lands on the trial hub; an untracked site behaves as before.
+            if open_trial(data, sid) is not None:
+                go("trial", site_id=sid)
             go("sites")
+        if checked_count >= 1 and open_trial(data, sid) is not None:
+            st.button(
+                "Finish visit and end trial…", key=f"finish_visit_end_trial_{vid}", use_container_width=True,
+                on_click=begin_trial_end, args=(sid, vid),
+            )
         st.button("Pause and return to Trap sites", use_container_width=True, on_click=set_page, args=("sites",))
         if checked_count == 0:
             # Only offered while nothing has been recorded under this visit
@@ -6081,6 +7253,467 @@ elif page == "check":
 
     _render_check_page()
 
+elif page == "trial":
+    sid = st.session_state.site_id
+    trial = open_trial(data, sid)
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Trap sites", "sites", "hub")
+        if trial is None:
+            st.markdown(design.message_html("info", f"No trial is running at {html.escape(site_name(data, sid))}", "Start a trial from Trap sites."), unsafe_allow_html=True)
+            st.stop()
+        hub = trial_hub_summary(data, trial)
+        r1_stepper(2)
+        r1_title(site_name(data, sid), f"Started {r1_short_date(parse_dt(trial['Start Time']))}", hub["day"], "Trial day")
+        # The one thing an operator lands here to do sits directly under the title.
+        if hub["in_progress_visit"] is not None:
+            st.button("Resume checking", key="hub_resume", type="primary", on_click=set_page, args=("visit",),
+                      kwargs={"site_id": sid, "visit_id": hub["in_progress_visit"]["Visit ID"]})
+        elif hub["active_trap_count"]:
+            st.button("Start checking", key="hub_start", type="primary", on_click=start_checking_callback, args=(sid,))
+        st.markdown(
+            '<div class="r1-chips">' + "".join(
+                f'<div class="r1-chip"><b>{html.escape(r1_short_build(label))}</b><span>{n} trap{"s" if n != 1 else ""}</span></div>'
+                for label, n in hub["chips"]
+            ) + '</div>',
+            unsafe_allow_html=True,
+        )
+        left, right = st.columns([1.65, 1], gap="large")
+        with left:
+            with st.container(key="card_hub_visits"):
+                due_text, due_kind = site_urgency_pill(hub["next_due_date"].date(), now().date())
+                due_html = (
+                    f'<span class="r1-status {"overdue" if due_kind == "error" else "due"}">{html.escape(due_text)}</span>'
+                    if due_text else html.escape(r1_short_date(hub["next_due_date"]))
+                )
+                rows = [("Completed", hub["completed_count"])]
+                if hub["partial"]:
+                    last_partial = hub["partial"][-1]["note"].replace("Partial: ", "").replace(" at trial end", "")
+                    rows.append(("Partial", f"{len(hub['partial'])} · {html.escape(last_partial)}"))
+                if hub["last_date"]:
+                    rows.append(("Last", f"{r1_short_date(hub['last_date'])} · {hub['last_traps_checked']} trap{'s' if hub['last_traps_checked'] != 1 else ''} checked"))
+                rows.append(("Next due", due_html))
+                st.markdown('<div class="r1-card-title">Visits</div>' + r1_kv(rows), unsafe_allow_html=True)
+        with right:
+            with st.container(key="card_hub_evidence"):
+                st.markdown(
+                    '<div class="r1-card-title">Evidence waiting</div>'
+                    + r1_kv([("Necropsy review", hub["necropsy_open"]), ("Camera review", hub["camera_open"])]),
+                    unsafe_allow_html=True,
+                )
+                if st.button("Open follow-ups for this site →", key="hub_followups", type="tertiary"):
+                    st.session_state["followup_site_filter"] = sid
+                    st.session_state.pop("followup_panel", None)
+                    st.switch_page(PAGE_FOLLOWUPS)
+            st.divider()
+            in_progress = hub["in_progress_visit"] is not None
+            st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
+            if in_progress:
+                st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
+
+elif page == "trial_start":
+    sid = st.session_state.site_id
+    ts = st.session_state.setdefault("ts", {"step": 1})
+    r1_screen_css(hide_nav=True)
+    with st.container(key=design.SCREEN_KEY):
+        step = ts.get("step", 1)
+        if data["Sites"][data["Sites"]["Site ID"] == sid].empty:
+            st.markdown(design.message_html("error", "This trap site could not be found."), unsafe_allow_html=True)
+            st.button("Trap sites", key="back_ts_missing", on_click=leave_trial_flow, args=("ts",))
+            st.stop()
+        if step == 4:
+            result = ts["result"]
+            if not ts.get("undone"):
+                st.markdown(design.message_html("success", f"Trial started at {html.escape(site_name(data, sid))}", f"{result['trap_count']} traps are active."), unsafe_allow_html=True)
+            undone = r1_undo_section("ts", "set_up", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['trap_count'], 'trap')}…")
+            if not undone:
+                st.button("Go to trial", key="ts_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+            st.button("Trap sites", key="back_ts_done", on_click=leave_trial_flow, args=("ts",))
+            scroll_to_top_once()  # a result screen stops the script before the end-of-page reset runs
+            st.stop()
+        if open_trial(data, sid) is not None:
+            st.markdown(design.message_html("info", "This site already has a trial running."), unsafe_allow_html=True)
+            st.button("Go to trial", key="ts_go_existing", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+            st.stop()
+        if step == 1:
+            st.button("Trap sites", key="back_ts_1", on_click=leave_trial_flow, args=("ts",))
+        elif step == 2:
+            st.button("Back to builds", key="back_ts_2", on_click=r1_step, args=("ts",), kwargs={"step": 1})
+        else:
+            st.button("Back to traps", key="back_ts_3", on_click=r1_step, args=("ts",), kwargs={"step": 2})
+        r1_stepper(1)
+
+        if step == 1:
+            r1_title("Start trial", site_name(data, sid))
+            avail = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"]
+            products = sorted(set(avail["Product"]))
+            last_trial = latest_ended_trial(data, sid)
+            default_labels = trial_declared_builds(last_trial) if last_trial is not None else []
+            inactive_here = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Inactive")]
+            default_product = (
+                default_labels[0].split(" · ")[0] if default_labels
+                else (inactive_here["Product"].value_counts().idxmax() if not inactive_here.empty else (products[0] if products else ""))
+            )
+            product = default_product
+            if len(products) > 1:
+                product = st.segmented_control("Trap type", products, default=default_product, key="seg_ts_product", selection_mode="single") or default_product
+            labels = [trial_build_label(r["Product"], r["Build Version"]) for _, r in avail.iterrows() if r["Product"] == product]
+            with st.form("ts_step1"):
+                st.markdown('<div class="r1-label">Builds this trial compares</div>', unsafe_allow_html=True)
+                picks = {}
+                for i, label in enumerate(labels):
+                    with st.container(key=f"card_build_{i}"):
+                        picks[label] = st.checkbox(r1_short_build(label), value=(label in ts.get("declared", default_labels)), key=f"ts_build_{label}")
+                with st.container(key="pair_ts"):
+                    date_col, time_col = st.columns(2)
+                    # Default: now, to the minute, but never before the previous trial here ended (End -> Start is two guided
+                    # steps, and the End default can sit up to a minute ahead of now). Trap-level limits are checked at Preview.
+                    default_start = now().replace(second=0, microsecond=0)
+                    start_floor, _why = trial_set_up_floor(data, sid)
+                    if start_floor is not None and default_start < start_floor:
+                        default_start = ceil_to_minute(start_floor)
+                    start_date = date_col.date_input("Effective date", value=ts.get("effective", default_start).date(), key="ts_date", format="DD/MM/YYYY")
+                    start_time = time_col.time_input("Effective time", value=ts.get("effective", default_start).time(), key="ts_time")
+                with st.expander("Add a note (optional)", expanded=bool(ts.get("note"))):
+                    note = st.text_area("Note", value=ts.get("note", ""), key="ts_note", label_visibility="collapsed")
+                if ts.get("error1"):
+                    st.markdown(design.message_html("error", html.escape(ts["error1"])), unsafe_allow_html=True)
+                submitted = st.form_submit_button("Next: choose traps", type="primary")
+            if submitted:
+                chosen = [label for label, on in picks.items() if on]
+                try:
+                    declared = validate_declared_builds(data, chosen)
+                    r1_step("ts", declared=declared, effective=datetime.combine(start_date, start_time), note=note, step=2, error1="")
+                except ValueError as exc:
+                    ts["error1"] = str(exc)
+                st.rerun()
+
+        elif step == 2:
+            declared = ts["declared"]
+            r1_title("Choose traps", site_name(data, sid))
+            product = declared[0].split(" · ")[0]
+            pool = set_up_pool(data, sid, product=product)
+            if all(frame.empty for frame in pool.values()):
+                st.markdown(design.message_html("info", f"No inactive {html.escape(product)} traps are available", "Add traps in Administration → Trial setup first. New traps are added as inactive and appear here."), unsafe_allow_html=True)
+                st.stop()
+            prior_selected = ts.get("selected")
+            prior_assign = ts.get("assign", {})
+            error_traps = set(ts.get("error_traps", []))
+            with st.form("ts_step2"):
+                helper_choice = st.segmented_control("Set all unassigned to", declared, format_func=r1_short_build, key="ts_helper", selection_mode="single")
+                selected, choice = {}, {}
+                groups = (("Carried over", pool["carried"]), ("New", pool["new"]), ("Relocated", pool["relocated"]))
+                for group_name, frame in groups:
+                    if frame.empty:
+                        continue
+                    st.markdown(f'<div class="r1-label">{group_name}</div>', unsafe_allow_html=True)
+                    for _, trap in frame.iterrows():
+                        trap_id = str(trap["Trap ID"])
+                        inherited = set_up_default_build(trap, declared)
+                        previous = r1_short_build(trial_build_label(trap["Product"], trap["Build Version"]))
+                        # Every pre-selected build says where it came from: the trap's own stored build, shown only
+                        # as the default when the trial declares it. Otherwise the line says so and nothing is selected.
+                        not_declared = "" if inherited else " — not in this trial"
+                        if group_name == "Relocated":
+                            sub = f"From {site_name(data, trap['Site ID'])} · {previous}{not_declared}"
+                        elif group_name == "Carried over":
+                            sub = f"Previously {previous}{not_declared}"
+                        elif (data["Windows"]["Trap ID"].astype(str) == trap_id).any():
+                            sub = f"Previously {previous}{not_declared}"
+                        else:
+                            sub = f"New trap · added as {previous}{not_declared}"
+                        default_on = (trap_id in prior_selected) if prior_selected is not None else (group_name != "Relocated")
+                        with st.container(key=f"card_trap_{trap_id}"):
+                            selected[trap_id] = st.checkbox(trap_id, value=default_on, key=f"ts_sel_{trap_id}")
+                            st.markdown(f'<div class="r1-meta">{html.escape(sub)}</div>', unsafe_allow_html=True)
+                            choice[trap_id] = st.segmented_control(
+                                f"Build for {trap_id}", declared, format_func=r1_short_build, key=f"seg_choosef_{trap_id}",
+                                selection_mode="single", default=(prior_assign.get(trap_id) or inherited or None), label_visibility="collapsed",
+                            )
+                if ts.get("error2"):
+                    st.markdown(design.message_html("error", html.escape(ts["error2"])), unsafe_allow_html=True)
+                submitted = st.form_submit_button("Preview activation", type="primary")
+            if submitted:
+                assignments = {t: (choice.get(t) or helper_choice or "") for t, on in selected.items() if on}
+                try:
+                    ts["plan"] = plan_set_up(data, sid, declared, ts["effective"], assignments)
+                    r1_step("ts", assign=assignments, selected=[t for t, on in selected.items() if on], step=3, error2="", error_traps=[])
+                except ValueError as exc:
+                    ts.update({"error2": str(exc), "error_traps": [t for t, label in assignments.items() if not label], "assign": assignments,
+                               "selected": [t for t, on in selected.items() if on]})
+                st.rerun()
+
+        elif step == 3:
+            plan = ts["plan"]
+            r1_title("Preview", site_name(data, sid))
+            with st.container(key="card_ts_summary"):
+                st.markdown(
+                    '<div class="r1-card-title">This trial</div>' + r1_kv([
+                        ("Builds", html.escape(", ".join(r1_short_build(b) for b in plan["declared"]))),
+                        ("Effective", ts["effective"].strftime("%d %b %Y · %H:%M").lstrip("0")),
+                        ("Traps", len(plan["rows"])),
+                    ]),
+                    unsafe_allow_html=True,
+                )
+            def _what_happens(r):
+                bits = []
+                if r["relocating"]:
+                    bits.append(f"from {r['From']}")
+                if r["Build"] != r["Previous build"]:
+                    bits.append(f"{r1_short_build(r['Previous build'])} → {r1_short_build(r['Build'])}")
+                bits.append("activates")
+                return " · ".join(bits)
+            preview = pd.DataFrame([
+                {"Trap": r["Trap ID"], "Build": r1_short_build(r["Build"]), "Change": _what_happens(r)} for r in plan["rows"]
+            ])
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+            unused_note = unused_declared_builds_message(plan["declared"], plan["rows"])
+            if unused_note:
+                st.markdown(design.message_html("warn", html.escape(unused_note)), unsafe_allow_html=True)
+            if ts.get("error3"):
+                st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ts["error3"])), unsafe_allow_html=True)
+            if two_phase_button("Start trial", "ts_confirm", f"Starting trial — {r1_count(len(plan['rows']), 'trap')}…", type="primary"):
+                try:
+                    ts["result"] = commit_set_up(data, sid, ts["declared"], ts["effective"], ts["assign"], ts.get("note", ""))
+                    r1_step("ts", step=4, error3="")
+                except Exception as exc:
+                    _logger.exception("Trial Set up failed")
+                    ts["error3"] = "The trial has not started and every trap is as it was. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
+                st.rerun()
+
+elif page == "trial_adopt":
+    sid = st.session_state.site_id
+    ta = st.session_state.setdefault("ta", {"step": 1})
+    r1_screen_css(hide_nav=True)
+    with st.container(key=design.SCREEN_KEY):
+        if ta.get("step") == 3:
+            result = ta["result"]
+            if not ta.get("undone"):
+                st.markdown(design.message_html("success", f"{html.escape(site_name(data, sid))} is tracked as a trial", f"{result['windows_tagged']} windows tagged across {result['traps_tagged']} traps."), unsafe_allow_html=True)
+            undone = r1_undo_section("ta", "adopt", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['windows_tagged'], 'window')}…")
+            if not undone:
+                st.button("Go to trial", key="ta_go_trial", type="primary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+            st.button("Trap sites", key="back_ta_done", on_click=leave_trial_flow, args=("ta",))
+            scroll_to_top_once()
+            st.stop()
+        st.button("Trap sites", key="back_ta", on_click=leave_trial_flow, args=("ta",))
+        r1_stepper(1)
+        r1_title("Track as a trial", site_name(data, sid))
+        try:
+            base_plan = adoption_plan(data, sid)
+        except ValueError as exc:
+            st.markdown(design.message_html("info", html.escape(str(exc))), unsafe_allow_html=True)
+            st.stop()
+        st.markdown('<div class="r1-meta">These traps are running without a trial record. Tracking tags their existing windows to a new trial; nothing about how they are checked changes.</div>', unsafe_allow_html=True)
+        with st.container(key="card_ta_builds"):
+            st.markdown(
+                '<div class="r1-card-title">Builds currently running</div>' + "".join(
+                    f'<div class="r1-kv"><span class="v">{html.escape(r1_short_build(label))}</span><span class="k">{n} trap{"s" if n != 1 else ""}</span></div>'
+                    for label, n in base_plan["builds"]
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown('<div class="r1-label">Trial started</div>', unsafe_allow_html=True)
+        with st.container(key="pair_ta"):
+            date_col, time_col = st.columns(2)
+            adopt_date = date_col.date_input("Start date", value=base_plan["default_start"].date(), key="ta_date", label_visibility="collapsed", format="DD/MM/YYYY")
+            adopt_time = time_col.time_input("Start time", value=base_plan["default_start"].time(), key="ta_time", label_visibility="collapsed")
+        st.markdown('<div class="r1-meta">Defaults to when the earliest of these builds began at this site. Windows from this time onward are tagged to the trial.</div>', unsafe_allow_html=True)
+        plan = adoption_plan(data, sid, datetime.combine(adopt_date, adopt_time))
+        with st.container(key="card_ta_preview"):
+            st.markdown(
+                '<div class="r1-card-title">Preview</div>' + r1_kv([
+                    ("Windows to tag", f"{plan['windows_to_tag']} across {plan['traps_with_tags']} trap{'s' if plan['traps_with_tags'] != 1 else ''}"),
+                    ("Left untagged (earlier or other builds)", plan["windows_left_untagged"]),
+                    ("Audit entries", plan["audit_entries"]),
+                ]),
+                unsafe_allow_html=True,
+            )
+        wl = plan["windowless"]
+        if wl["awaiting_service"] or wl["trap_missing"]:
+            st.markdown(f'<div class="r1-meta">Awaiting service or missing, and normal: {html.escape(", ".join(wl["awaiting_service"] + wl["trap_missing"]))}.</div>', unsafe_allow_html=True)
+        if wl["defect"]:
+            st.markdown(design.message_html("warn", "Check these traps", f"No open window and nothing waiting on them: {html.escape(', '.join(wl['defect']))}. They are listed so you can repair them; tracking is not blocked."), unsafe_allow_html=True)
+        if ta.get("error"):
+            st.markdown(design.message_html("error", "Nothing was changed.", html.escape(ta["error"])), unsafe_allow_html=True)
+        if plan["windows_to_tag"] == 0:
+            st.markdown('<div class="r1-meta">No existing windows fall in this period; the trial will start with the next window.</div>', unsafe_allow_html=True)
+        if two_phase_button("Track as trial", "ta_confirm", f"Tracking — {r1_count(plan['windows_to_tag'], 'window')}…", type="primary"):
+            try:
+                ta["result"] = commit_adoption(data, sid, datetime.combine(adopt_date, adopt_time))
+                r1_step("ta", step=3, error="")
+            except Exception as exc:
+                _logger.exception("Trial adoption failed")
+                ta["error"] = "The site is not tracked and nothing was written. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
+            st.rerun()
+
+elif page == "trial_end":
+    sid = st.session_state.site_id
+    te = st.session_state.setdefault("te", {"step": "list", "unresolvable": [], "visit_id": ""})
+    r1_screen_css(hide_nav=True)
+    visit_id = te.get("visit_id", "")
+    with st.container(key=design.SCREEN_KEY):
+        trial = open_trial(data, sid)
+        step = te.get("step", "list")
+        if step == "result":
+            result = te["result"]
+            if not te.get("undone"):
+                st.markdown(design.message_html("success", f"Trial ended at {html.escape(site_name(data, sid))}", f"{result['traps_deactivated']} traps deactivated · {result['hardware_resolved'] + result['unresolvable']} follow-ups resolved"), unsafe_allow_html=True)
+            r1_undo_section("te", "end", result["trial_id"], result["change_ids"], f"Undoing — {r1_count(result['traps_deactivated'], 'trap')}…")
+            st.button("Trap sites", key="te_done", type="primary", on_click=leave_trial_flow, args=("te",))
+            scroll_to_top_once()
+            st.stop()
+        if trial is None:
+            st.markdown(design.message_html("info", "This site has no trial running."), unsafe_allow_html=True)
+            st.button("Trap sites", key="back_te_none", on_click=leave_trial_flow, args=("te",))
+            st.stop()
+        if visit_id:
+            st.button("Back to visit", key="back_te_visit", on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": visit_id})
+        else:
+            st.button("Back to trial", key="back_te_trial", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+        r1_stepper(3)
+        gate = trial_end_gate(data, sid)
+        decided = set(te.get("unresolvable", []))
+        undecided = gate["evidence"][~gate["evidence"]["Follow-up ID"].astype(str).isin(decided)]
+        active_count = int(((data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")).sum())
+
+        if step == "list":
+            r1_title("End trial", f"{site_name(data, sid)} · {active_count} traps will be deactivated")
+            unchecked = not_checked_this_visit(data, sid, visit_id) if visit_id else pd.DataFrame()
+            if visit_id and not unchecked.empty:
+                st.markdown(design.message_html("warn", "This visit will close as Partial", f"{active_count - len(unchecked)} of {active_count} traps checked."), unsafe_allow_html=True)
+            if not undecided.empty:
+                st.markdown('<div class="r1-label">Needs your decision</div>', unsafe_allow_html=True)
+                with st.container(key="cardlist_te_evidence"):
+                    for _, task in undecided.iterrows():
+                        fid = str(task["Follow-up ID"])
+                        is_nec = task["Follow-up Type"] == "Necropsy review"
+                        earlier = f" · from {task['Trial ID']}" if task["Trial ID"] and task["Trial ID"] != trial["Trial ID"] else ""
+                        with st.container(key=f"listrow_te_{fid}"):
+                            text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                            text_col.markdown(
+                                f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon("bag" if is_nec else "camera", 22)}</div>'
+                                f'<div><div class="r1-row-title">{html.escape(task["Follow-up Type"])}</div>'
+                                f'<div class="r1-meta">{html.escape(str(task["Trap ID"]))} · {html.escape(str(task["Reason"]).lower())}{html.escape(earlier)}</div></div></div>',
+                                unsafe_allow_html=True,
+                            )
+                            if button_col.button("Decide", key=f"te_decide_{fid}"):
+                                r1_step("te", step="task", task=fid)
+                                st.rerun()
+            if decided:
+                st.markdown('<div class="r1-label">Marked unresolvable</div>', unsafe_allow_html=True)
+                for fid in sorted(decided):
+                    rows = gate["evidence"][gate["evidence"]["Follow-up ID"].astype(str) == fid]
+                    if rows.empty:
+                        continue
+                    row = rows.iloc[0]
+                    st.markdown(design.message_html("info", f"{html.escape(row['Follow-up Type'])} · {html.escape(str(row['Trap ID']))}", "Recorded as unresolved, never as complete."), unsafe_allow_html=True)
+                    if st.button("Change decision", key=f"te_undecide_{fid}", type="tertiary"):
+                        te["unresolvable"] = [x for x in te["unresolvable"] if x != fid]
+                        st.rerun()
+            if not gate["hardware"].empty:
+                st.markdown('<div class="r1-label">Resolved automatically</div>', unsafe_allow_html=True)
+                for _, task in gate["hardware"].iterrows():
+                    st.markdown(design.message_html("success", f"{html.escape(task['Follow-up Type'])} · {html.escape(str(task['Trap ID']))} — removed at trial end"), unsafe_allow_html=True)
+            final_period_ticks = {}
+            if visit_id and not unchecked.empty:
+                with st.container(key="card_te_unchecked"):
+                    st.markdown('<div class="r1-card-title">Not checked this visit</div><div class="r1-meta">Tick a trap to queue a camera review for its final period. It is created when the trial ends and stays open in Follow-ups.</div>', unsafe_allow_html=True)
+                    for _, trap in unchecked.iterrows():
+                        trap_id = str(trap["Trap ID"])
+                        last_checked = f"last checked {r1_short_date(trap['Last checked'])}" if trap["Last checked"] else "never checked"
+                        if trap["Has camera"]:
+                            final_period_ticks[trap_id] = st.checkbox(f"{trap_id} · {last_checked}", value=te.get("final_period", {}).get(trap_id, True), key=f"te_final_{trap_id}")
+                        else:
+                            st.markdown(f'<div class="r1-meta"><b>{html.escape(trap_id)}</b> · {last_checked} · no camera, so a physical check is the only review</div>', unsafe_allow_html=True)
+                te["final_period"] = final_period_ticks
+                st.button("Back and check more traps", key="te_back_check", on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": visit_id})
+            blocked = not undecided.empty
+            if st.button("Continue to preview", key="te_continue", type="primary", disabled=blocked):
+                r1_step("te", step="preview")
+                st.rerun()
+            if blocked:
+                n = len(undecided)
+                st.markdown(f'<div class="r1-meta">Make a decision on {n} review{"s" if n != 1 else ""} to continue.</div>', unsafe_allow_html=True)
+
+        elif step == "task":
+            fid = te["task"]
+            rows = gate["evidence"][gate["evidence"]["Follow-up ID"].astype(str) == fid]
+            if rows.empty:
+                r1_step("te", step="list")
+                st.rerun()
+            task = rows.iloc[0]
+            order = gate["evidence"]["Follow-up ID"].astype(str).tolist()
+            r1_title(task["Follow-up Type"], f"{task['Trap ID']} · {site_name(data, sid)}")
+            st.markdown(f'<div class="r1-meta">Reviewing {order.index(fid) + 1} of {len(order)}</div>', unsafe_allow_html=True)
+            with st.container(key="card_te_task"):
+                st.markdown(r1_kv([("Trap", html.escape(str(task["Trap ID"]))), ("Bag ID", html.escape(str(task["Bag ID"]) or "—")), ("Reason", html.escape(str(task["Reason"]) or "—"))]), unsafe_allow_html=True)
+            if st.button("Review now", key="te_review_now", type="primary"):
+                st.session_state["followup_panel"] = fid
+                st.session_state["return_to"] = {"page": "trial_end", "site_id": sid, "reset": ("te", "step", "list")}
+                st.switch_page(PAGE_FOLLOWUPS)
+            if st.button("Mark unresolvable…", key="te_mark_unresolvable", type="tertiary"):
+                r1_step("te", step="confirm_unresolvable")
+                st.rerun()
+            st.button("Back to list", key="te_task_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
+
+        elif step == "confirm_unresolvable":
+            fid = te["task"]
+            rows = gate["evidence"][gate["evidence"]["Follow-up ID"].astype(str) == fid]
+            task = rows.iloc[0] if not rows.empty else None
+            r1_title("Mark unresolvable", f"{task['Follow-up Type']} · {task['Trap ID']}" if task is not None else "")
+            st.markdown(design.message_html("error", "This gives up real trial evidence.", "It is recorded as unresolved and never counted as a completed review. A kill whose necropsy is given up on is recorded as not assessed."), unsafe_allow_html=True)
+            understood = st.checkbox("I understand this evidence will not be assessed.", key=f"te_understand_{fid}")
+            if two_phase_button("Mark unresolvable", f"te_confirm_unresolvable_{fid}", "Saving…", type="primary", disabled=not understood):
+                te["unresolvable"] = sorted(set(te.get("unresolvable", [])) | {fid})
+                r1_step("te", step="list")
+                st.rerun()
+            if not understood:
+                st.markdown('<div class="r1-meta">Tick the box to continue.</div>', unsafe_allow_html=True)
+            st.button("Cancel", key="te_cancel_unresolvable", on_click=r1_step, args=("te",), kwargs={"step": "list"})
+
+        elif step == "preview":
+            r1_title("Confirm trial end", site_name(data, sid))
+            # Default: now, to the minute, but never earlier than the latest check or window it has to come after.
+            default_end = now().replace(second=0, microsecond=0)
+            end_floor = trial_end_floor(data, sid, visit_id)
+            if end_floor is not None and default_end < end_floor:
+                default_end = ceil_to_minute(end_floor)
+            with st.container(key="pair_te"):
+                date_col, time_col = st.columns(2)
+                end_date = date_col.date_input("Effective date", value=te.get("effective", default_end).date(), key="te_date", format="DD/MM/YYYY")
+                end_time = time_col.time_input("Effective time", value=te.get("effective", default_end).time(), key="te_time")
+            with st.expander("Add a note (optional)", expanded=bool(te.get("note"))):
+                end_note = st.text_area("Note", value=te.get("note", ""), key="te_note", label_visibility="collapsed")
+            effective = datetime.combine(end_date, end_time)
+            ticked = [t for t, on in te.get("final_period", {}).items() if on]
+            try:
+                plan = plan_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked)
+            except ValueError as exc:
+                st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
+                st.button("Back to list", key="te_preview_back_err", on_click=r1_step, args=("te",), kwargs={"step": "list"})
+                st.stop()
+            preview = pd.DataFrame([{"Trap": t, "Window": "Closes", "Status": "Active → Inactive"} for t in plan["trap_ids"]])
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+            with st.container(key="card_te_summary"):
+                rows = [("Traps deactivated", len(plan["trap_ids"])), ("Hardware tasks resolved", len(plan["hardware"])), ("Evidence reviews unresolved", len(plan["unresolvable"]))]
+                if visit_id:
+                    rows.insert(0, ("Visit closed as", plan["visit_status"]))
+                    rows.append(("Final-period reviews queued", len(plan["final_period_traps"])))
+                st.markdown('<div class="r1-card-title">What ending does</div>' + r1_kv(rows), unsafe_allow_html=True)
+            if te.get("error"):
+                st.markdown(design.message_html("error", "Nothing was changed.", html.escape(te["error"])), unsafe_allow_html=True)
+            if two_phase_button("Confirm trial end", "te_confirm", f"Ending trial — {r1_count(len(plan['trap_ids']), 'trap')}…", type="primary"):
+                te["note"] = end_note
+                try:
+                    te["result"] = commit_trial_end(data, sid, effective, te.get("unresolvable", []), visit_id, ticked, end_note)
+                    r1_step("te", step="result", error="")
+                except Exception as exc:
+                    _logger.exception("Trial end failed")
+                    te["error"] = "The trial is still open and every trap is still active. Check your signal and try again." if not isinstance(exc, ValueError) else str(exc)
+                st.rerun()
+            st.button("Back to list", key="te_preview_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
+
 elif page == "network":
     header("Traps", "Find a trap and review its kills, checks and full history.")
 
@@ -6344,8 +7977,10 @@ elif page == "followups":
                 st.session_state.pop("followup_panel",None); st.rerun()
         else:
             item=matches.iloc[0]; fid=item["Follow-up ID"]; tr=trap_row(data,item["Trap ID"])
-            if st.button("← Back to task list", key="back_followup_list"):
-                st.session_state.pop("followup_panel",None); st.rerun()
+            opened_from_end_trial = bool(st.session_state.get("return_to"))
+            if st.button("← Back to End trial" if opened_from_end_trial else "← Back to task list", key="back_followup_list"):
+                if not return_from_followup_task():
+                    st.session_state.pop("followup_panel",None); st.rerun()
             header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}" + (f" · Bag {item['Bag ID']}" if str(item.get("Bag ID", "")).strip() else ""))
 
             linked_windows=data["Windows"][data["Windows"]["Window ID"]==item["Window ID"]]
@@ -6475,7 +8110,8 @@ elif page == "followups":
                         refresh_review_status(data,item["Window ID"]); save_data(data)
                         speed_line=f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx,'Interaction To Kill Min'])}." if is_kill_review and first_dt else "No interaction-to-kill time recorded."
                         set_flash("success","Camera review saved",[f"{item['Trap ID']} was updated.",speed_line,"Next: review the next open task."])
-                        st.session_state.pop("followup_panel",None); st.rerun()
+                        if not return_from_followup_task():
+                            st.session_state.pop("followup_panel",None); st.rerun()
 
             elif item["Follow-up Type"]=="Necropsy review":
                 prefix=f"nec_{fid}"
@@ -6566,7 +8202,8 @@ elif page == "followups":
 
                         st.session_state.pop(nec_save_lock_key,None)
                         set_flash("success","Necropsy review saved",[f"Final humane-kill result: {final}.","The linked kill result and Performance metrics were updated.","Next: review the next open task."])
-                        st.session_state.pop("followup_panel",None); st.rerun()
+                        if not return_from_followup_task():
+                            st.session_state.pop("followup_panel",None); st.rerun()
             else:
                 prefix=f"issue_{fid}"
                 resolution=st.selectbox("Camera outcome",["Select…","Fixed and now working","Adjusted and now covering trap","Replaced","Could not fix"],index=0,key=f"{prefix}_resolution")
@@ -6591,7 +8228,8 @@ elif page == "followups":
                             recalculate_window(data,idxs[0])
                         refresh_review_status(data,item["Window ID"]); save_data(data)
                         set_flash("success","Camera resolution saved",[f"Current camera readiness: {current_ready}.",f"Past evidence: {evidence_gap}.","Next: review the next open task."])
-                        st.session_state.pop("followup_panel",None); st.rerun()
+                        if not return_from_followup_task():
+                            st.session_state.pop("followup_panel",None); st.rerun()
 
 elif page == "windows":
     if st.button("← Back to Data Management"):
@@ -7098,6 +8736,11 @@ elif page == "trap_edit":
                         go("setup")
                     except Exception as exc:
                         st.error(str(exc))
+                        if str(exc).startswith("No trial is running"):
+                            # Trial setup is its own native page, so crossing to the Trap sites section needs switch_page.
+                            if st.button("Start a trial", key=f"start_trial_from_activate_{trap_id}", type="tertiary"):
+                                begin_trial_start(existing["Site ID"])
+                                st.switch_page(PAGE_TRAP_SITES)
 
     st.divider()
     show_move = st.toggle("Move trap", key=f"show_move_{trap_id}")
@@ -7114,7 +8757,7 @@ elif page == "trap_edit":
             move_reason = st.text_area("Reason for move")
             move_date = st.date_input("Effective date", value=now().date())
             move_time = st.time_input("Effective time", value=now().time())
-            confirm_move = st.checkbox("Close the current window and start a new window at the destination")
+            confirm_move = st.checkbox("Move this trap to the destination site (a trap that is Inactive has no window, so none is opened)")
             if two_phase_button("Move trap", f"move_trap_{trap_id}", "Moving…", type="primary", disabled=not confirm_move):
                 try:
                     move_trap(
@@ -7135,11 +8778,16 @@ elif page == "trap_edit":
         current_label = f"{existing['Product']} · {existing['Build Version']}"
         options = [x for x in available_builds["Label"].tolist() if x != current_label]
         if options:
+            is_inactive_trap = existing["Status"] != "Active"
+            if is_inactive_trap:
+                st.caption("Allowed while the trap is Inactive — this is how builds are staged before a trial. No monitoring window is opened.")
             new_label = st.selectbox("New build", options)
             build_reason = st.text_area("Reason for build change")
             build_date = st.date_input("Effective date", value=now().date(), key=f"dedicated_build_date_{trap_id}")
             build_time = st.time_input("Effective time", value=now().time(), key=f"dedicated_build_time_{trap_id}")
-            confirm_build = st.checkbox("Close the current window and start a new window on this build")
+            confirm_build = st.checkbox(
+                "Change this trap's build" if is_inactive_trap else "Close the current window and start a new window on this build"
+            )
             if two_phase_button("Change build", f"change_build_{trap_id}", "Changing…", type="primary", disabled=not confirm_build):
                 selected = available_builds[available_builds["Label"] == new_label].iloc[0]
                 try:
@@ -7152,6 +8800,10 @@ elif page == "trap_edit":
                     go("setup")
                 except Exception as exc:
                     st.error(str(exc))
+                    if str(exc).startswith("A build can't change inside a trial"):
+                        if st.button("Go to trial", key=f"go_to_trial_from_build_{trap_id}", type="tertiary"):
+                            navigate("trial", rerun=False, site_id=existing["Site ID"])
+                            st.switch_page(PAGE_TRAP_SITES)
         else:
             st.caption("No other available builds.")
 
@@ -7182,6 +8834,13 @@ elif page == "setup":
                 # time, a shared bulk time, a preview step, then one confirmed commit.
                 if inactive_traps.empty:
                     st.caption("No inactive traps to activate" + (f" at {site_name(data, site_filter)}" if site_filter != "All sites" else "") + ".")
+                elif site_filter != "All sites" and open_trial(data, site_filter) is None:
+                    # Same refusal activate_trap() would give each trap, shown once up front
+                    # instead of after the operator has filled the whole form in.
+                    st.error(no_open_trial_message(data, site_filter))
+                    if st.button("Start a trial", key="bulkact_start_trial", type="tertiary"):
+                        begin_trial_start(site_filter)
+                        st.switch_page(PAGE_TRAP_SITES)
                 else:
                     pending = st.session_state.get("bulkact_pending")
                     # UX-audit fix (2026-08-13): the selection checkboxes and time
@@ -7325,20 +8984,38 @@ elif page == "setup":
                     location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
                     camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
                     order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
-                    deployment=parse_dt(existing["Deployment Start"]) if existing is not None else now()
-                    dep_date=st.date_input("Deployment start date",value=deployment.date() if deployment else now().date())
-                    dep_time=st.time_input("Deployment start time",value=deployment.time() if deployment else now().time())
-                    if dep_date==now().date():
-                        st.caption("Defaults to today — change this if the trap was actually deployed earlier.")
+                    # A new trap is always created Inactive with no deployment date: both only
+                    # mean something once a monitoring window opens, which activating the trap
+                    # (into a trial) does. Edit shows the stored value, and writes back exactly
+                    # what is stored - never today's date in place of a blank one.
+                    stored_deployment=parse_dt(existing["Deployment Start"]) if existing is not None else None
+                    dep_date=dep_time=None
+                    if mode=="edit" and stored_deployment is not None:
+                        dep_date=st.date_input("Deployment start date",value=stored_deployment.date())
+                        dep_time=st.time_input("Deployment start time",value=stored_deployment.time())
+                    elif mode=="edit":
+                        st.caption("Deployment start: not set yet. It is recorded when the trap is first activated.")
+                    else:
+                        st.caption("New traps start Inactive. Activate the trap when a trial starts.")
                     image=st.text_input("Setup image link",value=existing["Setup Image Link"] if existing is not None else "")
-                    status=st.selectbox("Status",["Active","Inactive"],index=0 if existing is None or existing["Status"]=="Active" else 1,disabled=mode=="edit",help="Use Activate trap / Deactivate trap for an existing trap." if mode=="edit" else None)
+                    if mode=="edit":
+                        status=st.selectbox("Status",["Active","Inactive"],index=0 if existing["Status"]=="Active" else 1,disabled=True,help="Use Activate trap / Deactivate trap for an existing trap.")
+                    else:
+                        status="Inactive"
                     notes=st.text_area("Notes",value=existing["Notes"] if existing is not None else "")
                     save=st.form_submit_button("Save trap changes" if mode=="edit" else "Add trap",type="primary")
                 if save:
                     if not trap_id.strip(): st.error("Trap ID is required.")
                     elif mode=="add" and trap_id in data["Traps"]["Trap ID"].tolist(): st.error("That Trap ID already exists.")
                     else:
-                        row=[trap_id,product,build,site,str(order),location,camera,dtstr(datetime.combine(dep_date,dep_time)),image,status,notes]
+                        deployment_value=""
+                        if mode=="edit":
+                            deployment_value=str(existing["Deployment Start"])
+                            if stored_deployment is not None and dep_date is not None:
+                                picked_deployment=datetime.combine(dep_date,dep_time)
+                                if picked_deployment.replace(second=0,microsecond=0)!=stored_deployment.replace(second=0,microsecond=0):
+                                    deployment_value=dtstr(picked_deployment)
+                        row=[trap_id,product,build,site,str(order),location,camera,deployment_value,image,status,notes]
                         if mode=="edit":
                             idx=data["Traps"].index[data["Traps"]["Trap ID"]==trap_id][0]
                             old_build=data["Traps"].at[idx,"Build Version"]
@@ -7356,12 +9033,9 @@ elif page == "setup":
                                 set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."])
                                 st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
                         else:
-                            deployment_time=datetime.combine(dep_date,dep_time)
                             data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True)
-                            if status=="Active":
-                                start_window(data,trap_id,deployment_time)
                             save_data(data)
-                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "An active test window was started." if status=="Active" else "The trap was added as inactive."])
+                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "The trap was added as inactive. Activate it when a trial starts."])
                             st.session_state.pop("setup_mode",None); st.rerun()
                 if mode=="edit":
                     st.divider()
@@ -8404,7 +10078,7 @@ elif page == "data_management":
                     selected_backup = st.selectbox(
                         "Backup",
                         backup_options,
-                        format_func=lambda value: f"{Path(value).name} · {workbook_summary(Path(value))}",
+                        format_func=lambda value: f"{backup_label(Path(value))} · {workbook_summary(Path(value))}",
                         key="emergency_recovery_backup",
                     )
                     confirm_restore = st.checkbox(

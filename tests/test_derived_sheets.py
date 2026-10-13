@@ -83,7 +83,7 @@ def test_kills_sheet_row_count_matches_physical_kill_population(tmp_path: Path) 
     assert out["columns"] == [
         "Window ID", "Trap ID", "Site ID", "Build Version", "Kill Time",
         "Final Humane Kill", "Interaction To Kill Min", "Necropsy Assessment",
-        "Animal Weight Range", "Bag ID",
+        "Animal Weight Range", "Bag ID", "Trial ID",
     ]
 
 

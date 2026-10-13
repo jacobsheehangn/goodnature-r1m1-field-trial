@@ -11,3 +11,7 @@ gatherUsageStats = false
 
 [client]
 toolbarMode = "minimal"
+
+[server]
+# Serves ./static at /app/static (fonts, icons). Public and unauthenticated: only publishable files go there.
+enableStaticServing = true
