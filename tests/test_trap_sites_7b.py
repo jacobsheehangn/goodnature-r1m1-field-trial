@@ -123,18 +123,18 @@ def test_a_site_due_today_is_orange_and_one_checked_today_is_green_and_not_tinte
         assert man["background"] == kai["background"] == wai["background"] == "rgb(255, 255, 255)", (man["background"], kai["background"], wai["background"])
 
 
-def test_the_title_counts_what_is_due_today_and_says_nothing_when_nothing_is(page: Page, tmp_path: Path) -> None:
+def test_the_title_counts_what_is_due_now_and_says_nothing_when_nothing_is(page: Page, tmp_path: Path) -> None:
     page.set_viewport_size(PHONE)
     # Overdue counts as due; a site with a visit in progress and a site with no trial running do not.
     data_dir = tmp_path / "a"; data_dir.mkdir()
     with _serve(data_dir, MIXED) as url:
         _open(page, url)
-        assert page.evaluate(TITLE_STAT) == {"stat": "1", "label": "Due today"}
+        assert page.evaluate(TITLE_STAT) == {"stat": "1", "label": "Due now"}
     data_dir = tmp_path / "b"; data_dir.mkdir()
     with _serve(data_dir, DONE_TODAY) as url:
         _open(page, url)
-        assert page.evaluate(TITLE_STAT) == {"stat": "1", "label": "Due today"}
-    # Nothing due: no number, rather than a "0 Due today".
+        assert page.evaluate(TITLE_STAT) == {"stat": "1", "label": "Due now"}
+    # Nothing due: no number, rather than a "0 Due now". (14 Oct 2026: the label was "Due today"; the figure counts overdue sites too.)
     data_dir = tmp_path / "c"; data_dir.mkdir()
     with _serve(data_dir, NOTHING_DUE) as url:
         _open(page, url)
@@ -170,7 +170,11 @@ def test_the_card_buttons_fill_the_card_on_a_phone_and_keep_their_natural_width_
                     assert all(abs(x["width"] - b["inner"]) <= 2 for x in every), f"on a phone every button fills the card. {where}"
                 else:
                     assert all(x["width"] < b["inner"] / 2 for x in every), f"on desktop a button keeps its natural width. {where}"
-                    assert all(abs(x["left"]) <= 2 for x in every), f"and sits at the card's left edge. {where}"
+                    # 14 Oct 2026 (Trap sites on desktop): the button is at the card's left edge and its text action sits beside it, 20px away,
+                    # no longer stacked under it.
+                    first, second = (b["primary"] + b["secondary"])[0], b["tertiary"][0]
+                    assert abs(first["left"]) <= 2, f"the button sits at the card's left edge. {where}"
+                    assert abs(second["left"] - (first["width"] + 20)) <= 3, f"and its text action sits beside it, 20px away. {where}"
 
 
 def test_a_site_checked_today_offers_start_checking_as_a_secondary_button_and_nothing_else_changed(page: Page, tmp_path: Path) -> None:

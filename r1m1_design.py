@@ -259,6 +259,18 @@ COMPONENT_CSS = f"""
    on desktop they keep their natural width, like every other 7a screen (see the 700px block below). */
 .stApp [class*="st-key-card_site_"]{{gap:8px}}
 .stApp [class*="st-key-card_site_"] .r1-msg{{margin:2px 0 4px}}
+.stApp [class*="st-key-acts_site_"]{{gap:8px}}
+/* A status and, beside it on the same line, the "Not tracked" tag. */
+.r1-statusrow{{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px}}
+.r1-tag{{display:inline-flex;align-items:center;min-height:26px;padding:0 12px;border-radius:var(--r-pill);background:var(--orange-10);color:var(--orange-ink);font-size:13px;line-height:18px;font-weight:700}}
+@media (min-width:701px){{
+  /* Trap sites on desktop: two columns, top-aligned, 16px apart; each card's two actions side by side, 20px apart. */
+  [class*="st-key-grid_sites"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px!important;align-items:start}}
+  /* the number is top-aligned with the name on desktop (the phone keeps it where it is) */
+  [class*="st-key-card_site_"] .r1-titlerow{{align-items:flex-start}}
+  .stApp [class*="st-key-acts_site_"]{{flex-direction:row!important;align-items:center;gap:20px}}
+  .stApp [class*="st-key-acts_site_"] [data-testid="stElementContainer"]{{width:auto!important}}
+}}
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
 @media (max-width:700px){{
@@ -274,6 +286,13 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
   .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
+  /* End trial… sits under the Visits card on desktop. On a phone it stays where it always was, after the Evidence card: the left column's
+     children join the stacked row so the block can be ordered after the right column, and a rule above it stands in for the old divider. */
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:first-child,
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:first-child>[data-testid="stVerticalBlock"]{{display:contents}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:last-child{{order:1}}
+  .stApp [data-testid="stLayoutWrapper"]:has(>[class*="st-key-hub_end_block"]){{order:2;flex:0 0 100%}}
+  .stApp [class*="st-key-hub_end_block"]{{border-top:1px solid var(--ink-10);padding-top:16px;margin-top:4px}}
 }}
 [class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
 [class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
@@ -293,6 +312,8 @@ COMPONENT_CSS = f"""
 [class*="st-key-listrow_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
 [class*="st-key-listrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important}}
 .stApp [class*="st-key-listrow_next"]{{background:var(--orange-10);border-radius:var(--r-panel);padding:12px;border-bottom:0}}
+/* Follow-ups: the highlight reaches 7px into the card so its icon and Review button line up with the other rows' (they sat 12px off). */
+.stApp [class*="st-key-listrow_next_followup_"]{{margin-left:-7px;margin-right:-7px;width:calc(100% + 14px)!important;max-width:none;box-sizing:border-box;padding:12px 7px}}
 .r1-donerow{{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
 .r1-donebox{{flex:0 0 44px;width:44px;height:44px;border-radius:var(--r-input);background:var(--green-10);color:var(--green);display:flex;align-items:center;justify-content:center}}
 .stApp [class*="st-key-listrow_"][class*="end_visit_"],.stApp [class*="st-key-listrow_"][class*="end_followup_"],.r1-donerow.is-last{{border-bottom:0}}
@@ -340,6 +361,8 @@ COMPONENT_CSS = f"""
 
 NAV_CSS = """
 .st-key-app_nav{margin-bottom:5px}
+/* The pills are drawn outside the screen container, so they take the app font here (they were Streamlit's own Source Sans). */
+.st-key-app_nav,.st-key-app_nav *:not([data-testid="stIconMaterial"]){font-family:var(--font)}
 .st-key-nav_phone,.st-key-nav_desktop{gap:8px!important;flex-wrap:nowrap!important;align-items:center}
 @media (max-width:340px){.st-key-nav_phone{flex-wrap:wrap!important}}  /* a 320px phone cannot fit three pills on one row */
 @media (min-width:701px){.st-key-nav_phone{display:none!important}}
@@ -365,21 +388,26 @@ NAV_CSS = """
 .stApp [class*="st-key-navmore_on"] [data-testid="stPopoverButton"]:is(:hover,:focus,:active,[aria-expanded="true"]){background:var(--orange-10);color:var(--ink)}
 /* the menu: Streamlit renders it in a portal outside .stApp, so these rules carry no .stApp prefix */
 body [data-testid="stPopoverBody"],body [data-testid="stPopoverBody"] *:not([data-testid="stIconMaterial"]){font-family:var(--font)}
-body [data-testid="stPopoverBody"]{border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:8px 0;border:0;min-width:min(300px,calc(100vw - 30px))}
+body [data-testid="stPopoverBody"]{border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:8px 0;border:0;width:min(320px,calc(100vw - 30px));min-width:min(300px,calc(100vw - 30px))}
 body [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"]{gap:0}
 body [data-testid="stPopoverBody"] [data-testid="stElementContainer"],body [data-testid="stPopoverBody"] [data-testid="stPageLink"],
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"]>div,body [data-testid="stPopoverBody"] div.stButton{width:100%!important}
 body [data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]{margin-bottom:0!important}
+/* Streamlit gives each element a margin that made the 48px rows overlap by 12px (a visible 40px pitch): rows sit edge to edge. */
+body [data-testid="stPopoverBody"] [data-testid="stElementContainer"],body [data-testid="stPopoverBody"] [data-testid="stPageLink"]{margin:0!important}
+body [data-testid="stPopoverBody"] [data-testid="stElementContainer"]:has([data-testid="stPageLink"]),body [data-testid="stPopoverBody"] [data-testid="stPageLink"]{height:48px;padding:0}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a,body [data-testid="stPopoverBody"] div.stButton button{
   min-height:48px;height:auto;width:100%;display:flex;align-items:center;justify-content:space-between;background:transparent;border-radius:0;border:0;
-  border-bottom:1px solid var(--ink-05);outline:0;box-shadow:none;padding:0 20px;color:var(--ink);text-decoration:none;box-sizing:border-box}
+  border-bottom:1px solid var(--ink-05);outline:0;box-shadow:none;padding:0 16px;color:var(--ink);text-decoration:none;box-sizing:border-box}
 body [data-testid="stPopoverBody"] div.stButton button{justify-content:flex-start;border-bottom:0;text-align:left}
 body [data-testid="stPopoverBody"] div.stButton button>div{width:100%;justify-content:flex-start}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a p,body [data-testid="stPopoverBody"] div.stButton button p{font-size:16px;line-height:22px;font-weight:400;color:var(--ink)}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a:is([aria-disabled="true"],[disabled]) p{font-weight:700}
-body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 16px 6px}
+/* the help under the Operator field is a visible line, not a tooltip, and carries the divider above Sign out */
+body .r1-menu-help{font-size:13px;line-height:18px;color:var(--ink-70);padding:0 16px 12px;border-bottom:1px solid var(--ink-05)}
 /* the Operator name sits in the menu like any other row: same side padding, a 44px field */
-body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:10px 20px 12px;border-bottom:1px solid var(--ink-05)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:0 16px 8px}
 body [data-testid="stPopoverBody"] [data-testid="stTextInput"] label p{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70)}
 body [data-testid="stPopoverBody"] [data-testid="stTextInput"] input{min-height:44px;font-size:16px}
 """
@@ -522,6 +550,10 @@ SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 # single column (a form is not stretched across a desktop).
 HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
+# The same 760px single column for a page not drawn inside the screen container (the camera review and camera issue task forms, until batch 1
+# redraws them): everything under the page's top level except the navigation, left-aligned, desktop only.
+NARROW_FORM_CSS = ("<style>@media (min-width:701px){[data-testid=\"stMainBlockContainer\"]>[data-testid=\"stVerticalBlock\"]>*:not(.st-key-app_nav)"
+                   "{max-width:760px}}</style>")
 
 
 def stepper_html(current: int, done_through: int = 0) -> str:
@@ -570,6 +602,20 @@ VISIT_COMPLETE_CSS = """<style>
 .r1-vc-row .t{font-size:17px;line-height:22px;font-weight:700}
 .r1-vc-row .d{font-size:14px;line-height:20px;color:var(--ink-70)}
 .r1-vc-next{font-size:15px;line-height:20px;color:var(--ink-70)}
+.r1-vc-site .dk{display:none}
+@media (min-width:701px){
+  /* Desktop: one compact success card across the top: the tick, the title and "site · next visit due" on the left, the counts on the right. */
+  .r1-vc{display:grid;grid-template-columns:auto 1fr auto;grid-template-areas:"badge title stats" "badge site stats" "needs needs needs";align-items:center;
+    column-gap:20px;row-gap:0;max-width:none;margin:0 0 16px;text-align:left;background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:18px 24px}
+  .r1-vc-badge{grid-area:badge;margin:0;width:72px;height:72px}
+  .r1-vc-badge span{width:48px;height:48px}
+  .r1-vc-title{grid-area:title;font-size:30px;line-height:36px;align-self:end}
+  .r1-vc-site{grid-area:site;margin-top:0;align-self:start}
+  .r1-vc-site .dk{display:inline}
+  .r1-vc-stats{grid-area:stats;width:auto;background:transparent;box-shadow:none;padding:0;margin:0;gap:28px;justify-content:flex-end}
+  .r1-vc-needs{grid-area:needs;margin-top:14px}
+  .r1-vc-next{display:none}
+}
 </style>"""
 
 
@@ -585,9 +631,10 @@ def visit_complete_html(site: str, stats, needs, next_due: str = "") -> str:
         )
         needs_html = f'<div class="r1-vc-needs"><h3>Needs doing next</h3><div class="r1-vc-list">{rows}</div></div>'
     next_html = f'<div class="r1-vc-next">Next visit due {next_due}.</div>' if next_due else ""
+    dk = f'<span class="dk"> · next visit due {next_due}</span>' if next_due else ""  # desktop only: the compact card says it on the site line
     return (
         f'<div class="r1-vc" role="status">'
         f'<div class="r1-vc-badge"><span>{icon("check", 36)}</span></div>'
-        f'<div class="r1-vc-title" role="heading" aria-level="1">Visit complete</div><div class="r1-vc-site">{site}</div>'
+        f'<div class="r1-vc-title" role="heading" aria-level="1">Visit complete</div><div class="r1-vc-site">{site}{dk}</div>'
         f'<div class="r1-vc-stats">{stat_html}</div>{needs_html}{next_html}</div>'
     )
