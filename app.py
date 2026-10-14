@@ -4432,6 +4432,103 @@ def apply_camera_review(
     refresh_review_status(data,item["Window ID"])
 
 
+# ---- Hardware tasks (Trap not ready, Camera issue): restart from the task, or keep it open (Part B batch 1, 14 Oct 2026) -------------------------------
+# Saving one of these with the trap ready asks "Back in service from" and, in the same single write that completes the task, starts the trap's new
+# test window then (through start_window(), so it is stamped with the site's open trial), with an audit row. A task for a trap that is still not ready
+# is not closed: the note is added and the task stays open ("Save note, keep task open"), so the trap stays "awaiting service" and not a defect.
+
+HARDWARE_RESTART_REASONS = {
+    "another_task": "another hardware task is still open for this trap",
+    "has_window": "this trap already has an open window (a check has restarted it)",
+    "not_active": "this trap is no longer active",
+}
+
+
+def back_in_service_floor(data, trap_id):
+    """The moment a trap can be back in service no earlier than: the end of its latest closed window (the check that took it out)."""
+    windows = data["Windows"][(data["Windows"]["Trap ID"].astype(str) == str(trap_id)) & (data["Windows"]["Status"] == "Closed")]
+    ends = [t for t in (parse_dt(v) for v in windows["End Time"]) if t is not None]
+    return max(ends) if ends else None
+
+
+def back_in_service_error(data, trap_id, when):
+    """The refusal words for a "Back in service from" time, or None. Not before the check that took the trap out; not in the future."""
+    if when is None:
+        return "Enter when the trap went back into service."
+    floor = back_in_service_floor(data, trap_id)
+    if floor is not None and when < floor:
+        return f"Back in service can't be before the check that took it out ({human_dt(floor)})."
+    if when > now():
+        return "Back in service can't be in the future."
+    return None
+
+
+def hardware_restart_blocker(data, item):
+    """Why completing this task must not start a window, or "" when it can: the trap is not Active; it already has an open window; another
+    hardware task is still open for it. The task closes in every case."""
+    trap_id = str(item["Trap ID"])
+    trap = data["Traps"][data["Traps"]["Trap ID"].astype(str) == trap_id]
+    if trap.empty or str(trap.iloc[0]["Status"]) != "Active":
+        return "not_active"
+    if open_window(data, trap_id) is not None:
+        return "has_window"
+    fu = data["Followups"]
+    others = fu[(fu["Trap ID"].astype(str) == trap_id) & (fu["Status"] == "Open") & fu["Follow-up Type"].isin(HARDWARE_TASK_TYPES)
+                & (fu["Follow-up ID"].astype(str) != str(item["Follow-up ID"]))]
+    return "another_task" if not others.empty else ""
+
+
+def _apply_camera_evidence_gap(data, item, evidence_gap):
+    """Camera issue: a past-evidence answer of Not usable or Could not assess marks the reviewed window's evidence unusable (as before)."""
+    idxs = data["Windows"].index[data["Windows"]["Window ID"] == item["Window ID"]].tolist()
+    if idxs and evidence_gap in ["Not usable", "Could not assess"]:
+        data["Windows"].at[idxs[0], "Evidence Usable"] = "No"
+        recalculate_window(data, idxs[0])
+
+
+def complete_hardware_task(data, item, *, notes, back_in_service, evidence_gap=None):
+    """Completes a Trap not ready or Camera issue task whose trap is ready again, and restarts the trap in the same write. Staged on a copy and
+    saved once; if anything raises, nothing is written. Returns {"restarted": bool, "blocker": reason or "", "window_id": ID or ""}.
+    Raises ValueError (with the operator's words) when the time is refused; changes nothing then. Never writes Windows.Evidence Usable except through
+    evidence_gap (the Camera issue's past-evidence answer)."""
+    error = back_in_service_error(data, item["Trap ID"], back_in_service)
+    if error:
+        raise ValueError(error)
+    staged = _staged_copy(data)
+    fid = str(item["Follow-up ID"])
+    blocker = hardware_restart_blocker(staged, item)
+    window_id = ""
+    if evidence_gap is not None:
+        _apply_camera_evidence_gap(staged, item, evidence_gap)
+    fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+    staged["Followups"].at[fidx, "Status"] = "Complete"
+    staged["Followups"].at[fidx, "Completed Time"] = dtstr()
+    staged["Followups"].at[fidx, "Notes"] = notes
+    if not blocker:
+        window_id = start_window(staged, str(item["Trap ID"]), back_in_service)
+        audit_change(staged, "Trap", str(item["Trap ID"]), "Active test window", "", window_id, f"Back in service after {item['Follow-up Type']}")
+    refresh_review_status(staged, item["Window ID"])
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"restarted": not blocker, "blocker": blocker, "window_id": window_id}
+
+
+def keep_hardware_task_open(data, item, *, note, evidence_gap=None):
+    """A task whose trap is still not ready stays Open: the note is appended with its date and time (earlier notes kept) and nothing restarts.
+    For a Camera issue the past-evidence answer is still applied, as before. One write."""
+    staged = _staged_copy(data)
+    fid = str(item["Follow-up ID"])
+    fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+    earlier = str(staged["Followups"].at[fidx, "Notes"]).strip()
+    line = f"{human_dt(now(), include_year=True)} · {note.strip()}"
+    staged["Followups"].at[fidx, "Notes"] = f"{earlier}\n{line}" if earlier else line
+    if evidence_gap is not None:
+        _apply_camera_evidence_gap(staged, item, evidence_gap)
+        refresh_review_status(staged, item["Window ID"])
+    save_data(staged)
+    _adopt_staged(data, staged)
+
+
 def suspect_earliest_window_candidates(data: Dict[str, pd.DataFrame], product: str) -> list:
     """Flag traps of the given product whose earliest window's Start Time falls
     on a different calendar day than the trap's own Deployment Start.
