@@ -259,6 +259,16 @@ COMPONENT_CSS = f"""
    on desktop they keep their natural width, like every other 7a screen (see the 700px block below). */
 .stApp [class*="st-key-card_site_"]{{gap:8px}}
 .stApp [class*="st-key-card_site_"] .r1-msg{{margin:2px 0 4px}}
+.stApp [class*="st-key-acts_site_"]{{gap:8px}}
+/* A status and, beside it on the same line, the "Not tracked" tag. */
+.r1-statusrow{{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:2px}}
+.r1-tag{{display:inline-flex;align-items:center;min-height:28px;padding:0 12px;border-radius:var(--r-pill);background:var(--orange-10);color:var(--orange-ink);font-size:15px;line-height:20px;font-weight:700}}
+@media (min-width:701px){{
+  /* Trap sites on desktop: two columns, top-aligned, 16px apart; each card's two actions side by side, 20px apart. */
+  [class*="st-key-grid_sites"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px!important;align-items:start}}
+  .stApp [class*="st-key-acts_site_"]{{flex-direction:row!important;align-items:center;gap:20px}}
+  .stApp [class*="st-key-acts_site_"] [data-testid="stElementContainer"]{{width:auto!important}}
+}}
 .r1-label{{font-size:16px;line-height:22px;font-weight:700;margin:6px 0 2px}}
 .r1-card-title{{font-size:22px;line-height:30px;font-weight:700;margin-bottom:4px}}
 @media (max-width:700px){{
@@ -340,6 +350,8 @@ COMPONENT_CSS = f"""
 
 NAV_CSS = """
 .st-key-app_nav{margin-bottom:5px}
+/* The pills are drawn outside the screen container, so they take the app font here (they were Streamlit's own Source Sans). */
+.st-key-app_nav,.st-key-app_nav *:not([data-testid="stIconMaterial"]){font-family:var(--font)}
 .st-key-nav_phone,.st-key-nav_desktop{gap:8px!important;flex-wrap:nowrap!important;align-items:center}
 @media (max-width:340px){.st-key-nav_phone{flex-wrap:wrap!important}}  /* a 320px phone cannot fit three pills on one row */
 @media (min-width:701px){.st-key-nav_phone{display:none!important}}
@@ -365,21 +377,26 @@ NAV_CSS = """
 .stApp [class*="st-key-navmore_on"] [data-testid="stPopoverButton"]:is(:hover,:focus,:active,[aria-expanded="true"]){background:var(--orange-10);color:var(--ink)}
 /* the menu: Streamlit renders it in a portal outside .stApp, so these rules carry no .stApp prefix */
 body [data-testid="stPopoverBody"],body [data-testid="stPopoverBody"] *:not([data-testid="stIconMaterial"]){font-family:var(--font)}
-body [data-testid="stPopoverBody"]{border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:8px 0;border:0;min-width:min(300px,calc(100vw - 30px))}
+body [data-testid="stPopoverBody"]{border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:8px 0;border:0;width:min(320px,calc(100vw - 30px));min-width:min(300px,calc(100vw - 30px))}
 body [data-testid="stPopoverBody"] [data-testid="stVerticalBlock"]{gap:0}
 body [data-testid="stPopoverBody"] [data-testid="stElementContainer"],body [data-testid="stPopoverBody"] [data-testid="stPageLink"],
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"]>div,body [data-testid="stPopoverBody"] div.stButton{width:100%!important}
 body [data-testid="stPopoverBody"] [data-testid="stMarkdownContainer"]{margin-bottom:0!important}
+/* Streamlit gives each element a margin that made the 48px rows overlap by 12px (a visible 40px pitch): rows sit edge to edge. */
+body [data-testid="stPopoverBody"] [data-testid="stElementContainer"],body [data-testid="stPopoverBody"] [data-testid="stPageLink"]{margin:0!important}
+body [data-testid="stPopoverBody"] [data-testid="stElementContainer"]:has([data-testid="stPageLink"]),body [data-testid="stPopoverBody"] [data-testid="stPageLink"]{height:48px;padding:0}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a,body [data-testid="stPopoverBody"] div.stButton button{
   min-height:48px;height:auto;width:100%;display:flex;align-items:center;justify-content:space-between;background:transparent;border-radius:0;border:0;
-  border-bottom:1px solid var(--ink-05);outline:0;box-shadow:none;padding:0 20px;color:var(--ink);text-decoration:none;box-sizing:border-box}
+  border-bottom:1px solid var(--ink-05);outline:0;box-shadow:none;padding:0 16px;color:var(--ink);text-decoration:none;box-sizing:border-box}
 body [data-testid="stPopoverBody"] div.stButton button{justify-content:flex-start;border-bottom:0;text-align:left}
 body [data-testid="stPopoverBody"] div.stButton button>div{width:100%;justify-content:flex-start}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a p,body [data-testid="stPopoverBody"] div.stButton button p{font-size:16px;line-height:22px;font-weight:400;color:var(--ink)}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a:is([aria-disabled="true"],[disabled]) p{font-weight:700}
-body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 20px 6px}
+body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 16px 6px}
+/* the help under the Operator field is a visible line, not a tooltip, and carries the divider above Sign out */
+body .r1-menu-help{font-size:13px;line-height:18px;color:var(--ink-70);padding:0 16px 12px;border-bottom:1px solid var(--ink-05)}
 /* the Operator name sits in the menu like any other row: same side padding, a 44px field */
-body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:10px 20px 12px;border-bottom:1px solid var(--ink-05)}
+body [data-testid="stPopoverBody"] [data-testid="stTextInput"]{padding:0 16px 8px}
 body [data-testid="stPopoverBody"] [data-testid="stTextInput"] label p{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70)}
 body [data-testid="stPopoverBody"] [data-testid="stTextInput"] input{min-height:44px;font-size:16px}
 """
