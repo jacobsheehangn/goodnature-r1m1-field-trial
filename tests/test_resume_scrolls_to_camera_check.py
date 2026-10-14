@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,21 +100,17 @@ def test_resuming_a_camera_trap_scrolls_to_the_camera_check_section(
     camera_trap_found = False
     for idx in range(5):
         page.get_by_role("button", name="Check", exact=True).nth(idx).click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
-        page.get_by_text("Trap still set, no animal", exact=True).click()
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
+        cf.pick_finding(page, "Trap still set, no animal")
         page.wait_for_timeout(300)
         if page.get_by_text("Camera working and covering the trap?", exact=True).count():
             camera_trap_found = True
             break
-        page.get_by_role("button", name="Back to trap selector", exact=False).click()
+        page.get_by_role("button", name="Back to trap list", exact=False).click()
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     assert camera_trap_found, "none of the first 5 seeded traps have a camera - test setup assumption failed"
 
-    service_group = page.get_by_role("radiogroup", name="Trap relured, reset and ready?")
-    service_yes = service_group.get_by_role("radio", name="Yes", exact=True)
-    service_yes.focus()
-    page.keyboard.press("Space")
-    expect(service_yes).to_be_checked(timeout=10_000)
+    cf.pick(page, "service", "Yes")
 
     resume_url = page.url
     browser = context1.browser
@@ -124,7 +121,7 @@ def test_resuming_a_camera_trap_scrolls_to_the_camera_check_section(
         page2.goto(resume_url, wait_until="domcontentloaded", timeout=60_000)
         expect(page2.get_by_text("Resume checking?", exact=True)).to_be_visible(timeout=15_000)
         page2.get_by_role("button", name="Resume", exact=True).click()
-        expect(page2.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+        expect(page2.get_by_text("What you found", exact=True)).to_be_visible(timeout=30_000)
         page2.wait_for_timeout(1200)
 
         anchor_top = page2.evaluate(
@@ -137,6 +134,6 @@ def test_resuming_a_camera_trap_scrolls_to_the_camera_check_section(
         assert 0 <= anchor_top <= 400, (
             f"expected the page to land scrolled to the Camera check section, anchor was at y={anchor_top}"
         )
-        expect(page2.get_by_text("Camera check", exact=True)).to_be_in_viewport(timeout=5_000)
+        expect(page2.get_by_text("Camera working and covering the trap?", exact=True)).to_be_in_viewport(timeout=5_000)  # Phase 6: no "Camera check" heading, the question itself
     finally:
         context2.close()

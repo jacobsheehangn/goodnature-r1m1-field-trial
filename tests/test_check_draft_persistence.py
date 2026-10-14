@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -204,12 +205,12 @@ def test_resume_after_a_fresh_session_restores_finding_and_notes(
     page.get_by_role("button", name="Start checking", exact=False).first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
+    cf.pick_finding(page, "Trap still set, no animal")
+    expect(page.get_by_text("What you found", exact=True)).to_be_visible(timeout=10_000)
 
-    notes_box = page.locator('textarea[aria-label="Anything else to record?"]')
+    notes_box = cf.notes_box(page)
     notes_box.wait_for(timeout=10_000)
     notes_box.fill("resume draft regression test notes")
     notes_box.press("Tab")  # blur, so Streamlit actually processes the change and reruns
@@ -225,10 +226,10 @@ def test_resume_after_a_fresh_session_restores_finding_and_notes(
         page2.goto(resume_url, wait_until="domcontentloaded", timeout=60_000)
         expect(page2.get_by_text("Resume checking?", exact=True)).to_be_visible(timeout=15_000)
         page2.get_by_role("button", name="Resume", exact=True).click()
-        expect(page2.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+        expect(page2.get_by_text("What you found", exact=True)).to_be_visible(timeout=30_000)
 
-        expect(page2.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
-        restored_notes = page2.locator('textarea[aria-label="Anything else to record?"]')
+        expect(page2.get_by_text("Trap still set, no animal", exact=True)).to_be_visible(timeout=10_000)
+        restored_notes = cf.notes_box(page2)
         expect(restored_notes).to_have_value("resume draft regression test notes", timeout=10_000)
     finally:
         context2.close()

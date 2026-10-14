@@ -141,7 +141,7 @@ def _open_check(page: Page, url: str, nth: int) -> None:
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).nth(nth).click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
 
 def _finish_routine_tail(page: Page, has_camera: bool) -> None:
@@ -172,7 +172,7 @@ def test_no_carcass_kill_saves_without_bag_photos_or_necropsy_and_a_collected_ki
     assert page.get_by_text("Animal condition when found", exact=True).count() == 0
     assert page.get_by_role("checkbox", name=re.compile("Bag labelled")).count() == 0
     # Species is still required, and Rat type when it is a Rat.
-    _radio(page, "Species", "Rat")
+    _radio(page, "What was it?", "Rat")
     expect(page.get_by_role("radiogroup", name="Rat type")).to_be_visible(timeout=10_000)
     _radio(page, "Rat type", "Ship rat")
     _finish_routine_tail(page, has_camera=True)
@@ -180,12 +180,12 @@ def test_no_carcass_kill_saves_without_bag_photos_or_necropsy_and_a_collected_ki
     # 2. A kill WITH a carcass, on the next trap: the original form, and the
     # next bag number must still be the first one - the no-carcass kill used none.
     page.get_by_role("button", name="Check", exact=True).nth(0).click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
     page.get_by_role("radio", name="Dead animal found").check(force=True)
     _radio(page, "Carcass collected?", "Yes")
     expect(page.get_by_text(re.compile(r"^Bag ID: [A-Z]{3}-001$"))).to_be_visible(timeout=15_000)
     expect(page.get_by_text("Photos", exact=True)).to_be_visible()
-    _radio(page, "Species", "Rat")
+    _radio(page, "What was it?", "Rat")
     _radio(page, "Rat type", "Norway rat")
     _radio(page, "Animal condition when found", "Dead and apparently normal")
     page.get_by_role("checkbox", name=re.compile(r"Bag labelled")).evaluate("el => el.click()")

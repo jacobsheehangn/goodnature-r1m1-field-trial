@@ -143,7 +143,7 @@ def test_a_trap_with_history_can_reopen_its_window_inline_with_a_real_effective_
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("This trap has no active test window.", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("This trap has no active test window", exact=True)).to_be_visible(timeout=30_000)  # Phase 6 board P6NoWindow: no full stop
     query = dict(pair.split("=") for pair in page.url.split("?", 1)[1].split("&") if "=" in pair)
     assert query.get("wf_trap", "") == seeded["trap_id"], (
         f"expected the first Check button to open {seeded['trap_id']!r}, got {query.get('wf_trap')!r} - "
@@ -152,7 +152,7 @@ def test_a_trap_with_history_can_reopen_its_window_inline_with_a_real_effective_
 
     # The core regression check: a trap with history must get a real effective
     # time input, not a button that can only ever fail.
-    expect(page.get_by_text("This trap has prior history", exact=False)).to_be_visible(timeout=10_000)
+    expect(page.get_by_text("It has earlier history, so enter when it actually went back into service.", exact=False)).to_be_visible(timeout=10_000)
     reason_box = page.get_by_role("textbox", name="Reason", exact=True)
     expect(reason_box).to_be_visible(timeout=10_000)
 
@@ -164,7 +164,7 @@ def test_a_trap_with_history_can_reopen_its_window_inline_with_a_real_effective_
     page.keyboard.press("Tab")
     expect(start_button).to_be_enabled(timeout=10_000)
     start_button.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
     workbook_path = data_dir / "field_trial_data_v8_6_5.xlsx"
     windows = pd.read_excel(workbook_path, sheet_name="Windows", dtype=str)

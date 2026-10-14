@@ -123,12 +123,21 @@ _CHECK_DATA_URI = (
 )
 
 _SPECIES_ORDER = ("rat", "mouse", "hedgehog", "question")  # Rat, Mouse, Non-target (hedgehog stands in), Unknown
+# The six outcomes of a check, in the order of the page's FINDINGS: still set, dead animal, fired, disturbed, missing, unable to check.
+_OUTCOME_ICONS = ("check-circle", "rat", "burst", "warn-circle", "ban", "info-circle")
 
 
 def _species_icon_rules() -> str:
     return "".join(
         f'[class*="st-key-species"] [data-testid="stRadioGroup"]>label:nth-child({i}){{--icon:url({STATIC_URL}/icons/{name}.svg)}}'
         for i, name in enumerate(_SPECIES_ORDER, start=1)
+    )
+
+
+def _outcome_icon_rules() -> str:
+    return "".join(
+        f'[class*="st-key-rows_outcome"] [data-testid="stRadioGroup"]>label:nth-child({i}){{--icon:url({STATIC_URL}/icons/{name}.svg)}}'
+        for i, name in enumerate(_OUTCOME_ICONS, start=1)
     )
 
 
@@ -223,6 +232,53 @@ COMPONENT_CSS = f"""
    that same pseudo-element, so it is put back in the row's flex layout (at the right) or it sits over the first letter of the label. */
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked)::after{{
   position:static;left:auto;top:auto;transform:none;border:0;background:var(--orange) {_CHECK_DATA_URI} center/12px no-repeat}}
+
+/* ---- The check form (Phase 6) ---- */
+/* The six outcomes: option rows with an icon at the left and the ring at the right. */
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]{{justify-content:flex-start;gap:12px}}
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]::before{{
+  display:block;content:"";position:static;left:auto;top:auto;transform:none;border:0;border-radius:0;margin:0;
+  flex:0 0 24px;width:24px;height:24px;background:var(--ink);-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}}
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]>div{{flex:1 1 auto}}
+{_outcome_icon_rules()}
+/* A field's question, as a heading. */
+[class*="st-key-field"] [data-testid="stWidgetLabel"] p{{font-size:16px;line-height:22px;font-weight:700;color:var(--ink)}}
+/* A field the Save refused: one red ring round the whole group, and a line under it that says what to do. */
+[class*="st-key-fielderr_"] [data-testid="stRadioGroup"],[class*="st-key-fielderr_"] [role="radiogroup"],[class*="st-key-fielderr_"] [data-testid="stTextArea"] textarea,
+[class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
+[class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
+.r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
+.r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
+/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
+[class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
+/* A tick that is a whole row: "Bag labelled", "Camera adjusted". */
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:56px;width:100%;box-sizing:border-box;
+  border-radius:var(--r-panel);background:var(--ink-05);padding:0 16px;cursor:pointer}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
+/* The found-outcome card: its row keeps the text and the Change button side by side, with no rule under it. */
+[class*="st-key-card_check_found"] [class*="st-key-listrow_"]{{border-bottom:0;padding:0}}
+/* A switch row: the label at the left, the switch at the right ("Change check time"). */
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label{{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;padding:0;cursor:pointer}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{position:relative;flex:0 0 52px;width:52px;height:32px;box-sizing:border-box;padding:0;margin:0;
+  border:0!important;border-radius:16px;background:rgba(0,0,0,.2)!important;box-shadow:none}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label::before,[class*="st-key-sw_"] [data-testid="stCheckbox"] label::after,
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)::before,[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)::after{{display:none!important}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)>div{{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff!important;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);transform:none!important;border:0}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label:has(input:checked)>div:nth-of-type(1){{background:var(--orange)!important}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label:has(input:checked)>div:nth-of-type(1)>div{{left:23px}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
+/* An expander as a quiet grey row with its chevron at the right ("Anything else to record?"). */
+[class*="st-key-more_"] [data-testid="stExpander"],[class*="st-key-more_"] [data-testid="stExpander"] details{{border:0!important;border-radius:var(--r-panel);background:var(--ink-05)!important;overflow:hidden;box-shadow:none}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary{{background:transparent!important}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary{{min-height:48px;padding:0 16px}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary>span{{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:center;width:100%}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary p{{font-size:16px;line-height:22px}}
+[class*="st-key-more_"] [data-testid="stExpander"] [data-testid="stExpanderDetails"]{{padding:0 16px 16px}}
+/* The Save button while it works: the spinner state of the Save board. */
+.st-key-save_saving button:disabled p{{color:#fff}}
 
 /* ---- Final-result rows: the same option rows, two across ---- */
 [class*="st-key-rows2"] [data-testid="stRadioGroup"]{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
@@ -542,9 +598,9 @@ def stepper_html(current: int, done_through: int = 0) -> str:
     return f'<div class="r1-stepper">{"".join(parts)}</div>'
 
 
-def message_html(kind: str, title: str, detail: str = "") -> str:
-    """Message panel: warn / error / success / info, icon + bold title + 15px detail."""
-    icon_name = {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
+def message_html(kind: str, title: str, detail: str = "", icon_name: str = "") -> str:
+    """Message panel: warn / error / success / info, icon + bold title + 15px detail. `icon_name` replaces the kind's own icon."""
+    icon_name = icon_name or {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
     body = f'<div class="d">{detail}</div>' if detail else ""
     heading = f'<div class="t">{title}</div>' if title else ""
     return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div>{heading}{body}</div></div>'

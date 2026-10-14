@@ -49,6 +49,7 @@ from photo_integrity import (
     remove_photo as remove_pending_photo,
     rollback_final_copies,
     store_photo as store_pending_photo,
+    staged_photo_count,
     verify_pending as verify_pending_photo_transaction,
 )
 
@@ -3119,19 +3120,22 @@ def check_draft_field_keys(trap_id: str, visit_id: str) -> dict:
     used check-time override (not in the audit's field list, and its date/
     time values need different JSON serialization handling)."""
     suffix = f"{trap_id}_{visit_id}"
+    # The prefixes (seg_, rows_, tick_, species_) are what the 7a stylesheet keys on; "finding" and "routine" are plain session values, not
+    # widgets (the outcome rows have their own key), so they survive the outcome rows not being drawn.
     return {
         "finding": f"finding_{suffix}",
+        "routine": f"routine_{suffix}",
         "species": f"species_{suffix}",
-        "rat_type": f"rat_type_{suffix}",
-        "condition": f"condition_{suffix}",
-        "carcass": f"carcass_{suffix}",
-        "bagged": f"bagged_{suffix}",
-        "service_ready": f"service_ready_{suffix}",
+        "rat_type": f"seg_rat_{suffix}",
+        "condition": f"rows_condition_{suffix}",
+        "carcass": f"seg_carcass_{suffix}",
+        "bagged": f"tick_bagged_{suffix}",
+        "service_ready": f"seg_service_{suffix}",
         "service_reason": f"service_reason_{suffix}",
-        "camera_ready": f"camera_ready_{suffix}",
-        "camera_issue": f"camera_issue_{suffix}",
-        "covers": f"covers_{suffix}",
-        "adjusted": f"adjusted_{suffix}",
+        "camera_ready": f"rows_camera_{suffix}",
+        "camera_issue": f"rows_issue_{suffix}",
+        "covers": f"seg_covers_{suffix}",
+        "adjusted": f"tick_adjusted_{suffix}",
         "notes": f"notes_{suffix}",
     }
 
@@ -3186,6 +3190,53 @@ def seed_check_draft(visit_id: str, trap_id: str) -> bool:
             st.session_state[key] = draft[name]
             restored_any = True
     return restored_any
+
+
+def begin_routine_check(keys: dict) -> None:
+    """Routine check: still set, no animal, relured and ready, camera working. The confirm screen asks nothing itself (the page writes those
+    values from the flag), so nothing is left ticked behind it if the operator chooses to record something different."""
+    st.session_state[keys["finding"]] = "Trap still set, no animal"
+    st.session_state[keys["routine"]] = True
+
+
+def pick_check_outcome(keys: dict, picker_key: str) -> None:
+    """The outcome rows' on_change: the chosen outcome moves to a plain session value, because the rows are not drawn once a choice is made and
+    Streamlit drops the state of a widget that is not drawn."""
+    st.session_state[keys["finding"]] = st.session_state.get(picker_key)
+
+
+def change_check_outcome(keys: dict) -> None:
+    """Change / Record something different: back to the six outcomes with nothing chosen. Answers that still apply (service, camera, notes,
+    time) come back from the saved draft when an outcome is chosen again; the Routine flag does not."""
+    st.session_state[keys["finding"]] = None
+    st.session_state[keys["routine"]] = False
+
+
+def check_form_errors(
+    *, has_animal, collected_animal, assessable, species, rat_type, condition, bag_id, bag_labelled,
+    service_choice, service_reason, camera_assigned, camera_choice, issue_choice, covers_choice,
+) -> list:
+    """What still has to be answered before Save, in the order the form asks: [(field, words)]. The words are the form's own (unchanged)."""
+    errors = []
+    if has_animal and not species:
+        errors.append(("species", "Choose the species."))
+    if has_animal and species == "Rat" and not rat_type:
+        errors.append(("rat_type", "Choose the rat type."))
+    if collected_animal and not condition:
+        errors.append(("condition", "Choose the animal condition."))
+    if collected_animal and not bag_labelled:
+        errors.append(("bag", f"Confirm that bag {bag_id} is labelled."))
+    if assessable and service_choice is None:
+        errors.append(("service", "Confirm whether the trap is relured, reset and ready."))
+    if assessable and service_choice == "No" and not service_reason:
+        errors.append(("service_reason", "Record why the trap is not ready."))
+    if camera_assigned and assessable and camera_choice is None:
+        errors.append(("camera", "Complete the camera check."))
+    if camera_assigned and assessable and camera_choice == "No" and not issue_choice:
+        errors.append(("issue", "Choose the camera issue."))
+    if camera_assigned and assessable and camera_choice == "No" and not covers_choice:
+        errors.append(("covers", "Record whether the camera covers the trap."))
+    return errors
 
 
 def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
@@ -3393,6 +3444,7 @@ def commit_staged_records_with_photos(
     record_noun: str,
     record_description: str,
     session_state_keys_to_clear_on_failure: Optional[list] = None,
+    pending_check_id: Optional[str] = None,
 ) -> int:
     """Finalise photos, append Photos rows, and commit staged sheets with full rollback safety.
 
@@ -3414,6 +3466,11 @@ def commit_staged_records_with_photos(
     verify_persisted(reloaded) is called only after the generic Photos checks
     pass; it must raise RuntimeError with a user-facing reason on failure, or
     return a dict of extra fields to log alongside the commit-verified event.
+
+    pending_check_id is the ID of the pending folder (photos, manifest, draft answers) when it is not the record's own ID. A check that
+    takes no photos is saved under a fresh random Check ID while its pending folder is named by the deterministic visit-and-trap ID, so
+    without it the folder was never cleared (the leftover-draft bug, 14 Oct 2026). It defaults to record_id, which is right for the
+    necropsy flows and for a check saved with photos.
     """
     saved_photo_files = []
     final_copies = []
@@ -3540,7 +3597,14 @@ def commit_staged_records_with_photos(
     # its draft file behind indefinitely instead of being cleaned up here
     # like everything else. delete_transaction() already no-ops safely on a
     # directory that was never created.
-    delete_transaction(DATA_ROOT, record_id)
+    pending_id = pending_check_id or record_id
+    if not expected_photo_count:
+        # P6-7 (owner, 14 Oct 2026): photos staged for a collected kill are dropped, with a record, when the check is saved with an outcome that
+        # takes none. The form said so above Save before this point; nothing is deleted before the save.
+        unattached = staged_photo_count(DATA_ROOT, pending_id)
+        if unattached:
+            log_photo_event(DATA_ROOT, "staged_photos_not_attached", count=unattached, pending_id=pending_id, **{"check_id": record_id, **log_fields})
+    delete_transaction(DATA_ROOT, pending_id)
 
     return len(saved_photo_files)
 
@@ -6709,7 +6773,7 @@ if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:
 # here any more (trap-journey-scroll brief) — every workflow page's own H1
 # already carries that context, so a line above this button was showing the
 # same name twice.
-if st.session_state.page in WORKFLOW_PAGES and st.session_state.page != "visit":
+if st.session_state.page in WORKFLOW_PAGES and st.session_state.page not in ("visit", "check"):  # the check page has its own back pill
     st.button("← Exit to Trap sites", key="exit_workflow_to_sites", on_click=set_page, args=("sites",))
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
@@ -6913,7 +6977,11 @@ elif page == "visit":
             finding = str(row["Finding"]).strip() if row is not None else ""
             species = str(row["Species"]).strip() if row is not None and finding == "Dead animal found" else ""
             detail = " · ".join(part for part in (finding, species, f"{photo_count} photo{'s' if photo_count != 1 else ''} stored" if photo_count else "") if part)
-            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", html.escape(detail)), unsafe_allow_html=True)
+            if saved.get("necropsy_added"):
+                detail = html.escape(detail) + "<br>A necropsy task was added."
+            else:
+                detail = html.escape(detail)
+            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", detail), unsafe_allow_html=True)
 
         # Keyed by vid, not persisted anywhere else, so a new visit always starts closed.
         filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
@@ -7030,393 +7098,412 @@ elif page == "check":
         first_render_of_arrival = st.session_state.get("check_arrival_seen") != arrival
         st.session_state["check_arrival_seen"] = arrival
         just_restored_draft = seed_check_draft(vid, trap_id) and first_render_of_arrival
-        st.button(
-            "← Back to trap selector",
-            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": vid},
-        )
-
-        header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
-
-        if w is None:
-            # Field report fix (2026-08-24): repair_missing_window() refuses to guess
-            # an effective time once a trap has prior history - correct, since
-            # silently reusing "now" or the original deployment time could
-            # misrepresent when the trap actually went back into service. The bug
-            # was that this was the ONLY place offering to fix it, and it gave no
-            # way to actually supply that time - a guaranteed dead end pointing at
-            # "Administration" with no such tool there (Activate/Deactivate/Move
-            # live under Trial setup, not Data & records, and none of them apply
-            # directly to "reopen this trap's window right here"). Now this asks
-            # for the same effective-time-and-reason pair inline, in the one place
-            # the operator actually is when they hit this.
-            history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
-            if history.empty:
-                message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
-                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
-                    try:
-                        repair_missing_window(data, trap_id)
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
-            else:
-                message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window."])
-                repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_date_{trap_id}_{vid}")
-                repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_time_{trap_id}_{vid}")
-                repair_reason = st.text_area("Reason", key=f"repair_reason_{trap_id}_{vid}")
-                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
-                    if not repair_reason.strip():
-                        st.error("Enter a reason before starting the window.")
-                    else:
-                        try:
-                            repair_missing_window(
-                                data, trap_id,
-                                effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
-                                reason=repair_reason.strip(),
-                            )
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
-            return
-
-        st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
-        finding = st.radio(
-            "What did you find?",
-            FINDINGS,
-            index=None,
-            key=f"finding_{trap_id}_{vid}",
-        )
-        # UX-audit fix (2026-08-13): snapshot the current answers to disk on
-        # every rerun of this page, so a real session loss doesn't force
-        # retyping the whole form - see persist_check_draft's own docstring
-        # for why one call site here is enough to capture the full form.
+        keys = check_draft_field_keys(trap_id, vid)
+        suffix = f"{trap_id}_{vid}"
+        # UX-audit fix (2026-08-13): snapshot the current answers to disk on every rerun of this page, so a real session loss doesn't force
+        # retyping the whole form - see persist_check_draft's own docstring for why one call site here is enough.
         persist_check_draft(vid, trap_id)
-        if finding is None:
-            st.caption("Choose one finding to continue.")
-            return
 
-        has_animal = finding == "Dead animal found"
-        # Scavenged kills: the carcass was gone by the time of the check. "Yes"
-        # is exactly the original form; "No" skips the bag, photos and necropsy
-        # task (nothing to bag, photograph or examine) but still records the kill.
-        carcass_collected = False
-        if has_animal:
-            carcass_choice = st.radio(
-                "Carcass collected?",
-                ["Yes", "No"],
-                index=None,
-                horizontal=True,
-                key=f"carcass_{trap_id}_{vid}",
-            )
-            if carcass_choice is None:
-                st.caption("Say whether the carcass was collected to continue.")
+        # Phase 6: the check form in the 7a language. One narrow column, no top navigation, one back pill.
+        r1_screen_css(hide_nav=True)
+        location = trap_location_label(tr)
+        generic_location = bool(re.fullmatch(r"Trap \d+|No location recorded", location))
+        site_traps_now = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")]
+        compares_builds = site_traps_now[["Product", "Build Version"]].drop_duplicates().shape[0] > 1
+        sub_line = " · ".join(part for part in (
+            site_name(data, sid),
+            "" if generic_location else location,
+            r1_short_build(trial_build_label(tr["Product"], tr["Build Version"])) if compares_builds else "",
+        ) if part)
+
+        with st.container(key=design.SCREEN_KEY):
+            r1_back("Back to trap list", "visit", "check_list", site_id=sid, visit_id=vid)
+
+            if w is None:
+                r1_title(trap_id, sub_line)
+                _render_no_window_screen()
                 return
-            carcass_collected = carcass_choice == "Yes"
-        collected_animal = has_animal and carcass_collected
-        no_carcass = has_animal and not carcass_collected
-        assessable = finding not in ["Trap missing", "Unable to check"]
-        bag_id = ""
-        species = ""
-        rat_type = ""
-        condition = ""
-        bag_labelled = False
-        photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
 
-        if has_animal:
-            if collected_animal:
-                bag_key = f"bag_id_{vid}_{trap_id}"
-                pending_check_id = ensure_pending_check_id(vid, trap_id)
-                if bag_key not in st.session_state:
-                    recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
-                    st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
-                bag_id = st.session_state[bag_key]
-                message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
-                st.markdown("### Photos")
-                st.caption("Choose the photos already taken from the camera roll.")
-                photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
-            species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
-            if species == "Rat":
-                rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
-            if collected_animal:
-                condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
-                bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+            finding = st.session_state.get(keys["finding"])
+            routine = bool(st.session_state.get(keys["routine"])) and finding == "Trap still set, no animal"
+            camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
+
+            # ---- 1. Nothing chosen yet: the Routine card and the six outcomes -------------------------------------------------
+            if finding is None:
+                r1_title(trap_id, sub_line)
+                with st.container(key="card_check_routine"):
+                    st.markdown(
+                        '<div class="r1-card-title" style="font-size:20px;line-height:26px">All as expected?</div>'
+                        f'<div class="r1-meta">Records: still set, no animal · ready{" · camera working" if camera_assigned else ""}.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.button("Routine check", key=f"check_routine_{suffix}", type="primary", on_click=begin_routine_check, args=(keys,))
+                st.markdown('<div class="r1-label">Or record something else</div>', unsafe_allow_html=True)
+                st.radio("What did you find?", FINDINGS, index=None, key=f"rows_outcome_{suffix}", label_visibility="collapsed",
+                         on_change=pick_check_outcome, args=(keys, f"rows_outcome_{suffix}"))
+                return
+
+            has_animal = finding == "Dead animal found"
+            assessable = finding not in ["Trap missing", "Unable to check"]
+            outcome_icon = dict(zip(FINDINGS, design._OUTCOME_ICONS))[finding]
+
+            # ---- 2. The Routine confirm screen ---------------------------------------------------------------------------------
+            if routine:
+                r1_title(trap_id, "Routine check")
+                rows = [("Outcome", "<b>Trap still set, no animal</b>"), ("Relured, reset and ready", "<b>Yes</b>")]
+                if camera_assigned:
+                    rows.append(("Camera working and covering", "<b>Yes</b>"))
+                with st.container(key="card_check_routine_record"):
+                    st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">This will record</div>' + r1_kv(rows), unsafe_allow_html=True)
             else:
-                condition = "Unable to assess"
-                st.caption("No Bag ID, bag tick or necropsy task. This kill counts, but can't be assessed.")
-                st.caption('Animal condition recorded as "Unable to assess".')
-        elif finding == "Trap fired, no animal":
-            st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
-        elif finding == "Trap missing":
-            st.warning("This check will close the current window and no new window will start, since the trap is not in place to monitor. Redeploy it via Administration when it's found.")
-        elif not assessable:
-            st.warning("The trap wasn't reached, so its condition is unchanged - this check will record the visit and start a new monitoring window automatically, so nothing further needs fixing.")
+                r1_title(trap_id, sub_line)
+                with st.container(key="card_check_found"), st.container(key="listrow_check_found"):
+                    text_col, button_col = st.columns([3, 1.1], vertical_alignment="center")
+                    text_col.markdown(
+                        f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(outcome_icon, 24)}</div>'
+                        f'<div><div class="r1-meta">What you found</div><div class="r1-row-title">{html.escape(finding)}</div></div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    button_col.button("Change", key=f"check_change_{suffix}", on_click=change_check_outcome, args=(keys,))
 
-        service_ready = False
-        service_reason = ""
-        if assessable:
-            st.markdown("### Trap service")
-            service_choice = st.radio(
-                "Trap relured, reset and ready?",
-                ["Yes", "No"],
-                index=None,
-                horizontal=True,
-                key=f"service_ready_{trap_id}_{vid}",
-            )
-            service_ready = service_choice == "Yes"
-            if service_choice == "No":
-                service_reason = st.text_area(
-                    "Why is the trap not ready?",
-                    key=f"service_reason_{trap_id}_{vid}",
-                ).strip()
-        else:
-            service_choice = "Not applicable"
-
-        camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
-        camera = "No camera"
-        covers = "Not applicable"
-        adjusted = False
-        camera_ready = True
-        if camera_assigned and assessable:
-            st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
-            st.markdown("### Camera check")
-            if just_restored_draft:
-                st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
-                # Field report fix (2026-08-17): "focus directly where you
-                # left off" - Camera check is specifically where the Arlo
-                # app-switch happens, so it's the one place worth landing on
-                # directly after a restored session, rather than the top of
-                # the (now mostly-refilled) form. Same retry-on-a-timer
-                # pattern as scroll_to_top_once(), targeting this anchor
-                # instead of (0,0).
-                components.html(
-                    """
-                    <script>
-                    (() => {
-                      const doc = window.parent.document;
-                      const scrollToAnchor = () => {
-                        const el = doc.getElementById('r1m1-camera-check-anchor');
-                        if (el) el.scrollIntoView({block: 'start', behavior: 'auto'});
-                      };
-                      scrollToAnchor();
-                      requestAnimationFrame(scrollToAnchor);
-                      [80, 200, 450, 900].forEach((delay) => window.setTimeout(scrollToAnchor, delay));
-                    })();
-                    </script>
-                    """,
-                    height=0,
-                    width=0,
-                )
-            camera_choice = st.radio(
-                "Camera working and covering the trap?",
-                ["Yes", "No", "Could not assess"],
-                index=None,
-                key=f"camera_ready_{trap_id}_{vid}",
-            )
-            if camera_choice == "Yes":
-                camera, covers, camera_ready = "Working", "Yes", True
-            elif camera_choice == "No":
-                camera = st.radio(
-                    "Camera issue",
-                    [x for x in CAMERA if x != "Working"],
-                    index=None,
-                    key=f"camera_issue_{trap_id}_{vid}",
-                ) or ""
-                covers = st.radio(
-                    "Camera still covers the trap?",
-                    ["Yes", "No", "Unsure"],
-                    index=None,
-                    key=f"covers_{trap_id}_{vid}",
-                ) or ""
-                adjusted = st.checkbox("Camera adjusted", key=f"adjusted_{trap_id}_{vid}")
-                camera_ready = False
-            elif camera_choice == "Could not assess":
-                camera, covers, camera_ready = "Unsure", "Unsure", False
-            else:
-                camera_choice = None
-                camera_ready = False
-        else:
+            show_errors = bool(st.session_state.get(f"check_errors_shown_{suffix}"))
+            bag_id = ""
+            species = ""
+            rat_type = ""
+            condition = ""
+            bag_labelled = False
+            carcass_choice = None
+            photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
+            service_choice = None
+            service_reason = ""
+            camera = "No camera"
+            covers = "Not applicable"
+            adjusted = False
+            camera_ready = True
             camera_choice = "Not applicable"
-            if not camera_assigned:
-                st.caption("No camera assigned.")
+            issue_choice = None
+            covers_choice = None
+            problems: list = []  # (field, words), in the order the form asks
 
-        notes = st.text_area("Anything else to record?", height=72, key=f"notes_{trap_id}_{vid}")
-        change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
-        if change_time:
-            c1, c2 = st.columns(2)
-            d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}")
-            tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}")
-        else:
-            d = tm = None
+            # Each field is wrapped so that, once a Save has been refused, its error ring can be drawn round the whole group. The wrapper is made
+            # before its widget runs, so which fields are in error is read from the answers as the session holds them (a tap on this run is
+            # already in them), not from this run's local variables, which are still empty at that point.
+            ss = st.session_state
+            ring_fields = {f for f, _ in check_form_errors(
+                has_animal=has_animal, collected_animal=has_animal and ss.get(keys["carcass"]) == "Yes", assessable=assessable,
+                species=ss.get(keys["species"]) or "", rat_type=ss.get(keys["rat_type"]) or "", condition=ss.get(keys["condition"]) or "",
+                bag_id="", bag_labelled=bool(ss.get(keys["bagged"])),
+                service_choice=ss.get(keys["service_ready"]) if assessable else "Not applicable",
+                service_reason=(ss.get(keys["service_reason"]) or "").strip(),
+                camera_assigned=camera_assigned, camera_choice=ss.get(keys["camera_ready"]) if camera_assigned and assessable else "Not applicable",
+                issue_choice=ss.get(keys["camera_issue"]), covers_choice=ss.get(keys["covers"]),
+            )} if (show_errors and not routine) else set()
 
-        photo_blocked = bool(collected_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-        if collected_animal and photo_gate.get("expected_count", 0):
-            if photo_gate.get("manual_failure_count", 0):
-                count = int(photo_gate["manual_failure_count"])
-                st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
-            elif photo_gate.get("ready"):
-                st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
+            def field(name: str):
+                return st.container(key=f"{'fielderr' if name in ring_fields else 'field'}_{name}_{suffix}")
+
+            def field_line(name: str) -> None:
+                if show_errors:
+                    for f, words in current_errors():
+                        if f == name:
+                            st.markdown(f'<div class="r1-fielderr">{design.icon("warn-circle", 18)}<span>{html.escape(words)}</span></div>', unsafe_allow_html=True)
+
+            def current_errors() -> list:
+                return check_form_errors(
+                    has_animal=has_animal, collected_animal=collected_animal, assessable=assessable, species=species, rat_type=rat_type,
+                    condition=condition, bag_id=bag_id, bag_labelled=bag_labelled, service_choice=service_choice, service_reason=service_reason,
+                    camera_assigned=camera_assigned, camera_choice=camera_choice, issue_choice=issue_choice, covers_choice=covers_choice,
+                )
+
+            collected_animal = False
+            no_carcass = False
+
+            if routine:
+                service_choice, camera_choice = "Yes", ("Yes" if camera_assigned else "Not applicable")
+                service_ready, camera, covers, camera_ready = True, ("Working" if camera_assigned else "No camera"), ("Yes" if camera_assigned else "Not applicable"), True
             else:
-                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
-                st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+                # ---- 3. The outcome's own questions ---------------------------------------------------------------------------
+                if has_animal:
+                    with field("carcass"):
+                        carcass_choice = st.segmented_control("Carcass collected?", ["Yes", "No"], default=None, key=keys["carcass"], selection_mode="single")
+                    if carcass_choice is None:
+                        st.markdown('<div class="r1-meta">Say whether the carcass was collected to continue.</div>', unsafe_allow_html=True)
+                        return
+                    collected_animal = carcass_choice == "Yes"
+                    no_carcass = not collected_animal
+                    if collected_animal:
+                        bag_key = f"bag_id_{vid}_{trap_id}"
+                        pending_check_id = ensure_pending_check_id(vid, trap_id)
+                        if bag_key not in st.session_state:
+                            recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
+                            st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
+                        bag_id = st.session_state[bag_key]
+                        st.markdown(design.message_html("warn", f"Bag ID: {html.escape(bag_id)}", "Write this on the bag before moving on.", icon_name="bag"), unsafe_allow_html=True)
+                        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Choose the photos already taken from the camera roll.</div>', unsafe_allow_html=True)
+                        photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
+                    else:
+                        condition = "Unable to assess"
+                        st.markdown(design.message_html(
+                            "info", "", "<div>No Bag ID, bag tick or necropsy task. This kill counts, but can't be assessed.</div><div>Animal condition recorded as “Unable to assess”.</div>"), unsafe_allow_html=True)
+                    with field("species"):
+                        species = st.radio("What was it?", SPECIES, index=None, horizontal=True, key=keys["species"]) or ""
+                    field_line("species")
+                    if species == "Rat":
+                        with field("rat_type"):
+                            rat_type = st.segmented_control("Rat type", RAT_TYPES, default=None, key=keys["rat_type"], selection_mode="single") or ""
+                        field_line("rat_type")
+                    if collected_animal:
+                        with field("condition"):
+                            condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=keys["condition"]) or ""
+                        field_line("condition")
+                        st.markdown('<div class="r1-label">Bag</div>', unsafe_allow_html=True)
+                        with field("bag"):
+                            bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=keys["bagged"])
+                        field_line("bag")
+                elif finding == "Trap fired, no animal":
+                    st.markdown(design.message_html("info", "", "Camera review will determine whether this was a missed kill, a false activation or a non-target event."), unsafe_allow_html=True)
+                elif finding == "Trap missing":
+                    st.markdown(design.message_html("warn", "Monitoring stops at this trap", "This check closes its window and no new one starts. Redeploy it from Administration when it’s found."), unsafe_allow_html=True)
+                elif not assessable:
+                    st.markdown(design.message_html("info", "", "The trap wasn’t reached, so nothing about it has changed. Monitoring carries on with a new window."), unsafe_allow_html=True)
 
-        # True one-tap saving lock (Layout stability pass): the "Saving
-        # check… Do not tap again." message used to be text only, with
-        # nothing actually disabling the button behind it - the only real
-        # disabled= condition was photo_blocked. On a slow field connection
-        # a second tap during a slow save could still resubmit. This flag
-        # is set the instant the button is pressed and persists across the
-        # rerun it triggers, so the button itself renders disabled on any
-        # subsequent rerun until the save fails validation (cleared, so the
-        # operator can fix and retry) or completes (popped, along with the
-        # rest of this check's transient session_state).
-        # Field report fix (2026-08-17): uses the shared two_phase_button
-        # helper (also used for the trap-list Check button and the 3
-        # follow-up review saves - 2026-08-18: "same issues... apply system
-        # logic") for visible tap feedback, plus its own persistent lock on
-        # top since this save goes through commit_staged_records_with_photos
-        # - slower and failure-prone enough that it needs real protection
-        # against a rapid double-tap during that work, not just the two-phase
-        # helper's own lock (which clears itself the instant the slow work
-        # starts). Cleared on validation failure (retry allowed) or via
-        # session_state_keys_to_clear_on_failure on a deeper commit failure,
-        # so this can never strand the button disabled forever.
-        save_lock_key = f"check_saving_{trap_id}_{vid}"
-        saving = st.session_state.get(save_lock_key, False)
-        save_label = "Please wait" if photo_blocked else "Save check"
-        save_clicked = two_phase_button(save_label, f"save_check_{trap_id}_{vid}", "Saving…", type="primary", use_container_width=True, disabled=photo_blocked or saving)
-        if save_clicked:
-            st.session_state[save_lock_key] = True
-            saving_feedback = st.empty()
-            saving_feedback.info("Saving check… Do not tap again.")
-            errors = []
-            if has_animal and not species:
-                errors.append("Choose the species.")
-            if has_animal and species == "Rat" and not rat_type:
-                errors.append("Choose the rat type.")
-            if collected_animal and not condition:
-                errors.append("Choose the animal condition.")
-            if collected_animal and not bag_labelled:
-                errors.append(f"Confirm that bag {bag_id} is labelled.")
-            if assessable and service_choice is None:
-                errors.append("Confirm whether the trap is relured, reset and ready.")
-            if assessable and service_choice == "No" and not service_reason:
-                errors.append("Record why the trap is not ready.")
-            if camera_assigned and assessable and camera_choice is None:
-                errors.append("Complete the camera check.")
-            if camera_assigned and assessable and camera_choice == "No" and not camera:
-                errors.append("Choose the camera issue.")
-            if camera_assigned and assessable and camera_choice == "No" and not covers:
-                errors.append("Record whether the camera covers the trap.")
-            if errors:
-                st.session_state[save_lock_key] = False
-                message_panel("error", "Complete these details before saving.", errors)
-                return
-
-            check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
-            if collected_animal and photo_gate.get("expected_count", 0):
-                photo_gate = {
-                    **photo_gate,
-                    **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
-                }
-                if not (
-                    photo_gate.get("ready")
-                    and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
-                ):
-                    st.session_state[save_lock_key] = False
-                    st.error("One or more selected photos are not safely stored yet.")
-                    return
-            active = open_window(data, trap_id)
-            if active is None:
-                st.session_state[save_lock_key] = False
-                # Same recovery as the "no active test window" branch above -
-                # this trap's window closed (by someone/something else) in the
-                # gap between opening this page and hitting Save. A trap with
-                # prior history needs a real effective time, same as there.
-                history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
-                if history.empty:
-                    message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
-                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
-                        repair_missing_window(data, trap_id)
-                        st.rerun()
+                service_ready = False
+                if assessable:
+                    with field("service"):
+                        service_choice = st.segmented_control("Trap relured, reset and ready?", ["Yes", "No"], default=None, key=keys["service_ready"], selection_mode="single")
+                    service_ready = service_choice == "Yes"
+                    if service_choice == "No":
+                        with field("service_reason"):
+                            service_reason = st.text_area("Why is the trap not ready?", placeholder="For example: lure gone, spring weak", key=keys["service_reason"]).strip()
+                    field_line("service" if service_choice is None else "service_reason")
                 else:
-                    message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window, then retry saving."])
-                    repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_on_save_date_{trap_id}_{vid}")
-                    repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_on_save_time_{trap_id}_{vid}")
-                    repair_reason = st.text_area("Reason", key=f"repair_on_save_reason_{trap_id}_{vid}")
-                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
-                        if not repair_reason.strip():
-                            st.error("Enter a reason before starting the window.")
-                        else:
-                            try:
-                                repair_missing_window(
-                                    data, trap_id,
-                                    effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
-                                    reason=repair_reason.strip(),
-                                )
-                                st.rerun()
-                            except Exception as exc:
-                                st.error(str(exc))
-                return
+                    service_choice = "Not applicable"
 
-            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
-            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-            expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
-            record = build_check_records(
-                staged, visit_id=vid, site_id=sid, trap_id=trap_id, check_time=check_time, finding=finding,
-                collected_animal=collected_animal, no_carcass=no_carcass, assessable=assessable,
-                species=species, rat_type=rat_type, condition=condition, bag_id=bag_id, bag_labelled=bag_labelled,
-                service_ready=service_ready, service_reason=service_reason,
-                camera_assigned=camera_assigned, camera=camera, covers=covers, adjusted=adjusted, camera_ready=camera_ready,
-                notes=notes, photo_check_id=photo_gate.get("check_id"), expected_photo_count=expected_photo_count,
-            )
-            check_id = record["check_id"]
+                camera_ready = True
+                if camera_assigned and assessable:
+                    st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
+                    if just_restored_draft:
+                        st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
+                        # Field report fix (2026-08-17): "focus directly where you left off" - Camera check is specifically where the Arlo
+                        # app-switch happens, so it's the one place worth landing on directly after a restored session, rather than the top
+                        # of the (now mostly-refilled) form. Same retry-on-a-timer pattern as scroll_to_top_once(), targeting this anchor.
+                        components.html(
+                            """
+                            <script>
+                            (() => {
+                              const doc = window.parent.document;
+                              const scrollToAnchor = () => {
+                                const el = doc.getElementById('r1m1-camera-check-anchor');
+                                if (el) el.scrollIntoView({block: 'start', behavior: 'auto'});
+                              };
+                              scrollToAnchor();
+                              requestAnimationFrame(scrollToAnchor);
+                              [80, 200, 450, 900].forEach((delay) => window.setTimeout(scrollToAnchor, delay));
+                            })();
+                            </script>
+                            """,
+                            height=0,
+                            width=0,
+                        )
+                    with field("camera"):
+                        camera_choice = st.radio("Camera working and covering the trap?", ["Yes", "No", "Could not assess"], index=None, key=keys["camera_ready"])
+                    if camera_choice == "Yes":
+                        camera, covers, camera_ready = "Working", "Yes", True
+                    elif camera_choice == "No":
+                        field_line("camera")
+                        with field("issue"):
+                            issue_choice = st.radio("Camera issue", [x for x in CAMERA if x != "Working"], index=None, key=keys["camera_issue"])
+                        field_line("issue")
+                        with field("covers"):
+                            covers_choice = st.segmented_control("Camera still covers the trap?", ["Yes", "No", "Unsure"], default=None, key=keys["covers"], selection_mode="single")
+                        field_line("covers")
+                        adjusted = st.checkbox("Camera adjusted", key=keys["adjusted"])
+                        camera, covers, camera_ready = (issue_choice or ""), (covers_choice or ""), False
+                    elif camera_choice == "Could not assess":
+                        camera, covers, camera_ready = "Unsure", "Unsure", False
+                    else:
+                        camera_choice = None
+                        camera_ready = False
+                    if camera_choice != "No":
+                        field_line("camera")
+                else:
+                    camera_choice = "Not applicable"
+                    if not camera_assigned:
+                        st.markdown('<div class="r1-meta">No camera assigned.</div>', unsafe_allow_html=True)
 
-            def _verify_check_persisted(reloaded):
-                persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
-                persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
-                if len(persisted_check) != 1:
-                    raise RuntimeError("The saved workbook did not contain exactly one completed check.")
-                return {"followup_count": len(persisted_followups)}
+            # ---- 4. Notes and the check time (every outcome, Routine included) --------------------------------------------------
+            with st.container(key=f"more_notes_{suffix}"):
+                with st.expander("Anything else to record?", expanded=bool(st.session_state.get(keys["notes"]))):
+                    notes = st.text_area("Notes", height=72, key=keys["notes"], label_visibility="collapsed")
+            with st.container(key=f"sw_time_{suffix}"):
+                change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
+            if change_time:
+                c1, c2 = st.columns(2)
+                d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}", label_visibility="collapsed")
+                tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}", label_visibility="collapsed")
+            else:
+                d = tm = None
 
-            photo_count = commit_staged_records_with_photos(
-                data=data,
-                staged=staged,
-                original_data=original_data,
-                photo_gate=photo_gate,
-                expected_photo_count=expected_photo_count,
-                record_id=check_id,
-                photos_id_column="Check ID",
-                verify_persisted=_verify_check_persisted,
-                log_prefix="check",
-                log_fields={"check_id": check_id, "trap_id": trap_id},
-                record_noun="check",
-                record_description="check, follow-up or photo record",
-                session_state_keys_to_clear_on_failure=[save_lock_key],
-            )
+            # ---- 5. Above Save: the P6-7 warning, a notice from a refused save, the errors, then Save -----------------------------
+            photo_blocked = bool(collected_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+            if not collected_animal:
+                # Photos staged for a collected kill stay staged while the check is open (switching back restores them); saved with an outcome
+                # that takes none they are not attached and are deleted at Save. The form says so here, and never blocks Save for it.
+                unattached = staged_photo_count(DATA_ROOT, deterministic_check_id(vid, trap_id))
+                if unattached:
+                    st.markdown(design.message_html(
+                        "warn", f"{unattached} photo{'s' if unattached != 1 else ''} won’t be saved with this outcome",
+                        "They were added for a collected kill. To keep them, change back to Dead animal found with the carcass collected."), unsafe_allow_html=True)
+            elif photo_gate.get("expected_count", 0) and photo_gate.get("manual_failure_count", 0):
+                count = int(photo_gate["manual_failure_count"])
+                st.markdown(design.message_html("warn", f"{count} photo{'s' if count != 1 else ''} could not upload", "Remove it or tap Retry on it above, then Save check."), unsafe_allow_html=True)
+            notice_key = f"check_notice_{suffix}"
+            if st.session_state.get(notice_key):
+                st.markdown(design.message_html("error", html.escape(str(st.session_state[notice_key]))), unsafe_allow_html=True)
+            all_errors = current_errors() if not routine else []
+            if show_errors and all_errors:
+                st.markdown(design.message_html(
+                    "error", f"{len(all_errors)} thing{'s' if len(all_errors) != 1 else ''} to finish",
+                    "<br>".join(html.escape(words) for _, words in all_errors)), unsafe_allow_html=True)
 
-            for key in [
-                f"bag_id_{vid}_{trap_id}",
-                pending_check_id_key(vid, trap_id),
-                photo_component_event_key(vid, trap_id),
-                save_lock_key,
-            ]:
-                st.session_state.pop(key, None)
-            st.session_state.saved_check = {
-                "trap_id": trap_id,
-                "photo_count": photo_count,
-            }
-            # Field report fix (2026-08-17): "didn't get a success status
-            # after successful trap check", "have to scroll up... just
-            # looking at cards already completed". saved_check above is a
-            # true one-shot flash - popped the very next render, so any
-            # intervening rerun before the operator actually looks at the
-            # screen (a reconnect, scrolling straight past it, anything)
-            # means it's already gone with no second chance. This is a
-            # persistent marker instead, read by render_visit_trap_card
-            # below - it survives reruns/reconnects/scroll position, so the
-            # just-saved trap's own card visibly stands out from the plain
-            # "✓ Checked" ones, regardless of whether the flash was ever seen.
-            st.session_state[f"last_saved_trap_{vid}"] = trap_id
-            go("visit", site_id=sid, visit_id=vid)
+            save_lock_key = f"check_saving_{trap_id}_{vid}"
+            saving = st.session_state.get(save_lock_key, False)
+            save_label = "Please wait" if photo_blocked else "Save check"
+            armed = bool(st.session_state.get(f"__two_phase_pending_save_check_{suffix}", False))
+            with st.container(key="save_saving" if armed else "save_ready"):
+                save_clicked = two_phase_button(save_label, f"save_check_{suffix}", "Saving check…", type="primary", disabled=photo_blocked or saving)
+            if photo_blocked and not photo_gate.get("manual_failure_count", 0):  # a failed upload has its own warning above; this line is for one still going
+                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}… Save check is available when it finishes.</div>', unsafe_allow_html=True)
+
+            if routine:
+                st.button("Record something different", key=f"check_different_{suffix}", type="tertiary", on_click=change_check_outcome, args=(keys,))
+
+            if save_clicked:
+                # The arming run (two_phase_button) has drawn "Saving check…"; this run does the work. The lock stays up across reruns until the
+                # save fails validation (cleared, so the operator can fix and retry) or completes (popped with the rest of this check's state).
+                st.session_state[save_lock_key] = True
+                st.session_state.pop(notice_key, None)
+                if all_errors:
+                    st.session_state[save_lock_key] = False
+                    st.session_state[f"check_errors_shown_{suffix}"] = True
+                    st.rerun()  # redraw with the errors, and the button back to "Save check" instead of stuck on "Saving check…"
+
+                check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
+                if collected_animal and photo_gate.get("expected_count", 0):
+                    photo_gate = {
+                        **photo_gate,
+                        **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+                    }
+                    if not (
+                        photo_gate.get("ready")
+                        and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+                    ):
+                        st.session_state[save_lock_key] = False
+                        st.session_state[notice_key] = "One or more selected photos are not safely stored yet."
+                        st.rerun()
+                active = open_window(data, trap_id)
+                if active is None:
+                    # This trap's window closed (by someone/something else) in the gap between opening this page and hitting Save: the page
+                    # redraws on the no-active-window screen, which asks for the time and reason when the trap has history.
+                    st.session_state[save_lock_key] = False
+                    st.session_state[notice_key] = "This trap has no active test window. Start one, then save this check again."
+                    st.rerun()
+
+                original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+                staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+                expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
+                record = build_check_records(
+                    staged, visit_id=vid, site_id=sid, trap_id=trap_id, check_time=check_time, finding=finding,
+                    collected_animal=collected_animal, no_carcass=no_carcass, assessable=assessable,
+                    species=species, rat_type=rat_type, condition=condition, bag_id=bag_id, bag_labelled=bag_labelled,
+                    service_ready=service_ready, service_reason=service_reason,
+                    camera_assigned=camera_assigned, camera=camera, covers=covers, adjusted=adjusted, camera_ready=camera_ready,
+                    notes=notes, photo_check_id=photo_gate.get("check_id"), expected_photo_count=expected_photo_count,
+                )
+                check_id = record["check_id"]
+
+                def _verify_check_persisted(reloaded):
+                    persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
+                    persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
+                    if len(persisted_check) != 1:
+                        raise RuntimeError("The saved workbook did not contain exactly one completed check.")
+                    return {"followup_count": len(persisted_followups)}
+
+                photo_count = commit_staged_records_with_photos(
+                    data=data,
+                    staged=staged,
+                    original_data=original_data,
+                    photo_gate=photo_gate,
+                    expected_photo_count=expected_photo_count,
+                    record_id=check_id,
+                    photos_id_column="Check ID",
+                    verify_persisted=_verify_check_persisted,
+                    log_prefix="check",
+                    log_fields={"check_id": check_id, "trap_id": trap_id},
+                    record_noun="check",
+                    record_description="check, follow-up or photo record",
+                    session_state_keys_to_clear_on_failure=[save_lock_key],
+                    pending_check_id=deterministic_check_id(vid, trap_id),
+                )
+
+                for key in [
+                    f"bag_id_{vid}_{trap_id}",
+                    pending_check_id_key(vid, trap_id),
+                    photo_component_event_key(vid, trap_id),
+                    save_lock_key,
+                    f"check_errors_shown_{suffix}",
+                    notice_key,
+                ]:
+                    st.session_state.pop(key, None)
+                st.session_state.saved_check = {
+                    "trap_id": trap_id,
+                    "photo_count": photo_count,
+                    "necropsy_added": bool(collected_animal),
+                }
+                # Field report fix (2026-08-17): "didn't get a success status after successful trap check", "have to scroll up... just
+                # looking at cards already completed". saved_check above is a true one-shot flash - popped the very next render, so any
+                # intervening rerun before the operator actually looks at the screen (a reconnect, scrolling straight past it, anything)
+                # means it's already gone with no second chance. This is a persistent marker instead, read by render_visit_trap_card below -
+                # it survives reruns/reconnects/scroll position, so the just-saved trap's own card visibly stands out from the plain
+                # "✓ Checked" ones, regardless of whether the flash was ever seen.
+                st.session_state[f"last_saved_trap_{vid}"] = trap_id
+                go("visit", site_id=sid, visit_id=vid)
+
+    def _render_no_window_screen():
+        """This trap has no open test window (Field report fix, 2026-08-24: repair_missing_window() refuses to guess an effective time once a
+        trap has prior history, so the operator is asked for it here, in the one place they are when they hit this)."""
+        history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
+        suffix = f"{trap_id}_{vid}"
+        if history.empty:
+            st.markdown(design.message_html("error", "This trap has no active test window", "Start it from the recorded deployment time, then carry on with this check."), unsafe_allow_html=True)
+            if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
+                try:
+                    repair_missing_window(data, trap_id)
+                    st.rerun()
+                except Exception as exc:
+                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
+            return
+        st.markdown(design.message_html("error", "This trap has no active test window", "It has earlier history, so enter when it actually went back into service. Then carry on with this check."), unsafe_allow_html=True)
+        st.markdown('<div class="r1-label">Back in service from</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        repair_date = c1.date_input("Effective date", value=now().date(), key=f"repair_date_{suffix}", label_visibility="collapsed")
+        repair_time = c2.time_input("Effective time", value=now().time(), key=f"repair_time_{suffix}", label_visibility="collapsed")
+        st.markdown('<div class="r1-label">Reason</div>', unsafe_allow_html=True)
+        repair_reason = st.text_area("Reason", placeholder="Why the window was missing", key=f"repair_reason_{suffix}", label_visibility="collapsed")
+        if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
+            if not repair_reason.strip():
+                st.markdown(design.message_html("error", "Enter a reason before starting the window."), unsafe_allow_html=True)
+            else:
+                try:
+                    repair_missing_window(
+                        data, trap_id,
+                        effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
+                        reason=repair_reason.strip(),
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
 
     _render_check_page()
 
