@@ -252,10 +252,16 @@ COMPONENT_CSS = f"""
 /* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
 [class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
-/* A tick that is a whole row: "Bag labelled", "Camera adjusted". */
+/* A tick that is a whole row: "Bag labelled", "Camera adjusted". The box is the board's: 24px, rounded, inside the row with 14px of padding (the
+   legacy sheet draws an 18px square hanging on the row's left edge; it is moved into the row's flow and redrawn). */
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:56px;width:100%;box-sizing:border-box;
-  border-radius:var(--r-panel);background:var(--ink-05);padding:0 16px;cursor:pointer}}
+  border-radius:var(--r-panel);background:var(--ink-05);padding:0 14px;cursor:pointer;position:relative}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::before{{content:"";position:static;left:auto;top:auto;transform:none;flex:0 0 24px;width:24px;height:24px;
+  box-sizing:border-box;margin:0;border-radius:8px;border:2px solid var(--ink-50);background:transparent}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::after{{display:none!important}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{display:none}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked)::before{{border-color:var(--orange);background:var(--orange) {_CHECK_DATA_URI} center/14px no-repeat}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
 /* The found-outcome card: its row keeps the text and the Change button side by side, with no rule under it. */
 [class*="st-key-card_check_found"] [class*="st-key-listrow_"]{{border-bottom:0;padding:0}}
