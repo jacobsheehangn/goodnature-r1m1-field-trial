@@ -104,6 +104,19 @@ def test_the_hub_puts_end_trial_under_the_visits_card_in_the_left_column(tmp_pat
         assert page.locator("hr").count() == 0, "no divider"
 
 
+def test_the_hub_keeps_end_trial_after_the_evidence_card_on_a_phone(tmp_path, page: Page):
+    """Under the Visits card on desktop must not move it on a phone: the columns stack there, and it stays below the Evidence card, as before."""
+    with serve(tmp_path / "d", END_ALL_CHECKED) as url:
+        open_home(page, url, 390, 1400)
+        page.get_by_role("button", name="Trial overview").first.click()
+        page.get_by_text("Evidence waiting").first.wait_for(timeout=30000)
+        page.wait_for_timeout(1000)
+        visits, evidence = box(page, '[class*="st-key-card_hub_visits"]'), box(page, '[class*="st-key-card_hub_evidence"]')
+        end = page.get_by_role("button", name="End trial…").first.bounding_box()
+        assert 0 <= evidence["y"] - (visits["y"] + visits["height"]) <= 20, "the Visits and Evidence cards are together"
+        assert end["y"] > evidence["y"] + evidence["height"], "End trial comes after the Evidence card"
+
+
 def test_visit_complete_is_one_compact_card_on_desktop_and_unchanged_on_a_phone(tmp_path, page: Page):
     with serve(tmp_path / "d", END_ALL_CHECKED) as url:
         open_home(page, url, 1280)

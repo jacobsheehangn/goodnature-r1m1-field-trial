@@ -286,6 +286,13 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
   .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
+  /* End trial… sits under the Visits card on desktop. On a phone it stays where it always was, after the Evidence card: the left column's
+     children join the stacked row so the block can be ordered after the right column, and a rule above it stands in for the old divider. */
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:first-child,
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:first-child>[data-testid="stVerticalBlock"]{{display:contents}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:last-child{{order:1}}
+  .stApp [data-testid="stLayoutWrapper"]:has(>[class*="st-key-hub_end_block"]){{order:2;flex:0 0 100%}}
+  .stApp [class*="st-key-hub_end_block"]{{border-top:1px solid var(--ink-10);padding-top:16px;margin-top:4px}}
 }}
 [class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
 [class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}

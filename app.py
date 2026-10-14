@@ -7483,9 +7483,10 @@ elif page == "trial":
                 rows.append(("Next due", due_html))
                 st.markdown('<div class="r1-card-title">Visits</div>' + r1_kv(rows), unsafe_allow_html=True)
             in_progress = hub["in_progress_visit"] is not None
-            st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
-            if in_progress:
-                st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
+            with st.container(key="hub_end_block"):  # under Visits on desktop; after the Evidence card on a phone (CSS orders it)
+                st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
+                if in_progress:
+                    st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
         with right:
             with st.container(key="card_hub_evidence"):
                 st.markdown(
