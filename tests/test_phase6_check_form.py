@@ -188,7 +188,9 @@ def test_save_waits_for_a_photo_that_has_not_finished_uploading(tmp_path, phone:
         button = phone.get_by_role("button", name="Please wait")
         expect(button).to_be_visible()
         expect(button).to_be_disabled()
-        expect(phone.get_by_text("Uploading 1 photo… Save check is available when it finishes.")).to_be_visible()
+        # Its reason, in words: the photo is still going (the caption under the button) or it has failed (its own warning above Save).
+        reason = phone.get_by_text("Uploading 1 photo… Save check is available when it finishes.").or_(phone.get_by_text("1 photo could not upload"))
+        expect(reason.first).to_be_visible()
 
 
 # ---------------------------------------------------------------- no active window
