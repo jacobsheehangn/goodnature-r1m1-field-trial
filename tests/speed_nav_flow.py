@@ -40,7 +40,7 @@ def _landing(page: Page):
         page.get_by_text("Resume checking?", exact=True)
         .or_(page.get_by_role("button", name="Finish site check"))
         .or_(page.get_by_role("heading", name=TRAP_SITES_HEADING, exact=True))
-        .or_(page.get_by_text("What did you find?", exact=True))
+        .or_(page.get_by_text("All as expected?", exact=True))
         .first
     )
 
@@ -48,7 +48,7 @@ def _landing(page: Page):
 def _where_landed(page: Page) -> str:
     if page.get_by_text("Resume checking?", exact=True).count():
         return "resume_prompt"
-    if page.get_by_text("What did you find?", exact=True).count():
+    if page.get_by_text("All as expected?", exact=True).count():
         return "check_form"
     if page.get_by_role("button", name="Finish site check").count():
         return "visit_page"
@@ -62,14 +62,14 @@ def run_flow(page: Page, app: ProbeApp) -> dict:
     _settle(page)
 
     selector = page.get_by_role("button", name="Finish site check")
-    check_form = page.get_by_text("What did you find?", exact=True)
+    check_form = page.get_by_text("All as expected?", exact=True)
     check_buttons = page.get_by_role("button", name="Check", exact=True)
 
     _tap(page, app, steps, "start_checking",
          lambda: page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click(), selector)
     _tap(page, app, steps, "check_trap_1", lambda: check_buttons.nth(0).click(), check_form)
     _tap(page, app, steps, "back_to_selector",
-         lambda: page.get_by_role("button", name="Back to trap selector", exact=False).click(), selector)
+         lambda: page.get_by_role("button", name="Back to trap list", exact=False).click(), selector)
     _tap(page, app, steps, "check_another", lambda: check_buttons.nth(1).click(), check_form)
 
     # Reload on the check page: what does the app restore?
@@ -82,7 +82,7 @@ def run_flow(page: Page, app: ProbeApp) -> dict:
     _settle(page)
 
     _tap(page, app, steps, "back_again",
-         lambda: page.get_by_role("button", name="Back to trap selector", exact=False).click(), selector)
+         lambda: page.get_by_role("button", name="Back to trap list", exact=False).click(), selector)
 
     # Reload on the visit (trap selector) page.
     page.reload(wait_until="domcontentloaded")
@@ -101,6 +101,9 @@ def run_flow(page: Page, app: ProbeApp) -> dict:
     _tap(page, app, steps, "resume_checking",
          lambda: page.get_by_role("button", name=re.compile(r"^Resume checking$", re.I)).first.click(), selector)
     _tap(page, app, steps, "check_before_exit", lambda: check_buttons.nth(0).click(), check_form)
+    # Phase 6: the check page has one back pill, to the trap list (the legacy "Exit to Trap sites" pill is gone from it); the exit is taken from the list.
+    _tap(page, app, steps, "back_before_exit",
+         lambda: page.get_by_role("button", name="Back to trap list", exact=False).click(), selector)
     _tap(page, app, steps, "exit_to_trap_sites",
          lambda: page.get_by_role("button", name="Exit to Trap sites", exact=False).click(),
          page.get_by_role("button", name=re.compile(r"^Resume checking$", re.I)).first)

@@ -155,7 +155,7 @@ def test_switching_away_and_back_keeps_the_staged_photos(how, tmp_path, page: Pa
         assert cf.pending_files(data_dir) == staged, "nothing is deleted while the check is open"
         SWITCH_BACK[how](page)
         page.wait_for_timeout(2500)
-        assert "2 photos saved" in cf.uploader_text(page) or cf.body_lines(page, "2 photos saved")
+        assert "2 photos saved" in cf.uploader_text(page)
         assert cf.pending_files(data_dir) == staged
 
 

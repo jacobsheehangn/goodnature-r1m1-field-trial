@@ -26,6 +26,7 @@ from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests"))
+import check_form as cf  # noqa: E402
 import check_save_matrix as m  # noqa: E402
 
 WORKBOOK = "field_trial_data_v8_6_5.xlsx"
@@ -44,11 +45,22 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+# Variants of the seed, for the screens that need a trap in a particular state.
+SEED_NO_WINDOW = SEED + """
+        data = app.load_data()
+        w = data["Windows"]
+        # R1-MAN-003 has history but no open window; M1-MAN-004 has no window at all.
+        w.loc[(w["Trap ID"] == "R1-MAN-003") & (w["Status"] == "Open"), ["Status", "End Time", "End Reason"]] = ["Closed", app.dtstr(app.now() - __import__("datetime").timedelta(hours=20)), "Scheduled line check and relure"]
+        data["Windows"] = w[w["Trap ID"] != "M1-MAN-004"].reset_index(drop=True)
+        app.save_data(data)
+"""
+
+
 @contextlib.contextmanager
-def _serve(data_dir: Path):
+def _serve(data_dir: Path, seed: str = SEED):
     env = dict(os.environ, R1M1_ENVIRONMENT="local", R1M1_ALLOW_NO_AUTH="true", R1M1_SEED_MODE="clean", R1M1_DATA_DIR=str(data_dir),
                STREAMLIT_BROWSER_GATHER_USAGE_STATS="false", PYTHONPATH=os.pathsep.join([str(ROOT), str(ROOT / "tests")]))
-    seeded = subprocess.run([sys.executable, "-c", textwrap.dedent(SEED)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=90)
+    seeded = subprocess.run([sys.executable, "-c", textwrap.dedent(seed)], cwd=ROOT, env=env, capture_output=True, text=True, timeout=90)
     assert seeded.returncode == 0, f"stdout={seeded.stdout}\nstderr={seeded.stderr[-3000:]}"
     port = _free_port()
     process = subprocess.Popen(
@@ -157,44 +169,28 @@ def frozen(tmp_path_factory):
     return rows
 
 
-def _radio(page: Page, group: str, option: str) -> None:
-    page.get_by_role("radiogroup", name=group).get_by_role("radio", name=option, exact=True).check(force=True)
-    page.wait_for_timeout(500)
-
-
 def _answer_the_form(page: Page, cell: dict) -> None:
-    page.get_by_role("radio", name=cell["finding"], exact=True).check(force=True)
-    page.wait_for_timeout(600)
+    """Answers the form the way the cell says, through the shared check-form steps (the one place that knows the layout)."""
+    cf.pick_finding(page, cell["finding"])
     if cell["finding"] == "Dead animal found":
-        _radio(page, "Carcass collected?", cell["carcass"])
-        page.get_by_role("radio", name=cell["species"], exact=True).check(force=True)
-        page.wait_for_timeout(400)
-        if cell["rat_type"]:
-            page.get_by_role("radio", name=cell["rat_type"], exact=True).check(force=True)
-            page.wait_for_timeout(400)
+        cf.pick(page, "carcass", cell["carcass"])
+        cf.pick_species(page, cell["species"], cell["rat_type"])
         if cell["carcass"] == "Yes":
-            page.get_by_role("radio", name=cell["condition"], exact=True).check(force=True)
-            page.wait_for_timeout(300)
-            page.get_by_role("checkbox", name=re.compile(r"Bag labelled")).evaluate("el => el.click()")
-            page.wait_for_timeout(300)
+            cf.pick_condition(page, cell["condition"])
+            cf.tick(page, re.compile(r"Bag labelled"))
     if cell["service"] in ("Yes", "No"):
-        _radio(page, "Trap relured, reset and ready?", cell["service"])
+        cf.pick(page, "service", cell["service"])
         if cell["service"] == "No":
-            page.get_by_label("Why is the trap not ready?").fill(cell["reason"])
-            page.get_by_label("Why is the trap not ready?").press("Tab")
-            page.wait_for_timeout(600)
+            cf.type_into(page, "Why is the trap not ready?", cell["reason"])
     if PROFILE_HAS_CAMERA[cell["profile"]] and cell["finding"] not in m.NOT_ASSESSABLE:
-        _radio(page, "Camera working and covering the trap?", cell["camera"])
+        cf.pick(page, "camera", cell["camera"])
         if cell["camera"] == "No":
-            _radio(page, "Camera issue", cell["issue"])
-            _radio(page, "Camera still covers the trap?", cell["covers"])
+            cf.pick(page, "Camera issue", cell["issue"])
+            cf.pick(page, "Camera still covers the trap?", cell["covers"])
             if cell["adjusted"]:
-                page.get_by_role("checkbox", name="Camera adjusted").evaluate("el => el.click()")
-                page.wait_for_timeout(300)
+                cf.tick(page, "Camera adjusted")
     if cell["notes"]:
-        page.get_by_label("Anything else to record?").fill(cell["notes"])
-        page.get_by_label("Anything else to record?").press("Tab")
-        page.wait_for_timeout(500)
+        cf.add_note(page, cell["notes"])
 
 
 PROFILE_HAS_CAMERA = {name: prof["camera"] for name, prof in m.PROFILES.items()}

@@ -34,6 +34,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -180,19 +181,9 @@ def test_reconnecting_after_a_completed_check_does_not_offer_to_resume_it(
     page.get_by_role("button", name="Start checking", exact=False).first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
-
-    expect(page.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=10_000)
-    # This react-aria Pressable radio doesn't reliably respond to a plain
-    # click (proven flaky for this component family throughout this repo's
-    # test suite); genuine keyboard focus + Space does.
-    service_yes = page.get_by_role("radio", name="Yes", exact=True)
-    service_yes.focus()
-    page.keyboard.press("Space")
-    expect(service_yes).to_be_checked(timeout=10_000)
+    cf.answer_still_set(page)
 
     save_button = page.get_by_role("button", name=re.compile(r"^Save check$"), exact=False)
     expect(save_button).to_be_enabled(timeout=10_000)

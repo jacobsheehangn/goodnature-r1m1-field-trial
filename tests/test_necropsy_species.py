@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -230,10 +231,10 @@ def test_the_check_forms_uploader_keeps_its_original_sizing(page: Page, tmp_path
         page.get_by_role("button", name="Start checking").first.click()
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         page.get_by_role("button", name="Check", exact=True).nth(2).click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
-        page.get_by_role("radio", name="Dead animal found").check(force=True)
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=20_000)
+        cf.pick_finding(page, "Dead animal found")
         expect(page.get_by_text("Carcass collected?", exact=False)).to_be_visible(timeout=20_000)
-        page.get_by_role("radio", name="Yes").first.check(force=True)  # a collected carcass is photographed
+        cf.pick(page, "carcass", "Yes")  # a collected carcass is photographed
         page.wait_for_function("() => [...document.querySelectorAll('iframe')].some(f => f.getBoundingClientRect().height > 50)", timeout=20_000)
         page.wait_for_timeout(1500)
         height = page.evaluate("() => Math.round([...document.querySelectorAll('iframe')].map(f => f.getBoundingClientRect().height).filter(h => h > 0).sort((a, b) => b - a)[0])")

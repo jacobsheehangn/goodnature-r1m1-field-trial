@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,16 +109,15 @@ def test_unable_to_check_reopens_a_window_instead_of_stranding_the_trap(
 
     check_button = page.get_by_role("button", name="Check", exact=True).first
     check_button.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
     query = dict(pair.split("=") for pair in page.url.split("?", 1)[1].split("&") if "=" in pair)
     trap_id = query.get("wf_trap", "")
 
     # The warning shown for this finding should now describe automatic
     # recovery, not a dead-ending closure - regression coverage for the
     # message update alongside the behavioural fix.
-    page.get_by_text("Unable to check", exact=True).click()
-    expect(page.get_by_role("radio", name="Unable to check", exact=True)).to_be_checked(timeout=10_000)
-    expect(page.get_by_text("start a new monitoring window automatically", exact=False)).to_be_visible(timeout=10_000)
+    cf.pick_finding(page, "Unable to check")
+    expect(page.get_by_text("Monitoring carries on with a new window", exact=False)).to_be_visible(timeout=10_000)
 
     save_button = page.get_by_role("button", name="Save check", exact=True)
     expect(save_button).to_be_enabled(timeout=10_000)
