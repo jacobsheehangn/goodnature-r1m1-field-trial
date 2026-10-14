@@ -7372,7 +7372,7 @@ elif page == "check":
             armed = bool(st.session_state.get(f"__two_phase_pending_save_check_{suffix}", False))
             with st.container(key="save_saving" if armed else "save_ready"):
                 save_clicked = two_phase_button(save_label, f"save_check_{suffix}", "Saving check…", type="primary", disabled=photo_blocked or saving)
-            if photo_blocked:
+            if photo_blocked and not photo_gate.get("manual_failure_count", 0):  # a failed upload has its own warning above; this line is for one still going
                 remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
                 st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}… Save check is available when it finishes.</div>', unsafe_allow_html=True)
 
