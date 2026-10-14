@@ -254,3 +254,41 @@ def test_on_desktop_the_form_is_one_column_capped_at_760_and_save_is_its_natural
         save = _save_button(page).bounding_box()
         assert column["width"] <= 761, column
         assert 100 < save["width"] < 460, f"Save is its natural width on desktop, not the column's: {save}"
+
+
+# ---------------------------------------------------------------- merge-safe drafts: answers of an outcome that no longer applies
+def test_answers_from_an_outcome_that_no_longer_applies_do_not_reach_the_record(tmp_path, phone: Page):
+    """Switch from a kill (species, rat type, condition, bag, a service 'No' with a reason, a camera problem) to Trap still set, answer that,
+    save, and the rows are exactly those of a clean Trap still set: nothing from the kill is written (the draft may still hold it)."""
+    from test_check_save_golden_ui import _normalise  # noqa: PLC0415
+    cell = m._cell("camera_trial", "Trap still set, no animal", "", "Yes", "", "Yes", "", "", False, "", ("", "", "", 0))
+    frozen = _frozen_rows(tmp_path, [cell])[m.cell_key(cell)]["rows"]
+    data_dir = tmp_path / "d"
+    with _serve(data_dir) as url:
+        before = {n: _sheet(data_dir, n) for n in ("Checks", "Windows", "Followups")}
+        cf.start_visit_and_open(phone, url, CAM)
+        cf.pick_finding(phone, "Dead animal found")
+        cf.pick(phone, "carcass", "Yes")
+        cf.pick_species(phone, "Rat", "Ship rat")
+        cf.pick_condition(phone, "Alive and maimed")
+        cf.tick(phone, re.compile(r"Bag labelled"))
+        cf.pick(phone, "service", "No")
+        cf.type_into(phone, "Why is the trap not ready?", "Lure gone")
+        cf.pick(phone, "camera", "No")
+        cf.pick(phone, "Camera issue", "Battery low")
+        cf.pick(phone, "Camera still covers the trap?", "No")
+        cf.tick(phone, "Camera adjusted")
+        cf.pick_finding(phone, "Trap still set, no animal")   # Change, then the other outcome: the kill's answers come back from the draft
+        cf.pick(phone, "service", "Yes")
+        cf.pick(phone, "camera", "Yes")
+        cf.save_check(phone, 7000)
+        checks, windows, followups = (_sheet(data_dir, n) for n in ("Checks", "Windows", "Followups"))
+        written = {
+            "checks_new": checks.iloc[len(before["Checks"]):].values.tolist(),
+            "windows": windows[windows["Trap ID"] == CAM].values.tolist(),
+            "followups_new": followups.iloc[len(before["Followups"]):].values.tolist(),
+        }
+        assert len(written["checks_new"]) == 1
+        visits = set(checks["Visit ID"].tolist()) | {m.VISIT_ID}
+        assert _normalise(written, set(), visits) == _normalise(frozen, set(), visits), "the record is a clean Trap still set"
+        assert cf.pending_files(data_dir) == [], "and its draft is cleared by the save"
