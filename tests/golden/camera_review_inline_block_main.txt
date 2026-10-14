@@ -1,0 +1,13 @@
+if evidence_usable=="No":
+    target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
+    assessment="No usable video" if is_kill_review else "Not applicable"
+outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
+idx=idxs[0]
+kill_confirmed="Yes" if is_kill_review else "No"
+activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
+values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
+for k,v in values.items(): data["Windows"].at[idx,k]=v
+recalculate_window(data,idx)
+fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
+data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
+refresh_review_status(data,item["Window ID"])

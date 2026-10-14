@@ -4410,6 +4410,28 @@ def recalculate_window(data, idx: int) -> None:
     data["Windows"].at[idx, "Valid"] = "Yes" if usable == "Yes" and target in ["Yes", "No"] else "No"
 
 
+def apply_camera_review(
+    data, item, *, idx, is_kill_review, evidence_usable, target, interaction_level, strike_area, activated, assessment,
+    first_dt, trigger_dt, kill_dt, link, notes,
+) -> None:
+    """What a Camera review save writes: the answers onto the window it reviews (and its derived timings), the task completed, the window's review
+    status refreshed. Changes `data` in place and saves nothing (the page saves, with save_data). Moved unchanged out of the follow-up task page:
+    tests/test_camera_review_golden.py holds its output to the output of the old inline block for every reachable answer set."""
+    fid = item["Follow-up ID"]
+    if evidence_usable=="No":
+        target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
+        assessment="No usable video" if is_kill_review else "Not applicable"
+    outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
+    kill_confirmed="Yes" if is_kill_review else "No"
+    activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
+    values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
+    for k,v in values.items(): data["Windows"].at[idx,k]=v
+    recalculate_window(data,idx)
+    fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
+    data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
+    refresh_review_status(data,item["Window ID"])
+
+
 def suspect_earliest_window_candidates(data: Dict[str, pd.DataFrame], product: str) -> list:
     """Flag traps of the given product whose earliest window's Start Time falls
     on a different calendar day than the trap's own Deployment Start.
@@ -8373,19 +8395,12 @@ elif page == "followups":
                         if errors:
                             st.error("Please correct the camera review:\n\n" + "\n".join(f"- {err}" for err in errors))
                         else:
-                            if evidence_usable=="No":
-                                target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
-                                assessment="No usable video" if is_kill_review else "Not applicable"
-                            outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
                             idx=idxs[0]
-                            kill_confirmed="Yes" if is_kill_review else "No"
-                            activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
-                            values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
-                            for k,v in values.items(): data["Windows"].at[idx,k]=v
-                            recalculate_window(data,idx)
-                            fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                            data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
-                            refresh_review_status(data,item["Window ID"]); save_data(data)
+                            apply_camera_review(
+                                data, item, idx=idx, is_kill_review=is_kill_review, evidence_usable=evidence_usable, target=target, interaction_level=interaction_level,
+                                strike_area=strike_area, activated=activated, assessment=assessment, first_dt=first_dt, trigger_dt=trigger_dt, kill_dt=kill_dt, link=link, notes=notes,
+                            )
+                            save_data(data)
                             speed_line=f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx,'Interaction To Kill Min'])}." if is_kill_review and first_dt else "No interaction-to-kill time recorded."
                             set_flash("success","Camera review saved",[f"{item['Trap ID']} was updated.",speed_line,"Next: review the next open task."])
                             if not return_from_followup_task():
