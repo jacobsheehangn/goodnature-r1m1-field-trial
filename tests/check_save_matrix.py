@@ -391,7 +391,8 @@ def run_photo_chain(app, pin: Pinned, case: str, runner: str = "extracted") -> d
         data=data, staged=staged, original_data=original, photo_gate=gate,
         expected_photo_count=int(gate.get("expected_count", 0)) if collected else 0,
         record_id=ids[0], photos_id_column="Check ID", verify_persisted=lambda reloaded: {},
-        log_prefix="check", log_fields={}, record_noun="check", record_description="check, follow-up or photo record",
+        log_prefix="check", log_fields={"check_id": ids[0], "trap_id": trap_id}, record_noun="check", record_description="check, follow-up or photo record",
+        pending_check_id=context["check_id"],  # as the page passes it: the pending folder is named by visit and trap, not by the record
     )
     reloaded = app.load_data()
     return {

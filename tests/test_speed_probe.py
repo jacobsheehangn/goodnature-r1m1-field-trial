@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -235,15 +236,9 @@ def test_a_failing_probe_leaves_pages_and_saves_working(page: Page, probe_on_but
     page.get_by_role("button", name=re.compile(r"^Start checking$", re.I)).first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
-    group = page.get_by_role("radiogroup", name="Trap relured, reset and ready?")
-    yes = group.get_by_role("radio", name="Yes", exact=True)
-    yes.focus()
-    page.keyboard.press("Space")
-    expect(yes).to_be_checked(timeout=10_000)
+    cf.answer_still_set(page)
     save_button = page.get_by_role("button", name=re.compile(r"^Save check$"), exact=False)
     expect(save_button).to_be_enabled(timeout=10_000)
     save_button.click()
@@ -276,7 +271,7 @@ def test_probe_on_does_not_change_what_pages_render(page: Page, tmp_path: Path) 
             expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
             snapshots["visit"] = _normalised_body(page)
             page.get_by_role("button", name="Check", exact=True).first.click()
-            expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+            expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
             snapshots["check"] = _normalised_body(page)
             results[label] = snapshots
         finally:

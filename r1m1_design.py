@@ -123,12 +123,21 @@ _CHECK_DATA_URI = (
 )
 
 _SPECIES_ORDER = ("rat", "mouse", "hedgehog", "question")  # Rat, Mouse, Non-target (hedgehog stands in), Unknown
+# The six outcomes of a check, in the order of the page's FINDINGS: still set, dead animal, fired, disturbed, missing, unable to check.
+_OUTCOME_ICONS = ("check-circle", "rat", "burst", "warn-circle", "ban", "info-circle")
 
 
 def _species_icon_rules() -> str:
     return "".join(
         f'[class*="st-key-species"] [data-testid="stRadioGroup"]>label:nth-child({i}){{--icon:url({STATIC_URL}/icons/{name}.svg)}}'
         for i, name in enumerate(_SPECIES_ORDER, start=1)
+    )
+
+
+def _outcome_icon_rules() -> str:
+    return "".join(
+        f'[class*="st-key-rows_outcome"] [data-testid="stRadioGroup"]>label:nth-child({i}){{--icon:url({STATIC_URL}/icons/{name}.svg)}}'
+        for i, name in enumerate(_OUTCOME_ICONS, start=1)
     )
 
 
@@ -224,6 +233,78 @@ COMPONENT_CSS = f"""
 [class*="st-key-rows"] [data-testid="stRadioOption"]:has(input:checked)::after{{
   position:static;left:auto;top:auto;transform:none;border:0;background:var(--orange) {_CHECK_DATA_URI} center/12px no-repeat}}
 
+/* ---- The check form (Phase 6) ---- */
+/* The six outcomes: option rows with an icon at the left and the ring at the right. */
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]{{justify-content:flex-start;gap:12px}}
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]::before{{
+  display:block;content:"";position:static;left:auto;top:auto;transform:none;border:0;border-radius:0;margin:0;
+  flex:0 0 24px;width:24px;height:24px;background:var(--ink);-webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}}
+[class*="st-key-rows_outcome"] [data-testid="stRadioOption"]>div{{flex:1 1 auto}}
+{_outcome_icon_rules()}
+/* A field's question, as a heading. */
+[class*="st-key-field"] [data-testid="stWidgetLabel"] p{{font-size:16px;line-height:22px;font-weight:700;color:var(--ink)}}
+/* A field the Save refused: one red ring round the whole group, and a line under it that says what to do. */
+[class*="st-key-fielderr_"] [data-testid="stRadioGroup"],[class*="st-key-fielderr_"] [role="radiogroup"],[class*="st-key-fielderr_"] [data-testid="stTextArea"] textarea,
+[class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
+[class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
+[class*="st-key-fielderr_"] [data-baseweb="input"],[class*="st-key-fielderr_"] [data-baseweb="textarea"],[class*="st-key-fielderr_"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+/* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
+  box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after,[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{
+  content:"";position:absolute;z-index:2;right:14px;top:50%;margin-top:-10px;width:20px;height:20px;background:var(--ink);pointer-events:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after{{{_mask("calendar")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{{_mask("clock")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] svg[data-baseweb="icon"]{{display:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input{{font-size:15px;padding-right:38px}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div{{font-size:15px}}
+/* A date or time the Save refused: the same red ring as every other field (this rule is as specific as the pair's own, and comes after it). */
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="base-input"]{{background:transparent;border-radius:var(--r-input)}}
+.r1-msg.info.ok svg{{color:var(--green)}}
+/* The task forms' option rows: regular weight until chosen, as the boards draw them. */
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"] p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"] p{{font-weight:400}}
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"]:has(input:checked) p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
+.r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
+.r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
+/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
+[class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
+/* A tick that is a whole row: "Bag labelled", "Camera adjusted". The box is the board's: 24px, rounded, inside the row with 14px of padding (the
+   legacy sheet draws an 18px square hanging on the row's left edge; it is moved into the row's flow and redrawn). */
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:56px;width:100%;box-sizing:border-box;
+  border-radius:var(--r-panel);background:var(--ink-05);padding:0 14px;cursor:pointer;position:relative}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::before{{content:"";position:static;left:auto;top:auto;transform:none;flex:0 0 24px;width:24px;height:24px;
+  box-sizing:border-box;margin:0;border-radius:8px;border:2px solid var(--ink-50);background:transparent}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::after{{display:none!important}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{display:none}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked)::before{{border-color:var(--orange);background:var(--orange) {_CHECK_DATA_URI} center/14px no-repeat}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
+/* The found-outcome card: its row keeps the text and the Change button side by side, with no rule under it. */
+[class*="st-key-card_check_found"] [class*="st-key-listrow_"]{{border-bottom:0;padding:0}}
+/* A switch row: the label at the left, the switch at the right ("Change check time"). */
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label{{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:center;gap:12px;width:100%;min-height:44px;padding:0;cursor:pointer}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{position:relative;flex:0 0 52px;width:52px;height:32px;box-sizing:border-box;padding:0;margin:0;
+  border:0!important;border-radius:16px;background:rgba(0,0,0,.2)!important;box-shadow:none}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label::before,[class*="st-key-sw_"] [data-testid="stCheckbox"] label::after,
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)::before,[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)::after{{display:none!important}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label>div:nth-of-type(1)>div{{position:absolute;top:3px;left:3px;width:26px;height:26px;border-radius:50%;background:#fff!important;
+  box-shadow:0 1px 3px rgba(0,0,0,.3);transform:none!important;border:0}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label:has(input:checked)>div:nth-of-type(1){{background:var(--orange)!important}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label:has(input:checked)>div:nth-of-type(1)>div{{left:23px}}
+[class*="st-key-sw_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
+/* An expander as a quiet grey row with its chevron at the right ("Anything else to record?"). */
+[class*="st-key-more_"] [data-testid="stExpander"],[class*="st-key-more_"] [data-testid="stExpander"] details{{border:0!important;border-radius:var(--r-panel);background:var(--ink-05)!important;overflow:hidden;box-shadow:none}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary{{background:transparent!important}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary{{min-height:48px;padding:0 16px}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary>span{{display:flex;flex-direction:row-reverse;justify-content:space-between;align-items:center;width:100%}}
+[class*="st-key-more_"] [data-testid="stExpander"] summary p{{font-size:16px;line-height:22px}}
+[class*="st-key-more_"] [data-testid="stExpander"] [data-testid="stExpanderDetails"]{{padding:0 16px 16px}}
+/* The Save button while it works: the spinner state of the Save board. */
+.st-key-save_saving button:disabled p{{color:#fff}}
+
 /* ---- Final-result rows: the same option rows, two across ---- */
 [class*="st-key-rows2"] [data-testid="stRadioGroup"]{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
 
@@ -273,7 +354,7 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_site_"] div.stButton:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])){{width:100%}}
   .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
-  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]),.stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-nec_left"]){{row-gap:16px}}
 }}
 [class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
 [class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
@@ -542,9 +623,9 @@ def stepper_html(current: int, done_through: int = 0) -> str:
     return f'<div class="r1-stepper">{"".join(parts)}</div>'
 
 
-def message_html(kind: str, title: str, detail: str = "") -> str:
-    """Message panel: warn / error / success / info, icon + bold title + 15px detail."""
-    icon_name = {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
+def message_html(kind: str, title: str, detail: str = "", icon_name: str = "") -> str:
+    """Message panel: warn / error / success / info, icon + bold title + 15px detail. `icon_name` replaces the kind's own icon."""
+    icon_name = icon_name or {"warn": "warn-circle", "error": "warn-circle", "success": "check-circle", "info": "info-circle"}[kind]
     body = f'<div class="d">{detail}</div>' if detail else ""
     heading = f'<div class="t">{title}</div>' if title else ""
     return f'<div class="r1-msg {kind}">{icon(icon_name, 22)}<div>{heading}{body}</div></div>'

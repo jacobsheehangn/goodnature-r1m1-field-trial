@@ -22,6 +22,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,9 +203,9 @@ def _save_a_routine_check(page: Page, url: str) -> None:
     page.get_by_role("button", name="Start checking").first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).nth(2).click()  # a trap with no camera
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
-    page.get_by_role("radio", name="Trap still set, no animal").check(force=True)
-    page.get_by_role("radio", name="Yes").first.check(force=True)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=20_000)
+    cf.pick_finding(page, "Trap still set, no animal")
+    cf.pick(page, "service", "Yes")
     page.get_by_role("button", name="Save check").click()
     expect(page.get_by_text(re.compile(r"^Just saved \d"))).to_be_visible(timeout=30_000)
 

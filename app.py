@@ -49,6 +49,7 @@ from photo_integrity import (
     remove_photo as remove_pending_photo,
     rollback_final_copies,
     store_photo as store_pending_photo,
+    staged_photo_count,
     verify_pending as verify_pending_photo_transaction,
 )
 
@@ -3119,19 +3120,22 @@ def check_draft_field_keys(trap_id: str, visit_id: str) -> dict:
     used check-time override (not in the audit's field list, and its date/
     time values need different JSON serialization handling)."""
     suffix = f"{trap_id}_{visit_id}"
+    # The prefixes (seg_, rows_, tick_, species_) are what the 7a stylesheet keys on; "finding" and "routine" are plain session values, not
+    # widgets (the outcome rows have their own key), so they survive the outcome rows not being drawn.
     return {
         "finding": f"finding_{suffix}",
+        "routine": f"routine_{suffix}",
         "species": f"species_{suffix}",
-        "rat_type": f"rat_type_{suffix}",
-        "condition": f"condition_{suffix}",
-        "carcass": f"carcass_{suffix}",
-        "bagged": f"bagged_{suffix}",
-        "service_ready": f"service_ready_{suffix}",
+        "rat_type": f"seg_rat_{suffix}",
+        "condition": f"rows_condition_{suffix}",
+        "carcass": f"seg_carcass_{suffix}",
+        "bagged": f"tick_bagged_{suffix}",
+        "service_ready": f"seg_service_{suffix}",
         "service_reason": f"service_reason_{suffix}",
-        "camera_ready": f"camera_ready_{suffix}",
-        "camera_issue": f"camera_issue_{suffix}",
-        "covers": f"covers_{suffix}",
-        "adjusted": f"adjusted_{suffix}",
+        "camera_ready": f"rows_camera_{suffix}",
+        "camera_issue": f"rows_issue_{suffix}",
+        "covers": f"seg_covers_{suffix}",
+        "adjusted": f"tick_adjusted_{suffix}",
         "notes": f"notes_{suffix}",
     }
 
@@ -3186,6 +3190,53 @@ def seed_check_draft(visit_id: str, trap_id: str) -> bool:
             st.session_state[key] = draft[name]
             restored_any = True
     return restored_any
+
+
+def begin_routine_check(keys: dict) -> None:
+    """Routine check: still set, no animal, relured and ready, camera working. The confirm screen asks nothing itself (the page writes those
+    values from the flag), so nothing is left ticked behind it if the operator chooses to record something different."""
+    st.session_state[keys["finding"]] = "Trap still set, no animal"
+    st.session_state[keys["routine"]] = True
+
+
+def pick_check_outcome(keys: dict, picker_key: str) -> None:
+    """The outcome rows' on_change: the chosen outcome moves to a plain session value, because the rows are not drawn once a choice is made and
+    Streamlit drops the state of a widget that is not drawn."""
+    st.session_state[keys["finding"]] = st.session_state.get(picker_key)
+
+
+def change_check_outcome(keys: dict) -> None:
+    """Change / Record something different: back to the six outcomes with nothing chosen. Answers that still apply (service, camera, notes,
+    time) come back from the saved draft when an outcome is chosen again; the Routine flag does not."""
+    st.session_state[keys["finding"]] = None
+    st.session_state[keys["routine"]] = False
+
+
+def check_form_errors(
+    *, has_animal, collected_animal, assessable, species, rat_type, condition, bag_id, bag_labelled,
+    service_choice, service_reason, camera_assigned, camera_choice, issue_choice, covers_choice,
+) -> list:
+    """What still has to be answered before Save, in the order the form asks: [(field, words)]. The words are the form's own (unchanged)."""
+    errors = []
+    if has_animal and not species:
+        errors.append(("species", "Choose the species."))
+    if has_animal and species == "Rat" and not rat_type:
+        errors.append(("rat_type", "Choose the rat type."))
+    if collected_animal and not condition:
+        errors.append(("condition", "Choose the animal condition."))
+    if collected_animal and not bag_labelled:
+        errors.append(("bag", f"Confirm that bag {bag_id} is labelled."))
+    if assessable and service_choice is None:
+        errors.append(("service", "Confirm whether the trap is relured, reset and ready."))
+    if assessable and service_choice == "No" and not service_reason:
+        errors.append(("service_reason", "Record why the trap is not ready."))
+    if camera_assigned and assessable and camera_choice is None:
+        errors.append(("camera", "Complete the camera check."))
+    if camera_assigned and assessable and camera_choice == "No" and not issue_choice:
+        errors.append(("issue", "Choose the camera issue."))
+    if camera_assigned and assessable and camera_choice == "No" and not covers_choice:
+        errors.append(("covers", "Record whether the camera covers the trap."))
+    return errors
 
 
 def photo_transaction_context(visit_id: str, trap_id: str, site_id: str, bag_id: str, window_id: str) -> dict:
@@ -3393,6 +3444,7 @@ def commit_staged_records_with_photos(
     record_noun: str,
     record_description: str,
     session_state_keys_to_clear_on_failure: Optional[list] = None,
+    pending_check_id: Optional[str] = None,
 ) -> int:
     """Finalise photos, append Photos rows, and commit staged sheets with full rollback safety.
 
@@ -3414,6 +3466,11 @@ def commit_staged_records_with_photos(
     verify_persisted(reloaded) is called only after the generic Photos checks
     pass; it must raise RuntimeError with a user-facing reason on failure, or
     return a dict of extra fields to log alongside the commit-verified event.
+
+    pending_check_id is the ID of the pending folder (photos, manifest, draft answers) when it is not the record's own ID. A check that
+    takes no photos is saved under a fresh random Check ID while its pending folder is named by the deterministic visit-and-trap ID, so
+    without it the folder was never cleared (the leftover-draft bug, 14 Oct 2026). It defaults to record_id, which is right for the
+    necropsy flows and for a check saved with photos.
     """
     saved_photo_files = []
     final_copies = []
@@ -3540,7 +3597,14 @@ def commit_staged_records_with_photos(
     # its draft file behind indefinitely instead of being cleaned up here
     # like everything else. delete_transaction() already no-ops safely on a
     # directory that was never created.
-    delete_transaction(DATA_ROOT, record_id)
+    pending_id = pending_check_id or record_id
+    if not expected_photo_count:
+        # P6-7 (owner, 14 Oct 2026): photos staged for a collected kill are dropped, with a record, when the check is saved with an outcome that
+        # takes none. The form said so above Save before this point; nothing is deleted before the save.
+        unattached = staged_photo_count(DATA_ROOT, pending_id)
+        if unattached:
+            log_photo_event(DATA_ROOT, "staged_photos_not_attached", count=unattached, pending_id=pending_id, **{"check_id": record_id, **log_fields})
+    delete_transaction(DATA_ROOT, pending_id)
 
     return len(saved_photo_files)
 
@@ -4346,6 +4410,125 @@ def recalculate_window(data, idx: int) -> None:
     data["Windows"].at[idx, "Valid"] = "Yes" if usable == "Yes" and target in ["Yes", "No"] else "No"
 
 
+def apply_camera_review(
+    data, item, *, idx, is_kill_review, evidence_usable, target, interaction_level, strike_area, activated, assessment,
+    first_dt, trigger_dt, kill_dt, link, notes,
+) -> None:
+    """What a Camera review save writes: the answers onto the window it reviews (and its derived timings), the task completed, the window's review
+    status refreshed. Changes `data` in place and saves nothing (the page saves, with save_data). Moved unchanged out of the follow-up task page:
+    tests/test_camera_review_golden.py holds its output to the output of the old inline block for every reachable answer set."""
+    fid = item["Follow-up ID"]
+    if evidence_usable=="No":
+        target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
+        assessment="No usable video" if is_kill_review else "Not applicable"
+    outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
+    kill_confirmed="Yes" if is_kill_review else "No"
+    activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
+    values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
+    for k,v in values.items(): data["Windows"].at[idx,k]=v
+    recalculate_window(data,idx)
+    fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
+    data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
+    refresh_review_status(data,item["Window ID"])
+
+
+# ---- Hardware tasks (Trap not ready, Camera issue): restart from the task, or keep it open (Part B batch 1, 14 Oct 2026) -------------------------------
+# Saving one of these with the trap ready asks "Back in service from" and, in the same single write that completes the task, starts the trap's new
+# test window then (through start_window(), so it is stamped with the site's open trial), with an audit row. A task for a trap that is still not ready
+# is not closed: the note is added and the task stays open ("Save note, keep task open"), so the trap stays "awaiting service" and not a defect.
+
+HARDWARE_RESTART_REASONS = {
+    "another_task": "another hardware task is still open for this trap",
+    "has_window": "this trap already has an open window (a check has restarted it)",
+    "not_active": "this trap is no longer active",
+}
+
+
+def back_in_service_floor(data, trap_id):
+    """The moment a trap can be back in service no earlier than: the end of its latest closed window (the check that took it out)."""
+    windows = data["Windows"][(data["Windows"]["Trap ID"].astype(str) == str(trap_id)) & (data["Windows"]["Status"] == "Closed")]
+    ends = [t for t in (parse_dt(v) for v in windows["End Time"]) if t is not None]
+    return max(ends) if ends else None
+
+
+def back_in_service_error(data, trap_id, when):
+    """The refusal words for a "Back in service from" time, or None. Not before the check that took the trap out; not in the future."""
+    if when is None:
+        return "Enter when the trap was back in service."
+    floor = back_in_service_floor(data, trap_id)
+    if floor is not None and when < floor:
+        return f"Back in service can't be before the check that took it out ({task_when(floor)})."
+    if when > now():
+        return "Back in service can't be in the future."
+    return None
+
+
+def hardware_restart_blocker(data, item):
+    """Why completing this task must not start a window, or "" when it can: the trap is not Active; it already has an open window; another
+    hardware task is still open for it. The task closes in every case."""
+    trap_id = str(item["Trap ID"])
+    trap = data["Traps"][data["Traps"]["Trap ID"].astype(str) == trap_id]
+    if trap.empty or str(trap.iloc[0]["Status"]) != "Active":
+        return "not_active"
+    if open_window(data, trap_id) is not None:
+        return "has_window"
+    fu = data["Followups"]
+    others = fu[(fu["Trap ID"].astype(str) == trap_id) & (fu["Status"] == "Open") & fu["Follow-up Type"].isin(HARDWARE_TASK_TYPES)
+                & (fu["Follow-up ID"].astype(str) != str(item["Follow-up ID"]))]
+    return "another_task" if not others.empty else ""
+
+
+def _apply_camera_evidence_gap(data, item, evidence_gap):
+    """Camera issue: a past-evidence answer of Not usable or Could not assess marks the reviewed window's evidence unusable (as before)."""
+    idxs = data["Windows"].index[data["Windows"]["Window ID"] == item["Window ID"]].tolist()
+    if idxs and evidence_gap in ["Not usable", "Could not assess"]:
+        data["Windows"].at[idxs[0], "Evidence Usable"] = "No"
+        recalculate_window(data, idxs[0])
+
+
+def complete_hardware_task(data, item, *, notes, back_in_service, evidence_gap=None):
+    """Completes a Trap not ready or Camera issue task whose trap is ready again, and restarts the trap in the same write. Staged on a copy and
+    saved once; if anything raises, nothing is written. Returns {"restarted": bool, "blocker": reason or "", "window_id": ID or ""}.
+    Raises ValueError (with the operator's words) when the time is refused; changes nothing then. Never writes Windows.Evidence Usable except through
+    evidence_gap (the Camera issue's past-evidence answer)."""
+    error = back_in_service_error(data, item["Trap ID"], back_in_service)
+    if error:
+        raise ValueError(error)
+    staged = _staged_copy(data)
+    fid = str(item["Follow-up ID"])
+    blocker = hardware_restart_blocker(staged, item)
+    window_id = ""
+    if evidence_gap is not None:
+        _apply_camera_evidence_gap(staged, item, evidence_gap)
+    fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+    staged["Followups"].at[fidx, "Status"] = "Complete"
+    staged["Followups"].at[fidx, "Completed Time"] = dtstr()
+    staged["Followups"].at[fidx, "Notes"] = notes
+    if not blocker:
+        window_id = start_window(staged, str(item["Trap ID"]), back_in_service)
+        audit_change(staged, "Trap", str(item["Trap ID"]), "Active test window", "", window_id, f"Back in service after {item['Follow-up Type']}")
+    refresh_review_status(staged, item["Window ID"])
+    save_data(staged)
+    _adopt_staged(data, staged)
+    return {"restarted": not blocker, "blocker": blocker, "window_id": window_id}
+
+
+def keep_hardware_task_open(data, item, *, note, evidence_gap=None):
+    """A task whose trap is still not ready stays Open: the note is appended with its date and time (earlier notes kept) and nothing restarts.
+    For a Camera issue the past-evidence answer is still applied, as before. One write."""
+    staged = _staged_copy(data)
+    fid = str(item["Follow-up ID"])
+    fidx = staged["Followups"].index[staged["Followups"]["Follow-up ID"].astype(str) == fid][0]
+    earlier = str(staged["Followups"].at[fidx, "Notes"]).strip()
+    line = f"{human_dt(now(), include_year=True)} · {note.strip()}"
+    staged["Followups"].at[fidx, "Notes"] = f"{earlier}\n{line}" if earlier else line
+    if evidence_gap is not None:
+        _apply_camera_evidence_gap(staged, item, evidence_gap)
+        refresh_review_status(staged, item["Window ID"])
+    save_data(staged)
+    _adopt_staged(data, staged)
+
+
 def suspect_earliest_window_candidates(data: Dict[str, pd.DataFrame], product: str) -> list:
     """Flag traps of the given product whose earliest window's Start Time falls
     on a different calendar day than the trap's own Deployment Start.
@@ -4893,49 +5076,53 @@ def render_necropsy_task(data, item) -> None:
         with st.container(key="card_nec_context"):
             st.markdown(r1_kv(context), unsafe_allow_html=True)
 
-        guess_species = str(window["Field-Recorded Species"]).strip() or str(window["Species"]).strip() if window is not None else ""
-        guess_rat = str(window["Field-Recorded Rat Type"]).strip() or str(window["Rat Type"]).strip() if window is not None else ""
-        current_species = str(window["Species"]).strip() if window is not None else ""
-        # LIVE: changing the species re-renders the weight range for the right scale.
-        species = st.radio("Species", SPECIES, index=SPECIES.index(current_species) if current_species in SPECIES else None, horizontal=True, key=f"species_nec_{fid}")
-        if guess_species:
-            st.markdown(f'<div class="r1-meta">Field-recorded guess: {html.escape(guess_species)}</div>', unsafe_allow_html=True)
-        rat_type = ""
-        if species == "Rat":
-            current_rat = str(window["Rat Type"]).strip() if window is not None else ""
-            rat_type = st.segmented_control("Rat type", RAT_TYPES, default=current_rat if current_rat in RAT_TYPES else None, key=f"seg_rat_nec_{fid}", selection_mode="single") or ""
+        # Desktop board B1NecDesktop: the species, rat type and photos on the left, the form on the right; a phone stacks them in the same order as before.
+        left, right = st.columns([1.4, 1], gap="large")
+        with left, st.container(key="nec_left"):
+            guess_species = str(window["Field-Recorded Species"]).strip() or str(window["Species"]).strip() if window is not None else ""
+            guess_rat = str(window["Field-Recorded Rat Type"]).strip() or str(window["Rat Type"]).strip() if window is not None else ""
+            current_species = str(window["Species"]).strip() if window is not None else ""
+            # LIVE: changing the species re-renders the weight range for the right scale.
+            species = st.radio("Species", SPECIES, index=SPECIES.index(current_species) if current_species in SPECIES else None, horizontal=True, key=f"species_nec_{fid}")
+            if guess_species:
+                st.markdown(f'<div class="r1-meta">Field-recorded guess: {html.escape(guess_species)}</div>', unsafe_allow_html=True)
+            rat_type = ""
+            if species == "Rat":
+                current_rat = str(window["Rat Type"]).strip() if window is not None else ""
+                rat_type = st.segmented_control("Rat type", RAT_TYPES, default=current_rat if current_rat in RAT_TYPES else None, key=f"seg_rat_nec_{fid}", selection_mode="single") or ""
 
-        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Attach photos of the animal. You can choose several.</div>', unsafe_allow_html=True)
-        photo_gate = render_followup_photo_capture(item)
+            st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Attach photos of the animal. You can choose several.</div>', unsafe_allow_html=True)
+            photo_gate = render_followup_photo_capture(item)
 
-        # ONE FORM: the species is chosen above, so the weight scale below is always the right one.
-        with st.form(f"{prefix}_form", border=False):
-            status = st.radio("Necropsy status", ["Complete", "Not completed", "Unable to assess"], index=None, key=f"rows_nec_status_{fid}")
-            assessment = st.radio("Necropsy assessment", ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable"], index=None, key=f"rows_nec_assessment_{fid}")
-            weight_range = st.pills("Animal weight range", weight_ranges_for_species(species), selection_mode="single", key=f"chips_nec_weight_{fid}_{species}")
-            final = st.radio("Final humane-kill result", ["Yes", "No", "Unclear", "Not assessable"], index=None, key=f"rows2_nec_final_{fid}")
-            st.markdown('<div class="r1-meta">Saving this updates the kill result, the humane-kill figures, the review status and the photos.</div>', unsafe_allow_html=True)
-            photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-            if photo_gate.get("expected_count", 0):
-                if photo_gate.get("manual_failure_count", 0):
-                    count = int(photo_gate["manual_failure_count"])
-                    st.markdown(f'<div class="r1-meta">{count} photo{"s" if count != 1 else ""} could not upload</div>', unsafe_allow_html=True)
-                elif photo_gate.get("ready"):
-                    st.markdown(f'<div class="r1-meta">{photo_gate["file_count"]} photo{"s" if photo_gate["file_count"] != 1 else ""} saved</div>', unsafe_allow_html=True)
-                else:
-                    remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
-                    st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}…</div>', unsafe_allow_html=True)
-            # The same double-tap protection as every other photo-bearing save: a persistent lock, and the
-            # visible "Saving…" state comes from arming on the first submit and doing the work on the next run.
-            lock_key = f"{prefix}_saving"
-            arm_key = f"{prefix}_armed"
-            armed = st.session_state.get(arm_key, False)
-            already_saving = st.session_state.get(lock_key, False)
-            errors_slot = st.container()
-            submitted = st.form_submit_button(
-                "Saving…" if armed else ("Please wait" if photo_blocked else "Save necropsy review"),
-                type="primary", disabled=armed or photo_blocked or already_saving,
-            )
+        with right:
+            # ONE FORM: the species is chosen above, so the weight scale below is always the right one.
+            with st.form(f"{prefix}_form", border=False):
+                status = st.radio("Necropsy status", ["Complete", "Not completed", "Unable to assess"], index=None, key=f"rows_nec_status_{fid}")
+                assessment = st.radio("Necropsy assessment", ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable"], index=None, key=f"rows_nec_assessment_{fid}")
+                weight_range = st.pills("Animal weight range", weight_ranges_for_species(species), selection_mode="single", key=f"chips_nec_weight_{fid}_{species}")
+                final = st.radio("Final humane-kill result", ["Yes", "No", "Unclear", "Not assessable"], index=None, key=f"rows2_nec_final_{fid}")
+                st.markdown('<div class="r1-meta">Saving this updates the kill result, the humane-kill figures, the review status and the photos.</div>', unsafe_allow_html=True)
+                photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+                if photo_gate.get("expected_count", 0):
+                    if photo_gate.get("manual_failure_count", 0):
+                        count = int(photo_gate["manual_failure_count"])
+                        st.markdown(f'<div class="r1-meta">{count} photo{"s" if count != 1 else ""} could not upload</div>', unsafe_allow_html=True)
+                    elif photo_gate.get("ready"):
+                        st.markdown(f'<div class="r1-meta">{photo_gate["file_count"]} photo{"s" if photo_gate["file_count"] != 1 else ""} saved</div>', unsafe_allow_html=True)
+                    else:
+                        remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                        st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}…</div>', unsafe_allow_html=True)
+                # The same double-tap protection as every other photo-bearing save: a persistent lock, and the
+                # visible "Saving…" state comes from arming on the first submit and doing the work on the next run.
+                lock_key = f"{prefix}_saving"
+                arm_key = f"{prefix}_armed"
+                armed = st.session_state.get(arm_key, False)
+                already_saving = st.session_state.get(lock_key, False)
+                errors_slot = st.container()
+                submitted = st.form_submit_button(
+                    "Saving…" if armed else ("Please wait" if photo_blocked else "Save necropsy review"),
+                    type="primary", disabled=armed or photo_blocked or already_saving,
+                )
         if submitted and not armed:
             st.session_state[arm_key] = True
             st.rerun()
@@ -5011,6 +5198,549 @@ def render_necropsy_task(data, item) -> None:
         if not return_from_followup_task():
             st.session_state.pop("followup_panel", None)
             st.rerun()
+
+
+# ---- Follow-up task pages: Camera review, Camera issue, Trap not ready (Part B batch 1, boards B1*) -------------------------------------------------
+# One frame for all three: the back pill, the title, the context card, the form, errors as on the check form (a summary above Save, a line and a red
+# ring at each field), and Save. Presentation only: what a Camera review writes is apply_camera_review(); what a hardware task writes is
+# complete_hardware_task() / keep_hardware_task_open(), both held by their own tests.
+
+CAMERA_REVIEW_LEVELS = ["Single interaction", "Repeated interaction", "Heavy / repeated interaction"]
+CAMERA_REVIEW_ASSESSMENTS = ["Humane", "Not humane", "Unclear", "No usable video"]
+CAMERA_RESOLUTIONS = ["Fixed and now working", "Adjusted and now covering trap", "Replaced", "Could not fix"]
+CAMERA_READY_CHOICES = ["Yes", "No", "Could not assess"]
+CAMERA_PAST_EVIDENCE = ["Still usable", "Partly usable", "Not usable", "Could not assess"]
+CAMERA_REVIEW_FIELD_ORDER = ["usable", "target", "level", "first", "strike", "activated", "trigger", "kill", "assessment"]
+
+
+def task_when(value) -> str:
+    """A moment as the boards write it on a task page: "12 Oct, 08:40"."""
+    parsed = parse_dt(value)
+    return f"{parsed.day} {parsed:%b}, {parsed:%H:%M}" if parsed else "—"
+
+
+def task_moment(day, clock):
+    """The date and time fields of a pair as one moment, or None unless both are chosen."""
+    return datetime.combine(day, clock).replace(microsecond=0) if day is not None and clock is not None else None
+
+
+def task_check_row(data, item):
+    """The check that raised a task: one lookup by Visit ID and Trap ID. None when it can't be found."""
+    checks = data["Checks"]
+    found = checks[(checks["Visit ID"].astype(str) == str(item["Visit ID"])) & (checks["Trap ID"].astype(str) == str(item["Trap ID"]))]
+    return found.iloc[-1] if not found.empty else None
+
+
+def camera_review_errors(
+    *, is_kill_review, usable, target, level, strike, activated, assessment,
+    first_d, first_t, trigger_d, trigger_t, kill_d, kill_t, window_start, window_end,
+) -> list:
+    """What a Camera review still needs, as (field, words) in the order the form asks. An answer the form no longer shows is not looked at."""
+    errors = []
+    first_shown = trigger_shown = False
+    if usable is None:
+        errors.append(("usable", "Say whether the camera evidence is usable."))
+    elif usable == "Yes":
+        if not is_kill_review and target is None:
+            errors.append(("target", "Say whether the target animal interaction is visible."))
+        first_shown = is_kill_review or target == "Yes"
+        if first_shown:
+            if level is None:
+                errors.append(("level", "Choose the interaction level."))
+            if first_d is None or first_t is None:
+                errors.append(("first", "Enter the first target interaction date and time."))
+            if not is_kill_review and strike is None:
+                errors.append(("strike", "Say whether the animal entered the strike area."))
+        if is_kill_review:
+            if kill_d is None or kill_t is None:
+                errors.append(("kill", "Enter the kill date and time."))
+            if assessment is None:
+                errors.append(("assessment", "Choose the video humane-kill indicator."))
+        elif target == "Yes" and strike == "Yes":
+            if activated is None:
+                errors.append(("activated", "Say whether the trap activated."))
+            elif activated == "Yes":
+                trigger_shown = True
+                if trigger_d is None or trigger_t is None:
+                    errors.append(("trigger", "Enter the first activation date and time."))
+    first_dt = task_moment(first_d, first_t) if first_shown else None
+    trigger_dt = task_moment(trigger_d, trigger_t) if trigger_shown else None
+    kill_dt = task_moment(kill_d, kill_t) if (usable == "Yes" and is_kill_review) else None
+    for field, label, value in (("first", "First interaction time", first_dt), ("trigger", "Activation time", trigger_dt), ("kill", "Kill time", kill_dt)):
+        if value and window_start and value < window_start:
+            errors.append((field, f"{label} can't be before the window started ({task_when(window_start)})."))
+        if value and window_end and value > window_end:
+            errors.append((field, f"{label} can't be after the check closed the window ({task_when(window_end)})."))
+    if first_dt and trigger_dt and trigger_dt < first_dt:
+        errors.append(("trigger", "Activation time can't be before the first interaction."))
+    if first_dt and kill_dt and kill_dt < first_dt:
+        errors.append(("kill", "Kill time can't be before the first interaction."))
+    return sorted(errors, key=lambda e: CAMERA_REVIEW_FIELD_ORDER.index(e[0]))
+
+
+def camera_review_saved_answers(*, is_kill_review, usable, target, level, strike, activated, assessment) -> dict:
+    """The answers apply_camera_review is handed for the answers the form holds. A question the form did not ask (because an earlier answer made it
+    not apply) is handed what the old form handed it, so the same answers write the same rows (held to the golden record, tests/test_camera_review_golden.py)."""
+    if usable != "Yes":
+        return {"target": "Unclear", "interaction_level": "Unclear", "strike_area": "Unclear", "activated": "Unclear", "assessment": "Not applicable"}
+    target = "Yes" if is_kill_review else target
+    if target == "Yes":
+        interaction_level = level
+        strike_area = "Yes" if is_kill_review else strike
+    elif target == "No":
+        interaction_level = strike_area = "Not applicable"
+    else:
+        interaction_level = strike_area = "Unclear"
+    if is_kill_review:
+        saved_activated = "Yes"
+    elif target == "Yes":
+        saved_activated = activated if strike == "Yes" else {"No": "No"}.get(strike, "Unclear")
+    else:
+        saved_activated = "No" if target == "No" else "Unclear"
+    return {"target": target, "interaction_level": interaction_level, "strike_area": strike_area, "activated": saved_activated,
+            "assessment": assessment if is_kill_review else "Not applicable"}
+
+
+def camera_issue_errors(*, resolution, ready, past_evidence, notes, restart_error) -> list:
+    """What a Camera issue still needs, as (field, words), in the order the form asks. `restart_error` is the refusal of the "Back in service
+    from" time, or None (also None when the form is not asking for one)."""
+    errors = []
+    if resolution is None:
+        errors.append(("resolution", "Choose the camera outcome."))
+    if ready is None:
+        errors.append(("ready", "Say whether the camera is now ready and covering the trap."))
+    elif resolution == "Could not fix" and ready == "Yes":
+        errors.append(("ready", "A camera that could not be fixed cannot be marked ready."))
+    if past_evidence is None:
+        errors.append(("evidence", "Choose what the past test-window evidence is."))
+    if restart_error:
+        errors.append(("when", restart_error))
+    if not notes.strip():
+        errors.append(("notes", "Add a short resolution note."))
+    return errors
+
+
+def trap_service_errors(*, ready, notes, restart_error) -> list:
+    """What a Trap not ready task still needs, as (field, words)."""
+    errors = []
+    if ready is None:
+        errors.append(("ready", "Say whether the trap is now relured, reset and ready."))
+    if restart_error:
+        errors.append(("when", restart_error))
+    if ready is not None and not notes.strip():
+        errors.append(("notes", "Say what was done." if ready == "Yes" else "Say what you found."))
+    return errors
+
+
+@contextmanager
+def task_frame(data, item, title: str, context):
+    """The frame of a task page: the back pill (to End trial when the task was opened from there), the title and the context card. The navigation stays
+    (a follow-up task is a page, not a flow); the form is one 760px column on desktop."""
+    r1_screen_css()
+    st.markdown(design.NARROW_CSS, unsafe_allow_html=True)
+    with st.container(key=design.SCREEN_KEY):
+        from_end_trial = bool(st.session_state.get("return_to"))
+        if st.button("Back to End trial" if from_end_trial else "Back to task list", key="back_followup_list"):
+            _task_forget(item["Follow-up ID"])
+            if not return_from_followup_task():
+                st.session_state.pop("followup_panel", None)
+                st.rerun()
+        r1_title(title)
+        with st.container(key="card_task_context"):
+            st.markdown(r1_kv(context), unsafe_allow_html=True)
+        yield
+
+
+def _task_field_helpers(fid: str, errors: list, show_errors: bool):
+    """`field(name)`: the group a question sits in, ringed red once a Save has been refused and the answer is still wrong. `field_line(name)`:
+    the words under it."""
+    ringed = {name for name, _ in errors} if show_errors else set()
+
+    def field(name: str):
+        return st.container(key=f"{'fielderr' if name in ringed else 'field'}_{name}_{fid}")
+
+    def field_line(name: str) -> None:
+        if show_errors:
+            for found, words in errors:
+                if found == name:
+                    st.markdown(f'<div class="r1-fielderr">{design.icon("warn-circle", 18)}<span>{html.escape(words)}</span></div>', unsafe_allow_html=True)
+
+    return field, field_line
+
+
+def _task_when_inputs(fid: str, name: str, heading: str, *, hint: str = "", min_date=None, max_date=None):
+    """A heading, an optional line under it, then a date and a time, neither chosen to begin with. Returns (date, time)."""
+    st.markdown(f'<div class="r1-label">{html.escape(heading)}</div>' + (f'<div class="r1-meta">{html.escape(hint)}</div>' if hint else ""), unsafe_allow_html=True)
+    with st.container(key=f"pair_{name}_{fid}"):  # a pair stays side by side on a phone
+        day_col, time_col = st.columns(2)
+        day = day_col.date_input(f"{heading} date", value=None, min_value=min_date, max_value=max_date, key=f"task_{name}_d_{fid}", label_visibility="collapsed", format="DD/MM/YYYY")
+        clock = time_col.time_input(f"{heading} time", value=None, key=f"task_{name}_t_{fid}", label_visibility="collapsed")
+    return day, clock
+
+
+def _task_errors_panel(errors: list, show_errors: bool) -> None:
+    if show_errors and errors:
+        st.markdown(design.message_html(
+            "error", f"{len(errors)} thing{'s' if len(errors) != 1 else ''} to finish",
+            "<br>".join(html.escape(words) for _, words in errors)), unsafe_allow_html=True)
+
+
+def _task_save_failed(fid: str, exc: Exception) -> None:
+    """A save that raised: nothing was written (each save is one write), the form stays as it is, and the notice says so."""
+    if isinstance(exc, ValueError):
+        st.session_state[f"task_notice_{fid}"] = ("Nothing was saved.", str(exc))
+    else:
+        _logger.exception("Follow-up task save failed")
+        st.session_state[f"task_notice_{fid}"] = ("Nothing was saved.", "Check your signal and try again.")
+    st.rerun()
+
+
+def _task_notice(fid: str) -> None:
+    notice = st.session_state.get(f"task_notice_{fid}")
+    if notice:
+        st.markdown(design.message_html("error", html.escape(notice[0]), html.escape(notice[1])), unsafe_allow_html=True)
+
+
+def _task_forget(fid) -> None:
+    """A form that is left or saved starts blank, with no refusal showing, the next time it is opened."""
+    for key in (f"task_errors_shown_{fid}", f"task_notice_{fid}"):
+        st.session_state.pop(key, None)
+
+
+def _task_finish(fid) -> None:
+    _task_forget(fid)
+    if not return_from_followup_task():
+        st.session_state.pop("followup_panel", None)
+        st.rerun()
+
+
+def _restart_panel(blocker: str, trap_id: str, data, item) -> None:
+    """Why saving this task will not start the trap's window: it asks for no time then."""
+    if blocker == "another_task":
+        fu = data["Followups"]
+        others = fu[(fu["Trap ID"].astype(str) == str(trap_id)) & (fu["Status"] == "Open") & fu["Follow-up Type"].isin(HARDWARE_TASK_TYPES)
+                    & (fu["Follow-up ID"].astype(str) != str(item["Follow-up ID"]))]
+        other = str(others.iloc[0]["Follow-up Type"])
+        st.markdown(design.message_html("info", f"{html.escape(other)} is still open for {html.escape(str(trap_id))}", "Its test window starts when that task is done too."), unsafe_allow_html=True)
+    elif blocker == "has_window":
+        window = open_window(data, trap_id)
+        started_at = parse_dt(window["Start Time"]) if window is not None else None
+        started = f"{started_at.day} {started_at:%b} at {started_at:%H:%M}" if started_at else "an earlier check"
+        st.markdown(design.message_html("info", f"{html.escape(str(trap_id))} is already back in service", f"A check started its test window on {html.escape(started)}. Nothing to restart."), unsafe_allow_html=True)
+    elif blocker == "not_active":
+        st.markdown(design.message_html("info", f"{html.escape(str(trap_id))} is not active", "Nothing to restart."), unsafe_allow_html=True)
+
+
+def _stays_out_panel(trap_id: str) -> None:
+    st.markdown(design.message_html(
+        "warn", f"{html.escape(str(trap_id))} stays out of service",
+        "This task stays open with your note, so the trap still shows as awaiting service."), unsafe_allow_html=True)
+
+
+def _render_camera_review_task(data, item) -> None:
+    fid = str(item["Follow-up ID"])
+    ss = st.session_state
+    linked = data["Windows"][data["Windows"]["Window ID"] == item["Window ID"]]
+    window = linked.iloc[0] if not linked.empty else None
+    window_start = parse_dt(window["Start Time"]) if window is not None else None
+    window_end = parse_dt(window["End Time"]) if window is not None else None
+    is_kill_review = bool(str(item.get("Bag ID", "")).strip()) or (window is not None and window.get("Finding At Close", "") == "Dead animal found")
+    context = [("Trap", html.escape(str(item["Trap ID"]))), ("Site", html.escape(site_name(data, item["Site ID"])))]
+    if str(item.get("Bag ID", "")).strip():
+        context.append(("Bag ID", html.escape(str(item["Bag ID"]))))
+    if window_start and window_end:
+        context.append(("Evidence period", f"{html.escape(task_when(window_start))} to {html.escape(task_when(window_end))}"))
+    K = {name: f"{prefix}_{fid}" for name, prefix in {
+        "usable": "seg_cam_usable", "target": "seg_cam_target", "level": "rows_cam_level", "strike": "seg_cam_strike", "activated": "seg_cam_activated",
+        "assessment": "rows_cam_assessment"}.items()}
+    # What the form asks is read from the answers as the session holds them, so the rings, the lines and the summary agree with the screen at once.
+    errors = camera_review_errors(
+        is_kill_review=is_kill_review, usable=ss.get(K["usable"]), target=ss.get(K["target"]), level=ss.get(K["level"]), strike=ss.get(K["strike"]),
+        activated=ss.get(K["activated"]), assessment=ss.get(K["assessment"]),
+        first_d=ss.get(f"task_first_d_{fid}"), first_t=ss.get(f"task_first_t_{fid}"), trigger_d=ss.get(f"task_trigger_d_{fid}"),
+        trigger_t=ss.get(f"task_trigger_t_{fid}"), kill_d=ss.get(f"task_kill_d_{fid}"), kill_t=ss.get(f"task_kill_t_{fid}"),
+        window_start=window_start, window_end=window_end,
+    )
+    show_errors = bool(ss.get(f"task_errors_shown_{fid}"))
+    field, field_line = _task_field_helpers(fid, errors, show_errors)
+    min_date = window_start.date() if window_start else None
+    max_date = window_end.date() if window_end else None
+    with task_frame(data, item, "Camera review", context):
+        if window_start and window_end:
+            st.markdown('<div class="r1-meta">Record when things happened in the footage, not when you watched it.</div>', unsafe_allow_html=True)
+        with field("usable"):
+            usable = st.segmented_control("Camera evidence usable?", ["Yes", "No"], default=None, key=K["usable"], selection_mode="single")
+        field_line("usable")
+        target = level = strike = activated = assessment = None
+        first_d = first_t = trigger_d = trigger_t = kill_d = kill_t = None
+        if usable == "No":
+            st.markdown(design.message_html("info", "No event times needed", "Add a link or a note that explains the gap."), unsafe_allow_html=True)
+        elif usable == "Yes":
+            if is_kill_review:
+                target = "Yes"
+                st.markdown(design.message_html("info", "", "Confirmed kill: target interaction, entry to the strike area and activation are already recorded.", icon_name="check-circle").replace("r1-msg info", "r1-msg info ok", 1), unsafe_allow_html=True)
+            else:
+                with field("target"):
+                    target = st.segmented_control("Target animal interaction visible?", ["Yes", "No", "Unclear"], default=None, key=K["target"], selection_mode="single")
+                field_line("target")
+            if target == "Yes":
+                with field("level"):
+                    level = st.radio("Interaction level", CAMERA_REVIEW_LEVELS, index=None, key=K["level"])
+                field_line("level")
+                with field("first"):
+                    first_d, first_t = _task_when_inputs(fid, "first", "First target interaction", min_date=min_date, max_date=max_date)
+                field_line("first")
+                if not is_kill_review:
+                    with field("strike"):
+                        strike = st.segmented_control("Entered the strike area?", ["Yes", "No", "Unclear"], default=None, key=K["strike"], selection_mode="single")
+                    field_line("strike")
+            if is_kill_review:
+                with field("kill"):
+                    kill_d, kill_t = _task_when_inputs(fid, "kill", "Kill", min_date=min_date, max_date=max_date)
+                field_line("kill")
+                with field("assessment"):
+                    assessment = st.radio("Video humane-kill indicator", CAMERA_REVIEW_ASSESSMENTS, index=None, key=K["assessment"])
+                field_line("assessment")
+            elif target == "Yes":
+                if strike == "Yes":
+                    with field("activated"):
+                        activated = st.segmented_control("Trap activated?", ["Yes", "No", "Unclear"], default=None, key=K["activated"], selection_mode="single")
+                    field_line("activated")
+                    if activated == "Yes":
+                        with field("trigger"):
+                            trigger_d, trigger_t = _task_when_inputs(fid, "trigger", "First activation", min_date=min_date, max_date=max_date)
+                        field_line("trigger")
+                elif strike == "No":
+                    st.markdown('<div class="r1-meta">Activation is not applicable because meaningful entry did not occur.</div>', unsafe_allow_html=True)
+        with field("link"):
+            link = st.text_input("Video link", placeholder="Paste a link to the clip", key=f"cam_{fid}_link")
+        with field("notes"):
+            notes = st.text_area("Notes", placeholder="Anything worth knowing about this footage", key=f"cam_{fid}_notes")
+        st.markdown(
+            '<div class="r1-meta">Saving updates attraction, interaction-to-kill time, the video assessment and the trap\'s review status.</div>' if is_kill_review
+            else '<div class="r1-meta">Saving updates attraction, conversion, the missed-kill result and the trap\'s review status.</div>', unsafe_allow_html=True)
+        _task_notice(fid)
+        _task_errors_panel(errors, show_errors)
+        armed = bool(ss.get(f"__two_phase_pending_cam_{fid}_save", False))
+        with st.container(key="save_saving" if armed else "save_ready"):
+            clicked = two_phase_button("Save camera review", f"cam_{fid}_save", "Saving…", type="primary")
+        if not clicked:
+            return
+        ss.pop(f"task_notice_{fid}", None)
+        if errors:
+            ss[f"task_errors_shown_{fid}"] = True
+            st.rerun()  # redraw with the errors, and Save back to "Save camera review" instead of stuck on "Saving…"
+        idxs = data["Windows"].index[data["Windows"]["Window ID"] == item["Window ID"]].tolist()
+        if not idxs:
+            ss[f"task_notice_{fid}"] = ("Nothing was saved.", "The test window this review is for can't be found.")
+            st.rerun()
+        idx = idxs[0]
+        saved = camera_review_saved_answers(is_kill_review=is_kill_review, usable=usable, target=target, level=level, strike=strike, activated=activated, assessment=assessment)
+        first_dt = task_moment(first_d, first_t) if (usable == "Yes" and target == "Yes") else None
+        trigger_dt = task_moment(trigger_d, trigger_t) if (usable == "Yes" and activated == "Yes") else None
+        kill_dt = task_moment(kill_d, kill_t) if (usable == "Yes" and is_kill_review) else None
+        try:
+            apply_camera_review(
+                data, item, idx=idx, is_kill_review=is_kill_review, evidence_usable=usable, **saved,
+                first_dt=first_dt, trigger_dt=trigger_dt, kill_dt=kill_dt, link=link, notes=notes,
+            )
+            save_data(data)
+        except Exception as exc:
+            _task_save_failed(fid, exc)
+        speed_line = (f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx, 'Interaction To Kill Min'])}."
+                      if is_kill_review and first_dt else "No interaction-to-kill time recorded.")
+        set_flash("success", "Camera review saved", [f"{item['Trap ID']} was updated.", speed_line, "Next: review the next open task."])
+        _task_finish(fid)
+
+
+def _hardware_context(data, item, rows) -> list:
+    check = task_check_row(data, item)
+    out = [("Trap", html.escape(str(item["Trap ID"]))), ("Site", html.escape(site_name(data, item["Site ID"])))]
+    out += rows(check)
+    return out
+
+
+def _render_camera_issue_task(data, item) -> None:
+    fid = str(item["Follow-up ID"])
+    ss = st.session_state
+    trap_id = str(item["Trap ID"])
+
+    def rows(check):
+        found = []
+        if check is not None:
+            if str(check["Camera Condition"]).strip():
+                found.append(("Reported at the check", f"<b>{html.escape(str(check['Camera Condition']))}</b>"))
+            if str(check["Camera Covers Trap"]).strip():
+                found.append(("Camera still covered the trap", f"<b>{html.escape(str(check['Camera Covers Trap']))}</b>"))
+            if parse_dt(check["Check Time"]):
+                found.append(("Checked", f"<b>{html.escape(task_when(check['Check Time']))}</b>"))
+        return found
+
+    context = _hardware_context(data, item, rows)
+    K = {name: f"{prefix}_{fid}" for name, prefix in {"resolution": "rows_issue_resolution", "ready": "rows_issue_ready", "evidence": "rows_issue_evidence"}.items()}
+    resolution, ready, past_evidence = ss.get(K["resolution"]), ss.get(K["ready"]), ss.get(K["evidence"])
+    blocker = hardware_restart_blocker(data, item)
+    asks_time = ready == "Yes" and not blocker
+    when = task_moment(ss.get(f"task_when_d_{fid}"), ss.get(f"task_when_t_{fid}"))
+    restart_error = back_in_service_error(data, trap_id, when) if asks_time else None
+    errors = camera_issue_errors(resolution=resolution, ready=ready, past_evidence=past_evidence, notes=ss.get(f"issue_{fid}_notes") or "", restart_error=restart_error)
+    show_errors = bool(ss.get(f"task_errors_shown_{fid}"))
+    field, field_line = _task_field_helpers(fid, errors, show_errors)
+    keeps_open = ready in ("No", "Could not assess")
+    with task_frame(data, item, "Camera issue", context):
+        with field("resolution"):
+            resolution = st.radio("Camera outcome", CAMERA_RESOLUTIONS, index=None, key=K["resolution"])
+        field_line("resolution")
+        with field("ready"):
+            ready = st.radio("Camera now ready and covering the trap?", CAMERA_READY_CHOICES, index=None, key=K["ready"])
+        field_line("ready")
+        with field("evidence"):
+            past_evidence = st.radio("Past test-window evidence", CAMERA_PAST_EVIDENCE, index=None, key=K["evidence"])
+        field_line("evidence")
+        when = None
+        if ready == "Yes" and not blocker:
+            with field("when"):
+                day, clock = _task_when_inputs(fid, "when", "Back in service from", hint="When the trap was working again with its camera. Its new test window starts then.")
+            when = task_moment(day, clock)
+            field_line("when")
+        elif ready == "Yes":
+            _restart_panel(blocker, trap_id, data, item)
+        with field("notes"):
+            notes = st.text_area("Resolution notes", placeholder="What was done", key=f"issue_{fid}_notes")
+        field_line("notes")
+        if keeps_open:
+            _stays_out_panel(trap_id)
+            st.markdown('<div class="r1-meta">Saving adds your note and the past-evidence answer. Nothing restarts.</div>', unsafe_allow_html=True)
+        elif ready == "Yes" and not blocker:
+            st.markdown(f'<div class="r1-meta">Saving closes this task, records the camera\'s state and past evidence, and restarts {html.escape(trap_id)}.</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="r1-meta">Saving closes this task and records the camera\'s state and past evidence.</div>', unsafe_allow_html=True)
+        _task_notice(fid)
+        _task_errors_panel(errors, show_errors)
+        armed = bool(ss.get(f"__two_phase_pending_issue_{fid}_save", False))
+        with st.container(key="save_saving" if armed else "save_ready"):
+            clicked = two_phase_button("Save note, keep task open" if keeps_open else "Save camera resolution", f"issue_{fid}_save", "Saving…", type="primary")
+        if not clicked:
+            return
+        ss.pop(f"task_notice_{fid}", None)
+        if errors:
+            ss[f"task_errors_shown_{fid}"] = True
+            st.rerun()
+        summary = f"{resolution}. Camera ready: {ready}. Past evidence: {past_evidence}. {notes.strip()}"
+        try:
+            if keeps_open:
+                keep_hardware_task_open(data, item, note=summary, evidence_gap=past_evidence)
+            else:
+                result = complete_hardware_task(data, item, notes=summary, back_in_service=when if asks_time else now(), evidence_gap=past_evidence)
+        except Exception as exc:
+            _task_save_failed(fid, exc)
+        if keeps_open:
+            set_flash("success", "Note added", [f"{trap_id} is still awaiting service.", f"Past evidence: {past_evidence}.", "Next: review the next open task."])
+        else:
+            lines = [f"Current camera readiness: {ready}.", f"Past evidence: {past_evidence}."]
+            if result["restarted"]:
+                lines.append(f"{trap_id} is back in service from {task_when(when)}.")
+            elif result["blocker"]:
+                lines.append(f"{trap_id} was not restarted: {HARDWARE_RESTART_REASONS[result['blocker']]}.")
+            set_flash("success", "Camera resolution saved", lines + ["Next: review the next open task."])
+        _task_finish(fid)
+
+
+def _render_trap_service_task(data, item) -> None:
+    fid = str(item["Follow-up ID"])
+    ss = st.session_state
+    trap_id = str(item["Trap ID"])
+
+    def rows(check):
+        found = []
+        if str(item["Reason"]).strip():
+            found.append(("Reason given at the check", f"<b>{html.escape(str(item['Reason']).strip())}</b>"))
+        if check is not None and parse_dt(check["Check Time"]):
+            found.append(("Checked", f"<b>{html.escape(task_when(check['Check Time']))}</b>"))
+        return found
+
+    context = _hardware_context(data, item, rows)
+    ready_key = f"seg_trap_ready_{fid}"
+    ready = ss.get(ready_key)
+    blocker = hardware_restart_blocker(data, item)
+    asks_time = ready == "Yes" and not blocker
+    when = task_moment(ss.get(f"task_when_d_{fid}"), ss.get(f"task_when_t_{fid}"))
+    restart_error = back_in_service_error(data, trap_id, when) if asks_time else None
+    errors = trap_service_errors(ready=ready, notes=ss.get(f"trap_{fid}_notes") or "", restart_error=restart_error)
+    show_errors = bool(ss.get(f"task_errors_shown_{fid}"))
+    field, field_line = _task_field_helpers(fid, errors, show_errors)
+    with task_frame(data, item, "Trap not ready", context):
+        with field("ready"):
+            ready = st.segmented_control("Trap now relured, reset and ready?", ["Yes", "No"], default=None, key=ready_key, selection_mode="single")
+        field_line("ready")
+        when = None
+        if ready == "Yes" and not blocker:
+            with field("when"):
+                day, clock = _task_when_inputs(fid, "when", "Back in service from", hint="When the trap was relured, reset and ready again. Its new test window starts then.")
+            when = task_moment(day, clock)
+            field_line("when")
+        elif ready == "Yes":
+            _restart_panel(blocker, trap_id, data, item)
+        if ready is not None:
+            with field("notes"):
+                notes = st.text_area("What was done?" if ready == "Yes" else "What did you find?", key=f"trap_{fid}_notes",
+                                     placeholder="For example: replaced the spring, relured" if ready == "Yes" else "For example: needs a new spring")
+            field_line("notes")
+        else:
+            notes = ""
+        if ready == "No":
+            _stays_out_panel(trap_id)
+            st.markdown('<div class="r1-meta">Saving adds your note. Nothing restarts.</div>', unsafe_allow_html=True)
+        elif asks_time:
+            st.markdown(f'<div class="r1-meta">Saving closes this task and restarts {html.escape(trap_id)}.</div>', unsafe_allow_html=True)
+        elif ready == "Yes":
+            st.markdown('<div class="r1-meta">Saving closes this task.</div>', unsafe_allow_html=True)
+        _task_notice(fid)
+        _task_errors_panel(errors, show_errors)
+        armed = bool(ss.get(f"__two_phase_pending_trap_{fid}_save", False))
+        with st.container(key="save_saving" if armed else "save_ready"):
+            clicked = two_phase_button("Save note, keep task open" if ready == "No" else "Save trap service", f"trap_{fid}_save", "Saving…", type="primary")
+        if not clicked:
+            return
+        ss.pop(f"task_notice_{fid}", None)
+        if errors:
+            ss[f"task_errors_shown_{fid}"] = True
+            st.rerun()
+        try:
+            if ready == "No":
+                keep_hardware_task_open(data, item, note=notes)
+            else:
+                result = complete_hardware_task(data, item, notes=notes.strip(), back_in_service=when if asks_time else now())
+        except Exception as exc:
+            _task_save_failed(fid, exc)
+        if ready == "No":
+            set_flash("success", "Note added", [f"{trap_id} is still awaiting service.", "Next: review the next open task."])
+        else:
+            if result["restarted"]:
+                line = f"{trap_id} is back in service from {task_when(when)}."
+            else:
+                line = f"{trap_id} was not restarted: {HARDWARE_RESTART_REASONS[result['blocker']]}."
+            set_flash("success", "Trap service saved", [line, "Next: review the next open task."])
+        _task_finish(fid)
+
+
+def render_followup_task(data, item) -> None:
+    """The task page for a Camera review, a Camera issue or a Trap not ready task. A type with no form here says so; it is never shown another type's form."""
+    kind = str(item["Follow-up Type"])
+    if kind == "Camera review":
+        _render_camera_review_task(data, item)
+    elif kind == "Camera issue":
+        _render_camera_issue_task(data, item)
+    elif kind == "Trap not ready":
+        _render_trap_service_task(data, item)
+    else:
+        r1_screen_css()
+        with st.container(key=design.SCREEN_KEY):
+            if st.button("Back to task list", key="back_followup_list"):
+                st.session_state.pop("followup_panel", None)
+                st.rerun()
+            r1_title(kind or "Task")
+            st.markdown(design.message_html("info", "This task has no form yet", "It stays on the list."), unsafe_allow_html=True)
 
 
 st.set_page_config(page_title=APP_TITLE, layout="wide")
@@ -6709,7 +7439,7 @@ if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:
 # here any more (trap-journey-scroll brief) — every workflow page's own H1
 # already carries that context, so a line above this button was showing the
 # same name twice.
-if st.session_state.page in WORKFLOW_PAGES and st.session_state.page != "visit":
+if st.session_state.page in WORKFLOW_PAGES and st.session_state.page not in ("visit", "check"):  # the check page has its own back pill
     st.button("← Exit to Trap sites", key="exit_workflow_to_sites", on_click=set_page, args=("sites",))
 
 st.markdown('<div id="r1m1-page-top" aria-hidden="true"></div>', unsafe_allow_html=True)
@@ -6913,7 +7643,11 @@ elif page == "visit":
             finding = str(row["Finding"]).strip() if row is not None else ""
             species = str(row["Species"]).strip() if row is not None and finding == "Dead animal found" else ""
             detail = " · ".join(part for part in (finding, species, f"{photo_count} photo{'s' if photo_count != 1 else ''} stored" if photo_count else "") if part)
-            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", html.escape(detail)), unsafe_allow_html=True)
+            if saved.get("necropsy_added"):
+                detail = html.escape(detail) + "<br>A necropsy task was added."
+            else:
+                detail = html.escape(detail)
+            st.markdown(design.message_html("success", f"{html.escape(str(saved['trap_id']))} saved", detail), unsafe_allow_html=True)
 
         # Keyed by vid, not persisted anywhere else, so a new visit always starts closed.
         filter_expanded = st.toggle(toggle_label, key=f"visit_filter_expanded_{vid}", value=False)
@@ -7030,393 +7764,412 @@ elif page == "check":
         first_render_of_arrival = st.session_state.get("check_arrival_seen") != arrival
         st.session_state["check_arrival_seen"] = arrival
         just_restored_draft = seed_check_draft(vid, trap_id) and first_render_of_arrival
-        st.button(
-            "← Back to trap selector",
-            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": vid},
-        )
-
-        header(trap_id, f"{site_name(data, sid)} · {trap_location_label(tr)}")
-
-        if w is None:
-            # Field report fix (2026-08-24): repair_missing_window() refuses to guess
-            # an effective time once a trap has prior history - correct, since
-            # silently reusing "now" or the original deployment time could
-            # misrepresent when the trap actually went back into service. The bug
-            # was that this was the ONLY place offering to fix it, and it gave no
-            # way to actually supply that time - a guaranteed dead end pointing at
-            # "Administration" with no such tool there (Activate/Deactivate/Move
-            # live under Trial setup, not Data & records, and none of them apply
-            # directly to "reopen this trap's window right here"). Now this asks
-            # for the same effective-time-and-reason pair inline, in the one place
-            # the operator actually is when they hit this.
-            history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
-            if history.empty:
-                message_panel("error", "This trap has no active test window.", ["Start it from the recorded deployment time, then continue this check."])
-                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
-                    try:
-                        repair_missing_window(data, trap_id)
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
-            else:
-                message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window."])
-                repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_date_{trap_id}_{vid}")
-                repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_time_{trap_id}_{vid}")
-                repair_reason = st.text_area("Reason", key=f"repair_reason_{trap_id}_{vid}")
-                if two_phase_button("Start window and continue", f"repair_window_{trap_id}_{vid}", "Starting…", type="primary"):
-                    if not repair_reason.strip():
-                        st.error("Enter a reason before starting the window.")
-                    else:
-                        try:
-                            repair_missing_window(
-                                data, trap_id,
-                                effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
-                                reason=repair_reason.strip(),
-                            )
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
-            return
-
-        st.caption(f"Current window · {w['Build Version']} · started {human_dt(w['Start Time'])}")
-        finding = st.radio(
-            "What did you find?",
-            FINDINGS,
-            index=None,
-            key=f"finding_{trap_id}_{vid}",
-        )
-        # UX-audit fix (2026-08-13): snapshot the current answers to disk on
-        # every rerun of this page, so a real session loss doesn't force
-        # retyping the whole form - see persist_check_draft's own docstring
-        # for why one call site here is enough to capture the full form.
+        keys = check_draft_field_keys(trap_id, vid)
+        suffix = f"{trap_id}_{vid}"
+        # UX-audit fix (2026-08-13): snapshot the current answers to disk on every rerun of this page, so a real session loss doesn't force
+        # retyping the whole form - see persist_check_draft's own docstring for why one call site here is enough.
         persist_check_draft(vid, trap_id)
-        if finding is None:
-            st.caption("Choose one finding to continue.")
-            return
 
-        has_animal = finding == "Dead animal found"
-        # Scavenged kills: the carcass was gone by the time of the check. "Yes"
-        # is exactly the original form; "No" skips the bag, photos and necropsy
-        # task (nothing to bag, photograph or examine) but still records the kill.
-        carcass_collected = False
-        if has_animal:
-            carcass_choice = st.radio(
-                "Carcass collected?",
-                ["Yes", "No"],
-                index=None,
-                horizontal=True,
-                key=f"carcass_{trap_id}_{vid}",
-            )
-            if carcass_choice is None:
-                st.caption("Say whether the carcass was collected to continue.")
+        # Phase 6: the check form in the 7a language. One narrow column, no top navigation, one back pill.
+        r1_screen_css(hide_nav=True)
+        location = trap_location_label(tr)
+        generic_location = bool(re.fullmatch(r"Trap \d+|No location recorded", location))
+        site_traps_now = data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")]
+        compares_builds = site_traps_now[["Product", "Build Version"]].drop_duplicates().shape[0] > 1
+        sub_line = " · ".join(part for part in (
+            site_name(data, sid),
+            "" if generic_location else location,
+            r1_short_build(trial_build_label(tr["Product"], tr["Build Version"])) if compares_builds else "",
+        ) if part)
+
+        with st.container(key=design.SCREEN_KEY):
+            r1_back("Back to trap list", "visit", "check_list", site_id=sid, visit_id=vid)
+
+            if w is None:
+                r1_title(trap_id, sub_line)
+                _render_no_window_screen()
                 return
-            carcass_collected = carcass_choice == "Yes"
-        collected_animal = has_animal and carcass_collected
-        no_carcass = has_animal and not carcass_collected
-        assessable = finding not in ["Trap missing", "Unable to check"]
-        bag_id = ""
-        species = ""
-        rat_type = ""
-        condition = ""
-        bag_labelled = False
-        photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
 
-        if has_animal:
-            if collected_animal:
-                bag_key = f"bag_id_{vid}_{trap_id}"
-                pending_check_id = ensure_pending_check_id(vid, trap_id)
-                if bag_key not in st.session_state:
-                    recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
-                    st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
-                bag_id = st.session_state[bag_key]
-                message_panel("warning", f"Bag ID: {bag_id}", ["Write this on the bag before moving on."])
-                st.markdown("### Photos")
-                st.caption("Choose the photos already taken from the camera roll.")
-                photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
-            species = st.radio("Species", SPECIES, index=None, key=f"species_{trap_id}_{vid}")
-            if species == "Rat":
-                rat_type = st.radio("Rat type", RAT_TYPES, index=None, key=f"rat_type_{trap_id}_{vid}")
-            if collected_animal:
-                condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=f"condition_{trap_id}_{vid}")
-                bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=f"bagged_{trap_id}_{vid}")
+            finding = st.session_state.get(keys["finding"])
+            routine = bool(st.session_state.get(keys["routine"])) and finding == "Trap still set, no animal"
+            camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
+
+            # ---- 1. Nothing chosen yet: the Routine card and the six outcomes -------------------------------------------------
+            if finding is None:
+                r1_title(trap_id, sub_line)
+                with st.container(key="card_check_routine"):
+                    st.markdown(
+                        '<div class="r1-card-title" style="font-size:20px;line-height:26px">All as expected?</div>'
+                        f'<div class="r1-meta">Records: still set, no animal · ready{" · camera working" if camera_assigned else ""}.</div>',
+                        unsafe_allow_html=True,
+                    )
+                    st.button("Routine check", key=f"check_routine_{suffix}", type="primary", on_click=begin_routine_check, args=(keys,))
+                st.markdown('<div class="r1-label">Or record something else</div>', unsafe_allow_html=True)
+                st.radio("What did you find?", FINDINGS, index=None, key=f"rows_outcome_{suffix}", label_visibility="collapsed",
+                         on_change=pick_check_outcome, args=(keys, f"rows_outcome_{suffix}"))
+                return
+
+            has_animal = finding == "Dead animal found"
+            assessable = finding not in ["Trap missing", "Unable to check"]
+            outcome_icon = dict(zip(FINDINGS, design._OUTCOME_ICONS))[finding]
+
+            # ---- 2. The Routine confirm screen ---------------------------------------------------------------------------------
+            if routine:
+                r1_title(trap_id, "Routine check")
+                rows = [("Outcome", "<b>Trap still set, no animal</b>"), ("Relured, reset and ready", "<b>Yes</b>")]
+                if camera_assigned:
+                    rows.append(("Camera working and covering", "<b>Yes</b>"))
+                with st.container(key="card_check_routine_record"):
+                    st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">This will record</div>' + r1_kv(rows), unsafe_allow_html=True)
             else:
-                condition = "Unable to assess"
-                st.caption("No Bag ID, bag tick or necropsy task. This kill counts, but can't be assessed.")
-                st.caption('Animal condition recorded as "Unable to assess".')
-        elif finding == "Trap fired, no animal":
-            st.info("Camera review will determine whether this was a missed kill, false activation or non-target event.")
-        elif finding == "Trap missing":
-            st.warning("This check will close the current window and no new window will start, since the trap is not in place to monitor. Redeploy it via Administration when it's found.")
-        elif not assessable:
-            st.warning("The trap wasn't reached, so its condition is unchanged - this check will record the visit and start a new monitoring window automatically, so nothing further needs fixing.")
+                r1_title(trap_id, sub_line)
+                with st.container(key="card_check_found"), st.container(key="listrow_check_found"):
+                    text_col, button_col = st.columns([3, 1.1], vertical_alignment="center")
+                    text_col.markdown(
+                        f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(outcome_icon, 24)}</div>'
+                        f'<div><div class="r1-meta">What you found</div><div class="r1-row-title">{html.escape(finding)}</div></div></div>',
+                        unsafe_allow_html=True,
+                    )
+                    button_col.button("Change", key=f"check_change_{suffix}", on_click=change_check_outcome, args=(keys,))
 
-        service_ready = False
-        service_reason = ""
-        if assessable:
-            st.markdown("### Trap service")
-            service_choice = st.radio(
-                "Trap relured, reset and ready?",
-                ["Yes", "No"],
-                index=None,
-                horizontal=True,
-                key=f"service_ready_{trap_id}_{vid}",
-            )
-            service_ready = service_choice == "Yes"
-            if service_choice == "No":
-                service_reason = st.text_area(
-                    "Why is the trap not ready?",
-                    key=f"service_reason_{trap_id}_{vid}",
-                ).strip()
-        else:
-            service_choice = "Not applicable"
-
-        camera_assigned = bool(str(tr.get("Camera ID", "")).strip())
-        camera = "No camera"
-        covers = "Not applicable"
-        adjusted = False
-        camera_ready = True
-        if camera_assigned and assessable:
-            st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
-            st.markdown("### Camera check")
-            if just_restored_draft:
-                st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
-                # Field report fix (2026-08-17): "focus directly where you
-                # left off" - Camera check is specifically where the Arlo
-                # app-switch happens, so it's the one place worth landing on
-                # directly after a restored session, rather than the top of
-                # the (now mostly-refilled) form. Same retry-on-a-timer
-                # pattern as scroll_to_top_once(), targeting this anchor
-                # instead of (0,0).
-                components.html(
-                    """
-                    <script>
-                    (() => {
-                      const doc = window.parent.document;
-                      const scrollToAnchor = () => {
-                        const el = doc.getElementById('r1m1-camera-check-anchor');
-                        if (el) el.scrollIntoView({block: 'start', behavior: 'auto'});
-                      };
-                      scrollToAnchor();
-                      requestAnimationFrame(scrollToAnchor);
-                      [80, 200, 450, 900].forEach((delay) => window.setTimeout(scrollToAnchor, delay));
-                    })();
-                    </script>
-                    """,
-                    height=0,
-                    width=0,
-                )
-            camera_choice = st.radio(
-                "Camera working and covering the trap?",
-                ["Yes", "No", "Could not assess"],
-                index=None,
-                key=f"camera_ready_{trap_id}_{vid}",
-            )
-            if camera_choice == "Yes":
-                camera, covers, camera_ready = "Working", "Yes", True
-            elif camera_choice == "No":
-                camera = st.radio(
-                    "Camera issue",
-                    [x for x in CAMERA if x != "Working"],
-                    index=None,
-                    key=f"camera_issue_{trap_id}_{vid}",
-                ) or ""
-                covers = st.radio(
-                    "Camera still covers the trap?",
-                    ["Yes", "No", "Unsure"],
-                    index=None,
-                    key=f"covers_{trap_id}_{vid}",
-                ) or ""
-                adjusted = st.checkbox("Camera adjusted", key=f"adjusted_{trap_id}_{vid}")
-                camera_ready = False
-            elif camera_choice == "Could not assess":
-                camera, covers, camera_ready = "Unsure", "Unsure", False
-            else:
-                camera_choice = None
-                camera_ready = False
-        else:
+            show_errors = bool(st.session_state.get(f"check_errors_shown_{suffix}"))
+            bag_id = ""
+            species = ""
+            rat_type = ""
+            condition = ""
+            bag_labelled = False
+            carcass_choice = None
+            photo_gate = {"ready": True, "expected_count": 0, "file_count": 0, "row_count": 0, "photos": []}
+            service_choice = None
+            service_reason = ""
+            camera = "No camera"
+            covers = "Not applicable"
+            adjusted = False
+            camera_ready = True
             camera_choice = "Not applicable"
-            if not camera_assigned:
-                st.caption("No camera assigned.")
+            issue_choice = None
+            covers_choice = None
+            problems: list = []  # (field, words), in the order the form asks
 
-        notes = st.text_area("Anything else to record?", height=72, key=f"notes_{trap_id}_{vid}")
-        change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
-        if change_time:
-            c1, c2 = st.columns(2)
-            d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}")
-            tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}")
-        else:
-            d = tm = None
+            # Each field is wrapped so that, once a Save has been refused, its error ring can be drawn round the whole group. The wrapper is made
+            # before its widget runs, so which fields are in error is read from the answers as the session holds them (a tap on this run is
+            # already in them), not from this run's local variables, which are still empty at that point.
+            ss = st.session_state
+            ring_fields = {f for f, _ in check_form_errors(
+                has_animal=has_animal, collected_animal=has_animal and ss.get(keys["carcass"]) == "Yes", assessable=assessable,
+                species=ss.get(keys["species"]) or "", rat_type=ss.get(keys["rat_type"]) or "", condition=ss.get(keys["condition"]) or "",
+                bag_id="", bag_labelled=bool(ss.get(keys["bagged"])),
+                service_choice=ss.get(keys["service_ready"]) if assessable else "Not applicable",
+                service_reason=(ss.get(keys["service_reason"]) or "").strip(),
+                camera_assigned=camera_assigned, camera_choice=ss.get(keys["camera_ready"]) if camera_assigned and assessable else "Not applicable",
+                issue_choice=ss.get(keys["camera_issue"]), covers_choice=ss.get(keys["covers"]),
+            )} if (show_errors and not routine) else set()
 
-        photo_blocked = bool(collected_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-        if collected_animal and photo_gate.get("expected_count", 0):
-            if photo_gate.get("manual_failure_count", 0):
-                count = int(photo_gate["manual_failure_count"])
-                st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
-            elif photo_gate.get("ready"):
-                st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
+            def field(name: str):
+                return st.container(key=f"{'fielderr' if name in ring_fields else 'field'}_{name}_{suffix}")
+
+            def field_line(name: str) -> None:
+                if show_errors:
+                    for f, words in current_errors():
+                        if f == name:
+                            st.markdown(f'<div class="r1-fielderr">{design.icon("warn-circle", 18)}<span>{html.escape(words)}</span></div>', unsafe_allow_html=True)
+
+            def current_errors() -> list:
+                return check_form_errors(
+                    has_animal=has_animal, collected_animal=collected_animal, assessable=assessable, species=species, rat_type=rat_type,
+                    condition=condition, bag_id=bag_id, bag_labelled=bag_labelled, service_choice=service_choice, service_reason=service_reason,
+                    camera_assigned=camera_assigned, camera_choice=camera_choice, issue_choice=issue_choice, covers_choice=covers_choice,
+                )
+
+            collected_animal = False
+            no_carcass = False
+
+            if routine:
+                service_choice, camera_choice = "Yes", ("Yes" if camera_assigned else "Not applicable")
+                service_ready, camera, covers, camera_ready = True, ("Working" if camera_assigned else "No camera"), ("Yes" if camera_assigned else "Not applicable"), True
             else:
-                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
-                st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
+                # ---- 3. The outcome's own questions ---------------------------------------------------------------------------
+                if has_animal:
+                    with field("carcass"):
+                        carcass_choice = st.segmented_control("Carcass collected?", ["Yes", "No"], default=None, key=keys["carcass"], selection_mode="single")
+                    if carcass_choice is None:
+                        st.markdown('<div class="r1-meta">Say whether the carcass was collected to continue.</div>', unsafe_allow_html=True)
+                        return
+                    collected_animal = carcass_choice == "Yes"
+                    no_carcass = not collected_animal
+                    if collected_animal:
+                        bag_key = f"bag_id_{vid}_{trap_id}"
+                        pending_check_id = ensure_pending_check_id(vid, trap_id)
+                        if bag_key not in st.session_state:
+                            recovered_bag = recover_bag_id(DATA_ROOT, pending_check_id, vid, trap_id)
+                            st.session_state[bag_key] = recovered_bag or next_bag_id(data, sid)
+                        bag_id = st.session_state[bag_key]
+                        st.markdown(design.message_html("warn", f"Bag ID: {html.escape(bag_id)}", "Write this on the bag before moving on.", icon_name="bag"), unsafe_allow_html=True)
+                        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Choose the photos already taken from the camera roll.</div>', unsafe_allow_html=True)
+                        photo_gate = render_check_photo_capture(vid, trap_id, sid, bag_id, str(w["Window ID"]))
+                    else:
+                        condition = "Unable to assess"
+                        st.markdown(design.message_html(
+                            "info", "", "<div>No Bag ID, bag tick or necropsy task. This kill counts, but can't be assessed.</div><div>Animal condition recorded as “Unable to assess”.</div>"), unsafe_allow_html=True)
+                    with field("species"):
+                        species = st.radio("What was it?", SPECIES, index=None, horizontal=True, key=keys["species"]) or ""
+                    field_line("species")
+                    if species == "Rat":
+                        with field("rat_type"):
+                            rat_type = st.segmented_control("Rat type", RAT_TYPES, default=None, key=keys["rat_type"], selection_mode="single") or ""
+                        field_line("rat_type")
+                    if collected_animal:
+                        with field("condition"):
+                            condition = st.radio("Animal condition when found", ANIMAL_CONDITION, index=None, key=keys["condition"]) or ""
+                        field_line("condition")
+                        st.markdown('<div class="r1-label">Bag</div>', unsafe_allow_html=True)
+                        with field("bag"):
+                            bag_labelled = st.checkbox(f"Bag labelled {bag_id}", key=keys["bagged"])
+                        field_line("bag")
+                elif finding == "Trap fired, no animal":
+                    st.markdown(design.message_html("info", "", "Camera review will determine whether this was a missed kill, a false activation or a non-target event."), unsafe_allow_html=True)
+                elif finding == "Trap missing":
+                    st.markdown(design.message_html("warn", "Monitoring stops at this trap", "This check closes its window and no new one starts. Redeploy it from Administration when it’s found."), unsafe_allow_html=True)
+                elif not assessable:
+                    st.markdown(design.message_html("info", "", "The trap wasn’t reached, so nothing about it has changed. Monitoring carries on with a new window."), unsafe_allow_html=True)
 
-        # True one-tap saving lock (Layout stability pass): the "Saving
-        # check… Do not tap again." message used to be text only, with
-        # nothing actually disabling the button behind it - the only real
-        # disabled= condition was photo_blocked. On a slow field connection
-        # a second tap during a slow save could still resubmit. This flag
-        # is set the instant the button is pressed and persists across the
-        # rerun it triggers, so the button itself renders disabled on any
-        # subsequent rerun until the save fails validation (cleared, so the
-        # operator can fix and retry) or completes (popped, along with the
-        # rest of this check's transient session_state).
-        # Field report fix (2026-08-17): uses the shared two_phase_button
-        # helper (also used for the trap-list Check button and the 3
-        # follow-up review saves - 2026-08-18: "same issues... apply system
-        # logic") for visible tap feedback, plus its own persistent lock on
-        # top since this save goes through commit_staged_records_with_photos
-        # - slower and failure-prone enough that it needs real protection
-        # against a rapid double-tap during that work, not just the two-phase
-        # helper's own lock (which clears itself the instant the slow work
-        # starts). Cleared on validation failure (retry allowed) or via
-        # session_state_keys_to_clear_on_failure on a deeper commit failure,
-        # so this can never strand the button disabled forever.
-        save_lock_key = f"check_saving_{trap_id}_{vid}"
-        saving = st.session_state.get(save_lock_key, False)
-        save_label = "Please wait" if photo_blocked else "Save check"
-        save_clicked = two_phase_button(save_label, f"save_check_{trap_id}_{vid}", "Saving…", type="primary", use_container_width=True, disabled=photo_blocked or saving)
-        if save_clicked:
-            st.session_state[save_lock_key] = True
-            saving_feedback = st.empty()
-            saving_feedback.info("Saving check… Do not tap again.")
-            errors = []
-            if has_animal and not species:
-                errors.append("Choose the species.")
-            if has_animal and species == "Rat" and not rat_type:
-                errors.append("Choose the rat type.")
-            if collected_animal and not condition:
-                errors.append("Choose the animal condition.")
-            if collected_animal and not bag_labelled:
-                errors.append(f"Confirm that bag {bag_id} is labelled.")
-            if assessable and service_choice is None:
-                errors.append("Confirm whether the trap is relured, reset and ready.")
-            if assessable and service_choice == "No" and not service_reason:
-                errors.append("Record why the trap is not ready.")
-            if camera_assigned and assessable and camera_choice is None:
-                errors.append("Complete the camera check.")
-            if camera_assigned and assessable and camera_choice == "No" and not camera:
-                errors.append("Choose the camera issue.")
-            if camera_assigned and assessable and camera_choice == "No" and not covers:
-                errors.append("Record whether the camera covers the trap.")
-            if errors:
-                st.session_state[save_lock_key] = False
-                message_panel("error", "Complete these details before saving.", errors)
-                return
-
-            check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
-            if collected_animal and photo_gate.get("expected_count", 0):
-                photo_gate = {
-                    **photo_gate,
-                    **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
-                }
-                if not (
-                    photo_gate.get("ready")
-                    and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
-                ):
-                    st.session_state[save_lock_key] = False
-                    st.error("One or more selected photos are not safely stored yet.")
-                    return
-            active = open_window(data, trap_id)
-            if active is None:
-                st.session_state[save_lock_key] = False
-                # Same recovery as the "no active test window" branch above -
-                # this trap's window closed (by someone/something else) in the
-                # gap between opening this page and hitting Save. A trap with
-                # prior history needs a real effective time, same as there.
-                history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
-                if history.empty:
-                    message_panel("error", "This trap has no active test window.", ["Start it from deployment time and retry."])
-                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
-                        repair_missing_window(data, trap_id)
-                        st.rerun()
+                service_ready = False
+                if assessable:
+                    with field("service"):
+                        service_choice = st.segmented_control("Trap relured, reset and ready?", ["Yes", "No"], default=None, key=keys["service_ready"], selection_mode="single")
+                    service_ready = service_choice == "Yes"
+                    if service_choice == "No":
+                        with field("service_reason"):
+                            service_reason = st.text_area("Why is the trap not ready?", placeholder="For example: lure gone, spring weak", key=keys["service_reason"]).strip()
+                    field_line("service" if service_choice is None else "service_reason")
                 else:
-                    message_panel("error", "This trap has no active test window.", ["This trap has prior history - enter when it actually went back into service to reopen its window, then retry saving."])
-                    repair_date = st.date_input("Effective date", value=now().date(), key=f"repair_on_save_date_{trap_id}_{vid}")
-                    repair_time = st.time_input("Effective time", value=now().time(), key=f"repair_on_save_time_{trap_id}_{vid}")
-                    repair_reason = st.text_area("Reason", key=f"repair_on_save_reason_{trap_id}_{vid}")
-                    if two_phase_button("Start missing window", f"repair_on_save_{trap_id}_{vid}", "Starting…"):
-                        if not repair_reason.strip():
-                            st.error("Enter a reason before starting the window.")
-                        else:
-                            try:
-                                repair_missing_window(
-                                    data, trap_id,
-                                    effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
-                                    reason=repair_reason.strip(),
-                                )
-                                st.rerun()
-                            except Exception as exc:
-                                st.error(str(exc))
-                return
+                    service_choice = "Not applicable"
 
-            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
-            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-            expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
-            record = build_check_records(
-                staged, visit_id=vid, site_id=sid, trap_id=trap_id, check_time=check_time, finding=finding,
-                collected_animal=collected_animal, no_carcass=no_carcass, assessable=assessable,
-                species=species, rat_type=rat_type, condition=condition, bag_id=bag_id, bag_labelled=bag_labelled,
-                service_ready=service_ready, service_reason=service_reason,
-                camera_assigned=camera_assigned, camera=camera, covers=covers, adjusted=adjusted, camera_ready=camera_ready,
-                notes=notes, photo_check_id=photo_gate.get("check_id"), expected_photo_count=expected_photo_count,
-            )
-            check_id = record["check_id"]
+                camera_ready = True
+                if camera_assigned and assessable:
+                    st.markdown('<span id="r1m1-camera-check-anchor"></span>', unsafe_allow_html=True)
+                    if just_restored_draft:
+                        st.session_state["scroll_hold_for_anchor"] = True  # scroll_to_top_once() leaves this screen where the anchor puts it
+                        # Field report fix (2026-08-17): "focus directly where you left off" - Camera check is specifically where the Arlo
+                        # app-switch happens, so it's the one place worth landing on directly after a restored session, rather than the top
+                        # of the (now mostly-refilled) form. Same retry-on-a-timer pattern as scroll_to_top_once(), targeting this anchor.
+                        components.html(
+                            """
+                            <script>
+                            (() => {
+                              const doc = window.parent.document;
+                              const scrollToAnchor = () => {
+                                const el = doc.getElementById('r1m1-camera-check-anchor');
+                                if (el) el.scrollIntoView({block: 'start', behavior: 'auto'});
+                              };
+                              scrollToAnchor();
+                              requestAnimationFrame(scrollToAnchor);
+                              [80, 200, 450, 900].forEach((delay) => window.setTimeout(scrollToAnchor, delay));
+                            })();
+                            </script>
+                            """,
+                            height=0,
+                            width=0,
+                        )
+                    with field("camera"):
+                        camera_choice = st.radio("Camera working and covering the trap?", ["Yes", "No", "Could not assess"], index=None, key=keys["camera_ready"])
+                    if camera_choice == "Yes":
+                        camera, covers, camera_ready = "Working", "Yes", True
+                    elif camera_choice == "No":
+                        field_line("camera")
+                        with field("issue"):
+                            issue_choice = st.radio("Camera issue", [x for x in CAMERA if x != "Working"], index=None, key=keys["camera_issue"])
+                        field_line("issue")
+                        with field("covers"):
+                            covers_choice = st.segmented_control("Camera still covers the trap?", ["Yes", "No", "Unsure"], default=None, key=keys["covers"], selection_mode="single")
+                        field_line("covers")
+                        adjusted = st.checkbox("Camera adjusted", key=keys["adjusted"])
+                        camera, covers, camera_ready = (issue_choice or ""), (covers_choice or ""), False
+                    elif camera_choice == "Could not assess":
+                        camera, covers, camera_ready = "Unsure", "Unsure", False
+                    else:
+                        camera_choice = None
+                        camera_ready = False
+                    if camera_choice != "No":
+                        field_line("camera")
+                else:
+                    camera_choice = "Not applicable"
+                    if not camera_assigned:
+                        st.markdown('<div class="r1-meta">No camera assigned.</div>', unsafe_allow_html=True)
 
-            def _verify_check_persisted(reloaded):
-                persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
-                persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
-                if len(persisted_check) != 1:
-                    raise RuntimeError("The saved workbook did not contain exactly one completed check.")
-                return {"followup_count": len(persisted_followups)}
+            # ---- 4. Notes and the check time (every outcome, Routine included) --------------------------------------------------
+            with st.container(key=f"more_notes_{suffix}"):
+                with st.expander("Anything else to record?", expanded=bool(st.session_state.get(keys["notes"]))):
+                    notes = st.text_area("Notes", height=72, key=keys["notes"], label_visibility="collapsed")
+            with st.container(key=f"sw_time_{suffix}"):
+                change_time = st.toggle("Change check time", value=False, key=f"change_time_{trap_id}_{vid}")
+            if change_time:
+                c1, c2 = st.columns(2)
+                d = c1.date_input("Check date", value=now().date(), key=f"check_date_{trap_id}_{vid}", label_visibility="collapsed")
+                tm = c2.time_input("Check time", value=now().time(), key=f"check_time_{trap_id}_{vid}", label_visibility="collapsed")
+            else:
+                d = tm = None
 
-            photo_count = commit_staged_records_with_photos(
-                data=data,
-                staged=staged,
-                original_data=original_data,
-                photo_gate=photo_gate,
-                expected_photo_count=expected_photo_count,
-                record_id=check_id,
-                photos_id_column="Check ID",
-                verify_persisted=_verify_check_persisted,
-                log_prefix="check",
-                log_fields={"check_id": check_id, "trap_id": trap_id},
-                record_noun="check",
-                record_description="check, follow-up or photo record",
-                session_state_keys_to_clear_on_failure=[save_lock_key],
-            )
+            # ---- 5. Above Save: the P6-7 warning, a notice from a refused save, the errors, then Save -----------------------------
+            photo_blocked = bool(collected_animal and photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+            if not collected_animal:
+                # Photos staged for a collected kill stay staged while the check is open (switching back restores them); saved with an outcome
+                # that takes none they are not attached and are deleted at Save. The form says so here, and never blocks Save for it.
+                unattached = staged_photo_count(DATA_ROOT, deterministic_check_id(vid, trap_id))
+                if unattached:
+                    st.markdown(design.message_html(
+                        "warn", f"{unattached} photo{'s' if unattached != 1 else ''} won’t be saved with this outcome",
+                        "They were added for a collected kill. To keep them, change back to Dead animal found with the carcass collected."), unsafe_allow_html=True)
+            elif photo_gate.get("expected_count", 0) and photo_gate.get("manual_failure_count", 0):
+                count = int(photo_gate["manual_failure_count"])
+                st.markdown(design.message_html("warn", f"{count} photo{'s' if count != 1 else ''} could not upload", "Remove it or tap Retry on it above, then Save check."), unsafe_allow_html=True)
+            notice_key = f"check_notice_{suffix}"
+            if st.session_state.get(notice_key):
+                st.markdown(design.message_html("error", html.escape(str(st.session_state[notice_key]))), unsafe_allow_html=True)
+            all_errors = current_errors() if not routine else []
+            if show_errors and all_errors:
+                st.markdown(design.message_html(
+                    "error", f"{len(all_errors)} thing{'s' if len(all_errors) != 1 else ''} to finish",
+                    "<br>".join(html.escape(words) for _, words in all_errors)), unsafe_allow_html=True)
 
-            for key in [
-                f"bag_id_{vid}_{trap_id}",
-                pending_check_id_key(vid, trap_id),
-                photo_component_event_key(vid, trap_id),
-                save_lock_key,
-            ]:
-                st.session_state.pop(key, None)
-            st.session_state.saved_check = {
-                "trap_id": trap_id,
-                "photo_count": photo_count,
-            }
-            # Field report fix (2026-08-17): "didn't get a success status
-            # after successful trap check", "have to scroll up... just
-            # looking at cards already completed". saved_check above is a
-            # true one-shot flash - popped the very next render, so any
-            # intervening rerun before the operator actually looks at the
-            # screen (a reconnect, scrolling straight past it, anything)
-            # means it's already gone with no second chance. This is a
-            # persistent marker instead, read by render_visit_trap_card
-            # below - it survives reruns/reconnects/scroll position, so the
-            # just-saved trap's own card visibly stands out from the plain
-            # "✓ Checked" ones, regardless of whether the flash was ever seen.
-            st.session_state[f"last_saved_trap_{vid}"] = trap_id
-            go("visit", site_id=sid, visit_id=vid)
+            save_lock_key = f"check_saving_{trap_id}_{vid}"
+            saving = st.session_state.get(save_lock_key, False)
+            save_label = "Please wait" if photo_blocked else "Save check"
+            armed = bool(st.session_state.get(f"__two_phase_pending_save_check_{suffix}", False))
+            with st.container(key="save_saving" if armed else "save_ready"):
+                save_clicked = two_phase_button(save_label, f"save_check_{suffix}", "Saving check…", type="primary", disabled=photo_blocked or saving)
+            if photo_blocked and not photo_gate.get("manual_failure_count", 0):  # a failed upload has its own warning above; this line is for one still going
+                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}… Save check is available when it finishes.</div>', unsafe_allow_html=True)
+
+            if routine:
+                st.button("Record something different", key=f"check_different_{suffix}", type="tertiary", on_click=change_check_outcome, args=(keys,))
+
+            if save_clicked:
+                # The arming run (two_phase_button) has drawn "Saving check…"; this run does the work. The lock stays up across reruns until the
+                # save fails validation (cleared, so the operator can fix and retry) or completes (popped with the rest of this check's state).
+                st.session_state[save_lock_key] = True
+                st.session_state.pop(notice_key, None)
+                if all_errors:
+                    st.session_state[save_lock_key] = False
+                    st.session_state[f"check_errors_shown_{suffix}"] = True
+                    st.rerun()  # redraw with the errors, and the button back to "Save check" instead of stuck on "Saving check…"
+
+                check_time = datetime.combine(d, tm).replace(microsecond=0) if change_time else now()
+                if collected_animal and photo_gate.get("expected_count", 0):
+                    photo_gate = {
+                        **photo_gate,
+                        **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES),
+                    }
+                    if not (
+                        photo_gate.get("ready")
+                        and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")
+                    ):
+                        st.session_state[save_lock_key] = False
+                        st.session_state[notice_key] = "One or more selected photos are not safely stored yet."
+                        st.rerun()
+                active = open_window(data, trap_id)
+                if active is None:
+                    # This trap's window closed (by someone/something else) in the gap between opening this page and hitting Save: the page
+                    # redraws on the no-active-window screen, which asks for the time and reason when the trap has history.
+                    st.session_state[save_lock_key] = False
+                    st.session_state[notice_key] = "This trap has no active test window. Start one, then save this check again."
+                    st.rerun()
+
+                original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+                staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+                expected_photo_count = int(photo_gate.get("expected_count", 0)) if collected_animal else 0
+                record = build_check_records(
+                    staged, visit_id=vid, site_id=sid, trap_id=trap_id, check_time=check_time, finding=finding,
+                    collected_animal=collected_animal, no_carcass=no_carcass, assessable=assessable,
+                    species=species, rat_type=rat_type, condition=condition, bag_id=bag_id, bag_labelled=bag_labelled,
+                    service_ready=service_ready, service_reason=service_reason,
+                    camera_assigned=camera_assigned, camera=camera, covers=covers, adjusted=adjusted, camera_ready=camera_ready,
+                    notes=notes, photo_check_id=photo_gate.get("check_id"), expected_photo_count=expected_photo_count,
+                )
+                check_id = record["check_id"]
+
+                def _verify_check_persisted(reloaded):
+                    persisted_check = reloaded["Checks"][reloaded["Checks"]["Check ID"].astype(str) == str(check_id)]
+                    persisted_followups = reloaded["Followups"][reloaded["Followups"]["Visit ID"].astype(str) == str(vid)]
+                    if len(persisted_check) != 1:
+                        raise RuntimeError("The saved workbook did not contain exactly one completed check.")
+                    return {"followup_count": len(persisted_followups)}
+
+                photo_count = commit_staged_records_with_photos(
+                    data=data,
+                    staged=staged,
+                    original_data=original_data,
+                    photo_gate=photo_gate,
+                    expected_photo_count=expected_photo_count,
+                    record_id=check_id,
+                    photos_id_column="Check ID",
+                    verify_persisted=_verify_check_persisted,
+                    log_prefix="check",
+                    log_fields={"check_id": check_id, "trap_id": trap_id},
+                    record_noun="check",
+                    record_description="check, follow-up or photo record",
+                    session_state_keys_to_clear_on_failure=[save_lock_key],
+                    pending_check_id=deterministic_check_id(vid, trap_id),
+                )
+
+                for key in [
+                    f"bag_id_{vid}_{trap_id}",
+                    pending_check_id_key(vid, trap_id),
+                    photo_component_event_key(vid, trap_id),
+                    save_lock_key,
+                    f"check_errors_shown_{suffix}",
+                    notice_key,
+                ]:
+                    st.session_state.pop(key, None)
+                st.session_state.saved_check = {
+                    "trap_id": trap_id,
+                    "photo_count": photo_count,
+                    "necropsy_added": bool(collected_animal),
+                }
+                # Field report fix (2026-08-17): "didn't get a success status after successful trap check", "have to scroll up... just
+                # looking at cards already completed". saved_check above is a true one-shot flash - popped the very next render, so any
+                # intervening rerun before the operator actually looks at the screen (a reconnect, scrolling straight past it, anything)
+                # means it's already gone with no second chance. This is a persistent marker instead, read by render_visit_trap_card below -
+                # it survives reruns/reconnects/scroll position, so the just-saved trap's own card visibly stands out from the plain
+                # "✓ Checked" ones, regardless of whether the flash was ever seen.
+                st.session_state[f"last_saved_trap_{vid}"] = trap_id
+                go("visit", site_id=sid, visit_id=vid)
+
+    def _render_no_window_screen():
+        """This trap has no open test window (Field report fix, 2026-08-24: repair_missing_window() refuses to guess an effective time once a
+        trap has prior history, so the operator is asked for it here, in the one place they are when they hit this)."""
+        history = data["Windows"][data["Windows"]["Trap ID"].astype(str) == str(trap_id)]
+        suffix = f"{trap_id}_{vid}"
+        if history.empty:
+            st.markdown(design.message_html("error", "This trap has no active test window", "Start it from the recorded deployment time, then carry on with this check."), unsafe_allow_html=True)
+            if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
+                try:
+                    repair_missing_window(data, trap_id)
+                    st.rerun()
+                except Exception as exc:
+                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
+            return
+        st.markdown(design.message_html("error", "This trap has no active test window", "It has earlier history, so enter when it actually went back into service. Then carry on with this check."), unsafe_allow_html=True)
+        st.markdown('<div class="r1-label">Back in service from</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        repair_date = c1.date_input("Effective date", value=now().date(), key=f"repair_date_{suffix}", label_visibility="collapsed")
+        repair_time = c2.time_input("Effective time", value=now().time(), key=f"repair_time_{suffix}", label_visibility="collapsed")
+        st.markdown('<div class="r1-label">Reason</div>', unsafe_allow_html=True)
+        repair_reason = st.text_area("Reason", placeholder="Why the window was missing", key=f"repair_reason_{suffix}", label_visibility="collapsed")
+        if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
+            if not repair_reason.strip():
+                st.markdown(design.message_html("error", "Enter a reason before starting the window."), unsafe_allow_html=True)
+            else:
+                try:
+                    repair_missing_window(
+                        data, trap_id,
+                        effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
+                        reason=repair_reason.strip(),
+                    )
+                    st.rerun()
+                except Exception as exc:
+                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
 
     _render_check_page()
 
@@ -8160,176 +8913,16 @@ elif page == "followups":
     else:
         matches=data["Followups"][data["Followups"]["Follow-up ID"]==selected_followup_id]
         if matches.empty:
-            st.warning("This task no longer exists.")
-            if st.button("Back to task list"):
+            r1_screen_css()
+            st.markdown(design.message_html("info", "This task no longer exists", "It may have been completed on another device."), unsafe_allow_html=True)
+            if st.button("Back to task list", key="back_followup_list"):
                 st.session_state.pop("followup_panel",None); st.rerun()
         else:
-            item=matches.iloc[0]; fid=item["Follow-up ID"]; tr=trap_row(data,item["Trap ID"])
+            item=matches.iloc[0]
             if item["Follow-up Type"]=="Necropsy review":
                 render_necropsy_task(data, item)
             else:
-                opened_from_end_trial = bool(st.session_state.get("return_to"))
-                if st.button("← Back to End trial" if opened_from_end_trial else "← Back to task list", key="back_followup_list"):
-                    if not return_from_followup_task():
-                        st.session_state.pop("followup_panel",None); st.rerun()
-                header(item["Follow-up Type"], f"{item['Trap ID']} · {site_name(data,item['Site ID'])}" + (f" · Bag {item['Bag ID']}" if str(item.get("Bag ID", "")).strip() else ""))
-
-                linked_windows=data["Windows"][data["Windows"]["Window ID"]==item["Window ID"]]
-                linked_window=linked_windows.iloc[0] if not linked_windows.empty else None
-                window_start=parse_dt(linked_window["Start Time"]) if linked_window is not None else None
-                window_end=parse_dt(linked_window["End Time"]) if linked_window is not None else None
-
-                # Field report fix (2026-09-16): "Build" used to read the trap's
-                # *current* Build Version, not what it was running when this
-                # window was actually open - so any trap whose build was changed
-                # since (e.g. reassigned for a new trial) showed its new build on
-                # every one of its old, still-open follow-ups, with an evidence
-                # period that predates that build even existing. Use the linked
-                # window's own recorded Build Version instead - it's captured at
-                # window-open time and never changes afterward.
-                historical_build = linked_window["Build Version"] if linked_window is not None else tr["Build Version"]
-                context_rows=[("Trap",item["Trap ID"]),("Site",site_name(data,item["Site ID"])),("Bag ID",item["Bag ID"])]
-                if window_start and window_end:
-                    context_rows.append(("Evidence period",f"{human_dt(window_start)} to {human_dt(window_end)}"))
-                workflow_context(context_rows)
-                if window_start and window_end and item["Follow-up Type"]=="Camera review":
-                    st.caption("Record when events occurred in the footage, not when you reviewed it.")
-                min_evidence_date=window_start.date() if window_start else None
-                max_evidence_date=window_end.date() if window_end else None
-
-                st.markdown("### Complete this review")
-                if item["Follow-up Type"]=="Camera review":
-                    is_kill_review=bool(str(item.get("Bag ID", "")).strip()) or (linked_window is not None and linked_window.get("Finding At Close", "")=="Dead animal found")
-                    prefix=f"cam_{fid}"
-                    evidence_usable=st.selectbox("Camera evidence usable",["Select…","Yes","No"],index=0,key=f"{prefix}_usable")
-                    target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; first_d=first_t=None
-                    activated="Unclear"; trigger_d=trigger_t=None; kill_d=kill_t=None
-                    assessment="Not applicable"
-
-                    if evidence_usable=="No":
-                        st.info("No event timings are required. Add the evidence link or notes explaining the gap.")
-                    elif evidence_usable=="Yes":
-                        if is_kill_review:
-                            target="Yes"
-                            st.write("**Target interaction:** Confirmed by this kill review")
-                        else:
-                            target=st.selectbox("Target animal interaction visible",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_target")
-                        if target=="Yes":
-                            interaction_level=st.selectbox("Interaction level",["Select…","Single interaction","Repeated interaction","Heavy / repeated interaction"],index=0,key=f"{prefix}_level")
-                            first_d=st.date_input("First target interaction date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_first_d")
-                            first_t=st.time_input("First target interaction time",value=None,key=f"{prefix}_first_t")
-                            if is_kill_review:
-                                strike_area="Yes"
-                            else:
-                                strike_area=st.selectbox("Entered the strike area",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_strike")
-                        elif target=="No":
-                            interaction_level="Not applicable"; strike_area="Not applicable"
-                        elif target=="Unclear":
-                            interaction_level="Unclear"; strike_area="Unclear"
-
-                        if is_kill_review:
-                            st.caption("Activation and kill are implied by this confirmed-kill task.")
-                            activated="Yes"
-                            kill_d=st.date_input("Kill date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_kill_d")
-                            kill_t=st.time_input("Kill time",value=None,key=f"{prefix}_kill_t")
-                            assessment=st.selectbox("Video humane-kill indicator",["Select…","Humane","Not humane","Unclear","No usable video"],index=0,key=f"{prefix}_assessment")
-                        elif target=="Yes":
-                            if strike_area=="Yes":
-                                activated=st.selectbox("Trap activated",["Select…","Yes","No","Unclear"],index=0,key=f"{prefix}_activated")
-                                if activated=="Yes":
-                                    trigger_d=st.date_input("First activation date",value=None,min_value=min_evidence_date,max_value=max_evidence_date,key=f"{prefix}_trigger_d")
-                                    trigger_t=st.time_input("First activation time",value=None,key=f"{prefix}_trigger_t")
-                            elif strike_area=="No":
-                                activated="No"
-                                st.caption("Activation is not applicable because meaningful entry did not occur.")
-                            elif strike_area=="Unclear":
-                                activated="Unclear"
-                        else:
-                            activated="No" if target=="No" else "Unclear"
-
-                    link=st.text_input("Video link",key=f"{prefix}_link")
-                    notes=st.text_area("Notes",key=f"{prefix}_notes")
-
-                    saving_update("Attraction, interaction-to-kill speed, video assessment and the linked test-window review status." if is_kill_review else "Attraction, conversion, missed-kill classification and the linked test-window review status.")
-                    # Field report (2026-08-18): "same issues, seems like nothing is
-                    # happening" - same fix as Save check / the trap-list Check
-                    # button, applied consistently rather than left as a one-off.
-                    submit=two_phase_button("Save camera review",f"{prefix}_save","Saving…",type="primary")
-                    if submit:
-                        errors=[]
-                        if evidence_usable=="Select…": errors.append("Select whether the camera evidence is usable.")
-                        if evidence_usable=="Yes" and not is_kill_review and target=="Select…": errors.append("Select whether target interaction is visible.")
-                        if target=="Yes" and interaction_level=="Select…": errors.append("Select an interaction level.")
-                        if not is_kill_review and target=="Yes" and strike_area=="Select…": errors.append("Select whether the animal entered the strike area.")
-                        if target=="Yes" and (first_d is None or first_t is None): errors.append("Enter the first target interaction date and time.")
-                        if is_kill_review and evidence_usable=="Yes":
-                            if kill_d is None or kill_t is None: errors.append("Enter the kill date and time.")
-                            if assessment=="Select…": errors.append("Select the video humane-kill indicator.")
-                        if not is_kill_review and evidence_usable=="Yes" and target=="Yes" and strike_area=="Yes":
-                            if activated=="Select…": errors.append("Select whether the trap activated.")
-                            if activated=="Yes" and (trigger_d is None or trigger_t is None): errors.append("Enter the first activation date and time.")
-                        if not is_kill_review and strike_area=="No" and activated=="Yes": errors.append("A trap cannot activate when meaningful entry did not occur.")
-                        if not is_kill_review and target=="No" and strike_area not in ["Not applicable","Unclear"]: errors.append("Entry cannot be recorded when no target interaction occurred.")
-
-                        first_dt=datetime.combine(first_d,first_t).replace(microsecond=0) if first_d is not None and first_t is not None else None
-                        trigger_dt=datetime.combine(trigger_d,trigger_t).replace(microsecond=0) if trigger_d is not None and trigger_t is not None else None
-                        kill_dt=datetime.combine(kill_d,kill_t).replace(microsecond=0) if kill_d is not None and kill_t is not None else None
-                        idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
-                        if not idxs: errors.append("The linked test window cannot be found.")
-                        else:
-                            idx=idxs[0]; start_dt=parse_dt(data["Windows"].at[idx,"Start Time"]); end_dt=parse_dt(data["Windows"].at[idx,"End Time"])
-                            for label,val in [("First interaction",first_dt),("Activation",trigger_dt),("Kill",kill_dt)]:
-                                if val and start_dt and val<start_dt: errors.append(f"{label} time cannot be before the window started.")
-                                if val and end_dt and val>end_dt: errors.append(f"{label} time cannot be after the field check closed the window.")
-                            if first_dt and trigger_dt and trigger_dt<first_dt: errors.append("Activation time cannot be before first interaction.")
-                            if first_dt and kill_dt and kill_dt<first_dt: errors.append("Kill time cannot be before first interaction.")
-                        if errors:
-                            st.error("Please correct the camera review:\n\n" + "\n".join(f"- {err}" for err in errors))
-                        else:
-                            if evidence_usable=="No":
-                                target="Unclear"; interaction_level="Unclear"; strike_area="Unclear"; activated="Unclear"
-                                assessment="No usable video" if is_kill_review else "Not applicable"
-                            outcome=classify_camera_outcome(is_kill_review,evidence_usable,target,strike_area,activated,assessment)
-                            idx=idxs[0]
-                            kill_confirmed="Yes" if is_kill_review else "No"
-                            activation_evidence="Inferred from kill" if is_kill_review else ("Observed" if activated=="Yes" and trigger_dt else "Not observed")
-                            values={"Evidence Usable":evidence_usable,"Target Present":target,"Interaction Level":interaction_level,"Entered Strike Area":strike_area,"Trap Activated":activated,"Activation Evidence":activation_evidence,"Kill Confirmed":kill_confirmed,"Outcome":outcome,"First Interaction Time":dtstr(first_dt) if first_dt else "","Trigger Time":dtstr(trigger_dt) if trigger_dt else "","Kill Time":dtstr(kill_dt) if kill_dt else "","Video Assessment":assessment,"Video Link":link}
-                            for k,v in values.items(): data["Windows"].at[idx,k]=v
-                            recalculate_window(data,idx)
-                            fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                            data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=notes
-                            refresh_review_status(data,item["Window ID"]); save_data(data)
-                            speed_line=f"Interaction to kill: {human_duration(minutes=data['Windows'].at[idx,'Interaction To Kill Min'])}." if is_kill_review and first_dt else "No interaction-to-kill time recorded."
-                            set_flash("success","Camera review saved",[f"{item['Trap ID']} was updated.",speed_line,"Next: review the next open task."])
-                            if not return_from_followup_task():
-                                st.session_state.pop("followup_panel",None); st.rerun()
-
-                else:
-                    prefix=f"issue_{fid}"
-                    resolution=st.selectbox("Camera outcome",["Select…","Fixed and now working","Adjusted and now covering trap","Replaced","Could not fix"],index=0,key=f"{prefix}_resolution")
-                    current_ready=st.selectbox("Camera now ready and covering the trap",["Select…","Yes","No","Could not assess"],index=0,key=f"{prefix}_ready")
-                    evidence_gap=st.selectbox("Past test-window evidence",["Select…","Still usable","Partly usable","Not usable","Could not assess"],index=0,key=f"{prefix}_gap")
-                    notes=st.text_area("Resolution notes",key=f"{prefix}_notes")
-                    saving_update("The task status, current camera readiness and the linked test-window evidence status.")
-                    if two_phase_button("Save camera resolution",f"{prefix}_save","Saving…",type="primary"):
-                        errors=[]
-                        if "Select…" in [resolution,current_ready,evidence_gap]: errors.append("Complete all camera-resolution fields.")
-                        if resolution=="Could not fix" and current_ready=="Yes": errors.append("A camera that could not be fixed cannot be marked ready.")
-                        if not notes.strip(): errors.append("Add a short resolution note.")
-                        if errors:
-                            st.error("Please correct the camera resolution:\n\n" + "\n".join(f"- {e}" for e in errors))
-                        else:
-                            fidx=data["Followups"].index[data["Followups"]["Follow-up ID"]==fid][0]
-                            summary=f"{resolution}. Camera ready: {current_ready}. Past evidence: {evidence_gap}. {notes.strip()}"
-                            data["Followups"].at[fidx,"Status"]="Complete"; data["Followups"].at[fidx,"Completed Time"]=dtstr(); data["Followups"].at[fidx,"Notes"]=summary
-                            idxs=data["Windows"].index[data["Windows"]["Window ID"]==item["Window ID"]].tolist()
-                            if idxs and evidence_gap in ["Not usable","Could not assess"]:
-                                data["Windows"].at[idxs[0],"Evidence Usable"]="No"
-                                recalculate_window(data,idxs[0])
-                            refresh_review_status(data,item["Window ID"]); save_data(data)
-                            set_flash("success","Camera resolution saved",[f"Current camera readiness: {current_ready}.",f"Past evidence: {evidence_gap}.","Next: review the next open task."])
-                            if not return_from_followup_task():
-                                st.session_state.pop("followup_panel",None); st.rerun()
+                render_followup_task(data, item)
 
 elif page == "windows":
     if st.button("← Back to Data & records"):

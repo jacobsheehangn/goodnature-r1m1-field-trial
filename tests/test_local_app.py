@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 SHOTS = Path(__file__).parent / "screenshots"
@@ -53,11 +54,11 @@ def test_non_kill_check_returns_to_top_with_one_clear_checked_state(page: Page, 
     open_home(page, local_app, {"width": 390, "height": 844})
     start_first_site(page)
     page.get_by_role("button", name="Check", exact=True).nth(2).click()  # no-camera trap
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=20_000)
     assert main_scroll_top(page) <= 8
 
-    page.get_by_role("radio", name="Trap still set, no animal").check(force=True)
-    page.get_by_role("radio", name="Yes").first.check(force=True)
+    cf.pick_finding(page, "Trap still set, no animal")
+    cf.pick(page, "service", "Yes")
     page.get_by_role("button", name="Save check").click()
 
     expect(page.get_by_text(re.compile(r"saved$", re.I)).first).to_be_visible(timeout=30_000)
@@ -86,7 +87,7 @@ def test_three_photo_kill_reports_three_stored(page: Page, local_app: str, tmp_p
         files.append(str(path))
     photo_frame = page.frame_locator('iframe[title="app.r1m1_photo_upload"]')
     photo_frame.locator('input[type="file"]').set_input_files(files)
-    expect(page.get_by_text("3 photos saved", exact=True)).to_be_visible(timeout=30_000)
+    cf.wait_photos_saved(page, 3)
 
     page.get_by_role("radio", name="Rat", exact=True).check(force=True)
     page.get_by_role("radio", name="Norway rat").check(force=True)

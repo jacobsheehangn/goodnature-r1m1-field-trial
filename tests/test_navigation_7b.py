@@ -10,6 +10,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
+import task_form as tf  # noqa: E402
 from journey_seed import END_SEED, JOURNEY_SEED  # noqa: E402
 from necropsy_seed import NECROPSY_SEED  # noqa: E402
 from test_trial_model_ui import _serve, _sheet  # noqa: E402
@@ -130,7 +131,7 @@ def test_the_count_is_right_after_a_camera_review_is_saved_from_the_follow_ups_l
         _open_task(page, url, "Camera review")
         _open_count_is(page, 4)
         page.wait_for_timeout(1_500)
-        _choose(page, "Camera evidence usable", "No")
+        tf.choose(page, "Camera evidence usable?", "No")
         page.get_by_role("button", name="Save camera review").click()
         expect(page.get_by_text("Camera review saved", exact=True)).to_be_visible(timeout=60_000)
         _open_count_is(page, 3)
@@ -149,9 +150,9 @@ def test_the_count_is_right_after_a_camera_resolution_is_saved_from_the_follow_u
         _open_task(page, url, "Camera issue")
         _open_count_is(page, 4)
         page.wait_for_timeout(1_500)
-        _choose(page, "Camera outcome", "Fixed and now working")
-        _choose(page, "Camera now ready and covering the trap", "Yes")
-        _choose(page, "Past test-window evidence", "Still usable")
+        tf.choose(page, "Camera outcome", "Fixed and now working")
+        tf.choose(page, "Camera now ready and covering the trap?", "Yes")
+        tf.choose(page, "Past test-window evidence", "Still usable")
         page.get_by_label("Resolution notes").fill("Battery replaced and the angle checked.")
         page.wait_for_timeout(1_500)
         _click_until_busy_or_done(page, page.get_by_role("button", name="Save camera resolution"), "Saving…", "Camera resolution saved")
@@ -200,7 +201,7 @@ def test_visit_mode_and_the_flows_have_no_navigation_and_every_other_page_has_it
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert nav() == 0, "the trap list (visit mode)"
         page.get_by_role("button", name="Check", exact=True).first.click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 0, "the check form"
         page.get_by_role("button", name=re.compile("Back to trap")).first.click()
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)

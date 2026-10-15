@@ -33,7 +33,7 @@ FRAME_LOG = """() => { window.__frames = []; let last = ''; const t0 = performan
     const faded = stale.filter(b => { const cs = getComputedStyle(b); return +cs.opacity < 0.6 && cs.pointerEvents === 'none'; }).length;
     const untappable = stale.filter(b => getComputedStyle(b).pointerEvents === 'none').length;
     const buttons = (list) => list.flatMap(b => [...b.querySelectorAll('button')]).filter(visible).map(b => b.innerText.trim()).filter(Boolean);
-    const saving = buttons(fresh).some(t => /^Saving…/.test(t)), savedPanel = fresh.some(b => /Just saved/.test(b.innerText) && visible(b));
+    const saving = buttons(fresh).some(t => /^Saving( check)?…/.test(t)), savedPanel = fresh.some(b => /Just saved/.test(b.innerText) && visible(b));
     const key = [mark, title, stale.length, faded, untappable, saving, savedPanel].join('/');
     if (key !== last) { window.__frames.push({ms: Math.round(performance.now() - t0), mark, title, stale: stale.length, faded, untappable, saving, savedPanel,
       staleButtons: buttons(stale).slice(0, 4), freshButtons: buttons(fresh).slice(0, 6)}); last = key; }
@@ -98,11 +98,11 @@ def test_a_rerun_of_the_same_screen_is_never_faded_hidden_or_frozen(page: Page, 
         page.get_by_role("link", name=re.compile(r"^Trap sites")).first.click(); page.wait_for_timeout(5000)
         page.get_by_role("button", name=re.compile(r"^(Resume|Start) checking$")).first.click()
         page.get_by_role("button", name="Check", exact=True).first.click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=90_000); page.wait_for_timeout(5000)
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=90_000); page.wait_for_timeout(5000)
         page.evaluate(FRAME_LOG)
         page.get_by_role("radio", name="Trap still set, no animal").check(force=True)
         expect(page.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=90_000); page.wait_for_timeout(2500)
-        page.get_by_role("radio", name="Yes").first.check(force=True); page.wait_for_timeout(6000)
+        page.get_by_role("radiogroup", name="Trap relured, reset and ready?").get_by_role("radio", name="Yes", exact=True).check(force=True); page.wait_for_timeout(6000)
         refused = _frames(page)
     for name, frames in (("a filter changed in place", in_place), ("answers ticked on the check form", refused)):
         assert frames, f"{name}: nothing was recorded"
@@ -121,7 +121,7 @@ def test_saving_and_saved_are_never_faded_hidden_or_frozen_by_the_screen_change(
         resume = page.get_by_role("button", name=re.compile(r"^(Resume|Start) checking$")).first
         expect(resume).to_be_visible(timeout=90_000); page.wait_for_timeout(2500); resume.click()
         page.get_by_role("button", name="Check", exact=True).first.click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=90_000)
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=90_000)
         page.get_by_role("radio", name="Trap still set, no animal").check(force=True)
         expect(page.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=90_000); page.wait_for_timeout(1500)
         stable = 0
