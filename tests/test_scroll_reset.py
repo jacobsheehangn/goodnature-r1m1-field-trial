@@ -16,6 +16,7 @@ import check_form as cf
 from playwright.sync_api import Page, expect, sync_playwright
 
 sys.path.insert(0, str(Path(__file__).parent))
+import task_form as tf  # noqa: E402
 from journey_seed import END_SEED, JOURNEY_SEED  # noqa: E402
 from test_trial_model_ui import _serve  # noqa: E402
 from test_trial_screens import _choose, _decide_unresolvable, _home, _open_set_up, _to_end_trial_from_the_visit  # noqa: E402
@@ -166,10 +167,10 @@ def test_returning_from_a_review_opened_in_end_trial_lands_on_end_trial_at_its_t
         _to_end_trial_from_the_visit(page, url)
         page.get_by_role("button", name="Decide").first.click()
         page.get_by_role("button", name="Review now", exact=True).click()
-        expect(page.get_by_text("Complete this review", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Camera review", exact=True)).to_be_visible(timeout=20_000)
         page.wait_for_timeout(1500)
         assert _half_way_down(page) > 100, "the review form must be scrolled for this to prove anything"
-        page.get_by_role("button", name="← Back to End trial").click()
+        page.get_by_role("button", name="Back to End trial").click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=30_000)
         _lands_at_the_top_and_stays(page, "End trial reached from the review form")
 
@@ -215,9 +216,9 @@ def _walk_the_follow_ups(page: Page, url: str) -> None:
     expect(review.first).to_be_visible(); page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = el.scrollHeight }"); page.wait_for_timeout(400)
     assert page.evaluate(MAIN_TOP) > 300
     review.last.click()
-    expect(page.get_by_role("button", name="← Back to task list")).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Back to task list")).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "a follow-up task opened from a scrolled list")
-    page.get_by_role("button", name="← Back to task list").click()
+    page.get_by_role("button", name="Back to task list").click()
     expect(page.get_by_role("heading", name="Follow-ups")).to_be_visible(timeout=30_000)
     _lands_at_the_top_and_stays(page, "the Follow-ups list reached from a task")
 
@@ -254,8 +255,8 @@ def test_the_success_message_of_a_saved_task_is_on_screen_when_the_list_returns(
         page.get_by_role("link", name=re.compile(r"^Follow-ups")).first.click()
         expect(page.get_by_role("heading", name="Follow-ups")).to_be_visible(timeout=30_000); page.wait_for_timeout(1500)
         page.get_by_text("Camera review", exact=True).first.locator("xpath=ancestor::div[.//button][1]").get_by_role("button", name="Review", exact=True).click()
-        expect(page.get_by_role("button", name="← Back to task list")).to_be_visible(timeout=30_000); page.wait_for_timeout(1500)
-        _choose(page, "Camera evidence usable", "No")
+        expect(page.get_by_role("button", name="Back to task list")).to_be_visible(timeout=30_000); page.wait_for_timeout(1500)
+        tf.choose(page, "Camera evidence usable?", "No")
         page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = el.scrollHeight }"); page.wait_for_timeout(400)
         assert page.evaluate(MAIN_TOP) > 50, "the review form must be scrolled for this to prove anything"
         page.get_by_role("button", name="Save camera review").click()

@@ -85,7 +85,7 @@ SCRIPT = """
                 app.complete_hardware_task(data, tasks["Trap not ready"], notes="x", back_in_service=when); errors[name] = "no error"
             except ValueError as e:
                 errors[name] = str(e)
-        out["s4"] = {"errors": errors, "unchanged": same(before, data), "saves": len(saves), "floor": app.human_dt(END)}
+        out["s4"] = {"errors": errors, "unchanged": same(before, data), "saves": len(saves), "floor": app.task_when(END)}
         # S5: a failure part-way writes nothing
         data, tasks, wid = fixture(); before = snapshot(data); saves.clear()
         real = app.start_window
@@ -155,7 +155,7 @@ def test_a_time_before_the_closing_check_or_in_the_future_is_refused_and_nothing
     s = out["s4"]
     assert s["errors"]["before"] == f"Back in service can't be before the check that took it out ({s['floor']})."
     assert s["errors"]["future"] == "Back in service can't be in the future."
-    assert s["errors"]["none"] == "Enter when the trap went back into service."
+    assert s["errors"]["none"] == "Enter when the trap was back in service."
     assert s["unchanged"] and s["saves"] == 0
 
 

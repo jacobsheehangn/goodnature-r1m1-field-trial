@@ -247,6 +247,21 @@ COMPONENT_CSS = f"""
 [class*="st-key-fielderr_"] [data-testid="stRadioGroup"],[class*="st-key-fielderr_"] [role="radiogroup"],[class*="st-key-fielderr_"] [data-testid="stTextArea"] textarea,
 [class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
 [class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
+[class*="st-key-fielderr_"] [data-baseweb="input"],[class*="st-key-fielderr_"] [data-baseweb="textarea"],[class*="st-key-fielderr_"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+/* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
+  box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after,[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{
+  content:"";position:absolute;z-index:2;right:14px;top:50%;margin-top:-10px;width:20px;height:20px;background:var(--ink);pointer-events:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after{{{_mask("calendar")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{{_mask("clock")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] svg[data-baseweb="icon"]{{display:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input,[class*="st-key-pair_"] [data-testid="stTimeInput"] input{{font-size:16px;padding-right:44px}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="base-input"]{{background:transparent;border-radius:var(--r-input)}}
+.r1-msg.info.ok svg{{color:var(--green)}}
+/* The task forms' option rows: regular weight until chosen, as the boards draw them. */
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"] p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"] p{{font-weight:400}}
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"]:has(input:checked) p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
 .r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
 .r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
 /* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
@@ -335,7 +350,7 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_site_"] div.stButton:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])){{width:100%}}
   .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
-  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]),.stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-nec_left"]){{row-gap:16px}}
 }}
 [class*="st-key-pair_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
 [class*="st-key-pair_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
