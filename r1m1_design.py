@@ -256,7 +256,11 @@ COMPONENT_CSS = f"""
 [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after{{{_mask("calendar")}}}
 [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{{_mask("clock")}}}
 [class*="st-key-pair_"] [data-testid="stTimeInput"] svg[data-baseweb="icon"]{{display:none}}
-[class*="st-key-pair_"] [data-testid="stDateInput"] input,[class*="st-key-pair_"] [data-testid="stTimeInput"] input{{font-size:16px;padding-right:44px}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input{{font-size:15px;padding-right:38px}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div{{font-size:15px}}
+/* A date or time the Save refused: the same red ring as every other field (this rule is as specific as the pair's own, and comes after it). */
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
 [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="base-input"]{{background:transparent;border-radius:var(--r-input)}}
 .r1-msg.info.ok svg{{color:var(--green)}}
 /* The task forms' option rows: regular weight until chosen, as the boards draw them. */
