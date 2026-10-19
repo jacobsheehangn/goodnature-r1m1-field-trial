@@ -8205,21 +8205,23 @@ elif page == "trial":
         hub = trial_hub_summary(data, trial)
         r1_stepper(2)
         r1_title(site_name(data, sid), f"Started {r1_short_date(parse_dt(trial['Start Time']))}", hub["day"], "Trial day")
-        # The one thing an operator lands here to do sits directly under the title.
-        if hub["in_progress_visit"] is not None:
-            st.button("Resume checking", key="hub_resume", type="primary", on_click=set_page, args=("visit",),
-                      kwargs={"site_id": sid, "visit_id": hub["in_progress_visit"]["Visit ID"]})
-        elif hub["active_trap_count"]:
-            st.button("Start checking", key="hub_start", type="primary", on_click=start_checking_callback, args=(sid,))
-        st.markdown(
-            '<div class="r1-chips">' + "".join(
-                f'<div class="r1-chip"><b>{html.escape(r1_short_build(label))}</b><span>{n} trap{"s" if n != 1 else ""}</span></div>'
-                for label, n in hub["chips"]
-            ) + '</div>',
-            unsafe_allow_html=True,
-        )
+        # Desktop (TrialHubDesktop): the left column holds everything the operator acts on, from the one thing they land here to do down to End trial…,
+        # and the Evidence card sits beside it. On a phone the columns stack in the order the page always had (the CSS below orders them).
         left, right = st.columns([1.65, 1], gap="large")
         with left:
+            # The one thing an operator lands here to do sits directly under the title.
+            if hub["in_progress_visit"] is not None:
+                st.button("Resume checking", key="hub_resume", type="primary", on_click=set_page, args=("visit",),
+                          kwargs={"site_id": sid, "visit_id": hub["in_progress_visit"]["Visit ID"]})
+            elif hub["active_trap_count"]:
+                st.button("Start checking", key="hub_start", type="primary", on_click=start_checking_callback, args=(sid,))
+            st.markdown(
+                '<div class="r1-chips">' + "".join(
+                    f'<div class="r1-chip"><b>{html.escape(r1_short_build(label))}</b><span>{n} trap{"s" if n != 1 else ""}</span></div>'
+                    for label, n in hub["chips"]
+                ) + '</div>',
+                unsafe_allow_html=True,
+            )
             with st.container(key="card_hub_visits"):
                 due_text, due_kind = site_urgency_pill(hub["next_due_date"].date(), now().date())
                 due_html = (

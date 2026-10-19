@@ -118,6 +118,33 @@ def test_the_hub_keeps_end_trial_after_the_evidence_card_on_a_phone(tmp_path, pa
         assert end["y"] > evidence["y"] + evidence["height"], "End trial comes after the Evidence card"
 
 
+def test_the_hub_build_bar_sits_in_the_left_column_under_the_start_button(tmp_path, page: Page):
+    """TrialHubDesktop: the left column holds the button, the Build bar, the Visits card and End trial; the Evidence card sits beside it."""
+    with serve(tmp_path / "d", END_ALL_CHECKED) as url:
+        open_home(page, url, 1280)
+        page.get_by_role("button", name="Trial overview").first.click()
+        page.get_by_text("Evidence waiting").first.wait_for(timeout=30000)
+        page.wait_for_timeout(1000)
+        chips, visits, evidence = box(page, ".r1-chips"), box(page, '[class*="st-key-card_hub_visits"]'), box(page, '[class*="st-key-card_hub_evidence"]')
+        button = page.locator('.st-key-r1_screen button[kind="primary"]').first.bounding_box()
+        assert chips["x"] + chips["width"] <= evidence["x"], f"the Build bar stops before the Evidence card: {chips} / {evidence}"
+        assert abs(chips["width"] - visits["width"]) <= 2, f"as wide as the Visits card: {chips} / {visits}"
+        assert button["y"] + button["height"] <= chips["y"] and chips["y"] + chips["height"] <= visits["y"], "button, then the Build bar, then Visits"
+        assert abs(evidence["y"] - button["y"]) <= 8, f"the Evidence card starts level with the button: {evidence} / {button}"
+
+
+def test_the_hub_keeps_its_phone_order_with_the_build_bar_in_the_left_column(tmp_path, page: Page):
+    with serve(tmp_path / "d", END_ALL_CHECKED) as url:
+        open_home(page, url, 390, 1400)
+        page.get_by_role("button", name="Trial overview").first.click()
+        page.get_by_text("Evidence waiting").first.wait_for(timeout=30000)
+        page.wait_for_timeout(1000)
+        button = page.locator('.st-key-r1_screen button[kind="primary"]').first.bounding_box()
+        chips, visits, evidence = box(page, ".r1-chips"), box(page, '[class*="st-key-card_hub_visits"]'), box(page, '[class*="st-key-card_hub_evidence"]')
+        end = page.get_by_role("button", name="End trial…").first.bounding_box()
+        assert button["y"] < chips["y"] < visits["y"] < evidence["y"] < end["y"], (button, chips, visits, evidence, end)
+
+
 def test_visit_complete_is_one_compact_card_on_desktop_and_unchanged_on_a_phone(tmp_path, page: Page):
     with serve(tmp_path / "d", END_ALL_CHECKED) as url:
         open_home(page, url, 1280)
