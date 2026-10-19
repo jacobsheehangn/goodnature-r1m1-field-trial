@@ -765,8 +765,7 @@ def require_authentication() -> None:
         if ALLOW_NO_AUTH and DEPLOYMENT_ENVIRONMENT == "local":
             st.session_state.authenticated = True
             return
-        st.error("App access is not configured.")
-        st.caption("Set the R1M1_APP_PASSWORD environment variable, then restart the app.")
+        message_panel("error", "App access is not configured", ["Set the R1M1_APP_PASSWORD environment variable, then restart the app."])
         st.stop()
 
     # A valid signed URL token restores access after browser refresh without storing
@@ -777,6 +776,7 @@ def require_authentication() -> None:
         return
 
     logo_path = APP_DIR / "goodnature_logo.png"
+    st.markdown(design.LOGIN_CSS, unsafe_allow_html=True)
     st.markdown(
         '<span class="login-page-marker" aria-hidden="true"></span>',
         unsafe_allow_html=True,
@@ -788,32 +788,40 @@ def require_authentication() -> None:
         '<p class="login-intro">Enter the trial password to continue.</p>',
         unsafe_allow_html=True,
     )
-    with st.form("login_form", clear_on_submit=False):
-        supplied_password = st.text_input(
-            "Password",
-            type="password",
-            autocomplete="current-password",
-        )
-        submitted = st.form_submit_button(
-            "Sign in",
-            type="primary",
-            use_container_width=True,
-        )
+    attempts = int(st.session_state.get("failed_login_attempts", 0))
+    # A refused sign-in redraws the page (the typed password stays in the field) so the line sits under the field, inside the form.
+    # From the fifth refusal the line gives way to the panel, and the field is no longer ringed.
+    wrong = bool(st.session_state.get("login_refused"))
+    several = wrong and attempts >= 5
+    with st.container(key="login_wrong" if wrong and not several else "login_field"):
+        with st.form("login_form", clear_on_submit=False):
+            supplied_password = st.text_input(
+                "Password",
+                type="password",
+                autocomplete="current-password",
+                placeholder="Trial password",
+            )
+            if several:
+                st.markdown(design.message_html("error", "Several attempts have failed", "Check the password with the trial lead."), unsafe_allow_html=True)
+            elif wrong:
+                st.markdown(f'<div class="r1-fielderr">{design.icon("warn-circle", 18)}<span>Incorrect password.</span></div>', unsafe_allow_html=True)
+            submitted = st.form_submit_button(
+                "Sign in",
+                type="primary",
+                use_container_width=True,
+            )
 
     if submitted:
         if hmac.compare_digest(supplied_password, APP_PASSWORD):
             st.session_state.authenticated = True
             st.session_state.failed_login_attempts = 0
+            st.session_state.pop("login_refused", None)
             st.query_params[AUTH_QUERY_KEY] = expected_access_token()
             st.rerun()
         else:
-            attempts = int(st.session_state.get("failed_login_attempts", 0)) + 1
-            st.session_state.failed_login_attempts = attempts
-            st.error("Incorrect password.")
-            if attempts >= 5:
-                st.caption(
-                    "Several attempts have failed. Check the password with the trial lead."
-                )
+            st.session_state.failed_login_attempts = attempts + 1
+            st.session_state.login_refused = True
+            st.rerun()
 
     st.markdown(
         '<p class="login-security">Trial data is restricted to authorised Goodnature users.</p>',
@@ -999,7 +1007,7 @@ def save_data(data: Dict[str, pd.DataFrame]) -> None:
     """
     expected_mtime = st.session_state.get(DATA_LOADED_MTIME_KEY)
     if expected_mtime is not None and DATA_FILE.exists() and _data_file_mtime() != expected_mtime:
-        st.error("This record was changed by someone else since this page loaded. Reload the page to see the latest version, then try again.")
+        message_panel("error", "This record was changed by someone else", ["It changed after this page loaded. Reload the page to see the latest version, then try again."])
         st.stop()
         return  # safety net for bare-mode/test contexts where st.stop() is a no-op
     ensure_storage_ready()
@@ -3364,7 +3372,7 @@ def render_photo_capture_widget(context: dict, *, widget_key: str, event_key: st
 
                 st.rerun()
             except (PhotoPermanentError, PhotoTransientError) as exc:
-                st.error(f"Photo state could not be updated: {exc}")
+                message_panel("error", "Photo state could not be updated", [html.escape(str(exc))])
 
     verification = verify_pending_photo_transaction(DATA_ROOT, context, MAX_SAVED_PHOTO_BYTES)
     expected = int(verification.get("expected_count", 0))
@@ -3588,9 +3596,9 @@ def commit_staged_records_with_photos(
         for key in (session_state_keys_to_clear_on_failure or []):
             st.session_state.pop(key, None)
         if rollback_errors or not (workbook_restored and files_restored):
-            st.error(f"Save failed and automatic rollback could not be confirmed. Do not continue this {record_noun}; contact the trial lead.")
+            message_panel("error", "Save failed and rollback could not be confirmed", [f"Do not continue this {record_noun}; contact the trial lead."])
         else:
-            st.error(f"Save failed. No {record_description} was committed. Your selected photos remain available to retry.")
+            message_panel("error", "Save failed", [f"No {record_description} was committed. Your selected photos remain available to retry."])
         st.stop()
     finally:
         rollback_copy.unlink(missing_ok=True)
@@ -4850,13 +4858,19 @@ def header(title, subtitle="", *, emphasize_subtitle=False):
         st.markdown(f'<p class="{subtitle_class}">{subtitle}</p>', unsafe_allow_html=True)
 
 
+MESSAGE_PANEL_KINDS = {"guidance": "info", "info": "info", "success": "success", "warning": "warn", "error": "error"}
+_message_css_drawn = False  # the script re-runs top to bottom, so this starts False each run
+
+
 def message_panel(kind: str, title: str, lines=None):
-    lines = lines or []
-    body = "".join(f"<div class='message-detail'>{line}</div>" for line in lines if line)
-    st.markdown(
-        f"<div class='message-panel {kind}'><div class='message-title'>{title}</div>{body}</div>",
-        unsafe_allow_html=True,
-    )
+    """Every message the app shows as a panel: the board's message panel (design.message_html), with the title and one line of help under it. The kind is
+    guidance / info / success / warning / error; `title` and `lines` are HTML the caller has already escaped."""
+    global _message_css_drawn
+    if not _message_css_drawn:
+        st.markdown(design.MESSAGE_CSS, unsafe_allow_html=True)  # its own block: Streamlit does not draw a markdown block that holds a <style>
+        _message_css_drawn = True
+    detail = "".join(f"<div>{line}</div>" for line in (lines or []) if line)  # one element per line, as the legacy panel had
+    st.markdown(design.message_html(MESSAGE_PANEL_KINDS[kind], title, detail), unsafe_allow_html=True)
 
 
 def guidance(message: str):
@@ -5159,7 +5173,7 @@ def render_necropsy_task(data, item) -> None:
             photo_gate = {**photo_gate, **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)}
             if not (photo_gate.get("ready") and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")):
                 st.session_state[lock_key] = False
-                st.error("One or more selected photos are not safely stored yet.")
+                message_panel("error", "One or more selected photos are not safely stored yet", ["Check that every photo has finished uploading, then try again."])
                 st.stop()
         original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
         staged = {name: frame.copy(deep=True) for name, frame in data.items()}
@@ -8654,85 +8668,7 @@ div[data-testid="stVerticalBlock"]:has(.visit-unchecked-marker)[style*="border"]
 <style>/* v8.7.5.12 — single closed-menu implementation for Streamlit 1.60.0.
    Open-drawer control rules are retained separately. */
 
-/* Login page only. */
-body:has(.login-page-marker) [data-testid="stMainBlockContainer"] {
-  max-width:30rem !important;
-  margin:0 auto !important;
-  padding:clamp(2rem, 10vh, 7rem) 1.25rem 2rem !important;
-}
-.login-page-marker { display:none !important; }
-
-body:has(.login-page-marker) [data-testid="stImage"] {
-  margin:0 0 1.4rem 0 !important;
-}
-body:has(.login-page-marker) [data-testid="stImage"] img {
-  display:block !important;
-  width:13.75rem !important;
-  max-width:70vw !important;
-  height:auto !important;
-}
-.login-title {
-  margin:0 0 .65rem !important;
-  color:#25262d !important;
-  font-size:clamp(2.35rem, 6vw, 3.5rem) !important;
-  line-height:.98 !important;
-  letter-spacing:-.035em !important;
-}
-.login-intro,
-.login-security {
-  margin:0 !important;
-  color:#737780 !important;
-  font-size:1rem !important;
-  line-height:1.45 !important;
-}
-.login-intro { margin-bottom:1rem !important; }
-.login-security {
-  margin-top:1rem !important;
-  font-size:.9rem !important;
-}
-
-body:has(.login-page-marker) form[data-testid="stForm"] {
-  background:#f3f3f0 !important;
-  border:1px solid #d7d9dd !important;
-  border-radius:14px !important;
-  box-shadow:none !important;
-  padding:1rem !important;
-}
-body:has(.login-page-marker) [data-testid="stTextInput"] > div > div,
-body:has(.login-page-marker) [data-testid="stTextInput"] input,
-body:has(.login-page-marker) [data-testid="stTextInput"] button {
-  background:#fff !important;
-  color:#25262d !important;
-}
-body:has(.login-page-marker) [data-testid="stTextInput"] > div > div {
-  border-color:#b9bdc4 !important;
-}
-body:has(.login-page-marker) [data-testid="stTextInput"] button {
-  border:0 !important;
-  box-shadow:none !important;
-}
-body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button {
-  width:100% !important;
-  background:#f36c21 !important;
-  border:1px solid #f36c21 !important;
-  color:#fff !important;
-  box-shadow:none !important;
-}
-body:has(.login-page-marker) [data-testid="stFormSubmitButton"] button:hover {
-  background:#d95b15 !important;
-  border-color:#d95b15 !important;
-}
-
-@media (max-width:700px) {
-  body:has(.login-page-marker) [data-testid="stMainBlockContainer"] {
-    max-width:none !important;
-    padding:4rem 1rem 1.5rem !important;
-  }
-  .login-title { font-size:2.65rem !important; }
-  body:has(.login-page-marker) form[data-testid="stForm"] {
-    padding:.9rem !important;
-  }
-}
+/* The sign-in page's look is r1m1_design.LOGIN_CSS (Part B batch 3). */
 </style>
 
 <style>
@@ -9243,20 +9179,20 @@ if "page" not in st.session_state:
         # Validated, but never auto-resume: a stale bookmark reopened hours
         # later can validate as "technically still open" (single
         # active-editor constraint), so ask before jumping back in.
-        st.title("Resume checking?")
-        message_panel(
-            "guidance",
-            f"Resume checking {_resume_trap_id} at {site_name(data, _resume_site_id)}?",
-            ["A dropped connection left this check in progress."],
-        )
-        resume_col, start_over_col = st.columns(2)
-        if resume_col.button("Resume", type="primary", use_container_width=True, key="workflow_resume_confirm"):
+        r1_screen_css(hide_nav=True)
+        with st.container(key=design.SCREEN_KEY):
+            r1_title("Resume checking?")
+            st.markdown(design.message_html("info", html.escape(f"Resume checking {_resume_trap_id} at {site_name(data, _resume_site_id)}?"),
+                                            "A dropped connection left this check in progress."), unsafe_allow_html=True)
+            resume_clicked = st.button("Resume", type="primary", use_container_width=True, key="workflow_resume_confirm")
+            start_over_clicked = st.button("Start over", use_container_width=True, key="workflow_resume_start_over")
+        if resume_clicked:
             # Draft-answer restore now happens unconditionally at the top of
             # the check page itself (see seed_check_draft's docstring) so it
             # covers every path back to a trap's check form, not just this
             # dialog - no separate call needed here any more.
             navigate("check", site_id=_resume_site_id, visit_id=_resume_visit_id, trap_id=_resume_trap_id)
-        if start_over_col.button("Start over", use_container_width=True, key="workflow_resume_start_over"):
+        if start_over_clicked:
             clear_workflow_query_params()
             navigate("sites")
         st.stop()
@@ -9450,7 +9386,8 @@ show_flash()
 
 is_demo_data = any(data[name].astype(str).apply(lambda col: col.str.contains("synthetic|sample", case=False, na=False)).any().any() for name in ["Sites", "Windows"] if not data[name].empty)
 if is_demo_data:
-    message_panel("warning", "Demo data", ["This app contains synthetic demonstration records. Do not treat its Performance figures as trial evidence."])
+    st.markdown(design.MESSAGE_CSS, unsafe_allow_html=True)  # on its own: an element holding a <style> is not drawn
+    st.markdown(design.message_html("warn", "Demo data", "This app contains synthetic demonstration records. Don't treat its performance figures as trial evidence."), unsafe_allow_html=True)
 
 if page == "sites":
     # Phase 7b (2/8): white cards, a dot and words for status, the stat on the right, one primary button per card. Nothing here
@@ -10724,7 +10661,7 @@ elif page == "followups":
         matches=data["Followups"][data["Followups"]["Follow-up ID"]==selected_followup_id]
         if matches.empty:
             r1_screen_css()
-            st.markdown(design.message_html("info", "This task no longer exists", "It may have been completed on another device."), unsafe_allow_html=True)
+            st.markdown(design.message_html("info", "This task no longer exists", "Someone may have completed or removed it."), unsafe_allow_html=True)
             if st.button("Back to task list", key="back_followup_list"):
                 st.session_state.pop("followup_panel",None); st.rerun()
         else:

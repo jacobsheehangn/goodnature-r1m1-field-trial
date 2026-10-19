@@ -141,6 +141,19 @@ def _outcome_icon_rules() -> str:
     )
 
 
+# The message panel and the line under a field are drawn in two places: inside a journey screen (scoped with the rest of COMPONENT_CSS) and outside one
+# (the demo banner above every page, the sign-in page), where MESSAGE_CSS carries them unscoped. One copy of the rules, written with single braces.
+_MESSAGE_RULES = """
+.r1-fielderr{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}
+.r1-fielderr svg{flex:0 0 auto;color:var(--red)}
+.r1-msg{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}
+.r1-msg .t{font-size:17px;line-height:22px;font-weight:700}
+.r1-msg .d{font-size:15px;line-height:20px}
+.r1-msg.warn{background:var(--orange-10)} .r1-msg.error{background:var(--red-10)}
+.r1-msg.success{background:var(--green-10)} .r1-msg.info{background:var(--ink-05)}
+.r1-msg svg{flex:0 0 auto;margin-top:2px} .r1-msg.warn svg{color:var(--orange)} .r1-msg.error svg{color:var(--red)} .r1-msg.success svg{color:var(--green)}
+"""
+
 COMPONENT_CSS = f"""
 /* ---- Card: white, radius 20, shadow-panel, padding 15, 10px between cards ---- */
 .stApp [class*="st-key-card_"],.stApp [class*="st-key-cardlist_"]{{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:15px;gap:15px}}
@@ -361,9 +374,7 @@ COMPONENT_CSS = f"""
 /* The task forms' option rows: regular weight until chosen, as the boards draw them. */
 [class*="st-key-rows_cam_"] [data-testid="stRadioOption"] p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"] p{{font-weight:400}}
 [class*="st-key-rows_cam_"] [data-testid="stRadioOption"]:has(input:checked) p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
-.r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
-.r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
-/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
+{_MESSAGE_RULES}/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
 [class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
 /* A tick that is a whole row: "Bag labelled", "Camera adjusted". The box is the board's: 24px, rounded, inside the row with 14px of padding (the
@@ -511,12 +522,6 @@ COMPONENT_CSS = f"""
 .r1-bar span{{display:block;height:100%;background:var(--orange);border-radius:4px}}
 
 /* ---- Message panel: radius 14, padding 14; warn / error / success / info ---- */
-.r1-msg{{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}}
-.r1-msg .t{{font-size:17px;line-height:22px;font-weight:700}}
-.r1-msg .d{{font-size:15px;line-height:20px}}
-.r1-msg.warn{{background:var(--orange-10)}} .r1-msg.error{{background:var(--red-10)}}
-.r1-msg.success{{background:var(--green-10)}} .r1-msg.info{{background:var(--ink-05)}}
-.r1-msg svg{{flex:0 0 auto;margin-top:2px}} .r1-msg.warn svg{{color:var(--orange)}} .r1-msg.error svg{{color:var(--red)}} .r1-msg.success svg{{color:var(--green)}}
 
 /* ---- Stepper: 26px discs, 2px joins ---- */
 .r1-stepper{{display:flex;align-items:center;gap:8px;font-size:14px;line-height:20px}}
@@ -726,6 +731,38 @@ SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 # single column (a form is not stretched across a desktop).
 HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
+
+# Drawn outside a journey screen's own container: the demo banner above every page, and the sign-in page. The tokens, the message rules unscoped.
+MESSAGE_CSS = "<style>" + TOKENS_CSS + _MESSAGE_RULES + ".r1-msg,.r1-fielderr{font-family:var(--font)}</style>"
+
+# The sign-in page (Part B batch 3): the page's own single column (420px on a desktop), the logo and the sentence as they were, Lato, a password field with a
+# lock, a full-width pill, no form card. The field is ringed red under .st-key-login_wrong. Every rule starts at the marker the page draws, so nothing else moves.
+_LOGIN = "body:has(.login-page-marker)"
+LOGIN_CSS = "<style>" + FONT_FACE_CSS + TOKENS_CSS + _MESSAGE_RULES + f"""
+.login-page-marker{{display:none!important}}
+{_LOGIN} .stApp{{background:var(--page)}}
+{_LOGIN} [data-testid="stMainBlockContainer"]{{max-width:calc(420px + 2.5rem)!important;margin:0 auto!important;padding:clamp(2rem,10vh,7rem) 1.25rem 2rem!important}}
+{_LOGIN} [data-testid="stImage"]{{margin:0 0 1.4rem 0!important}}
+{_LOGIN} [data-testid="stImage"] img{{display:block!important;width:13.75rem!important;max-width:70vw!important;height:auto!important}}
+{_LOGIN} .login-title{{font-family:var(--font)!important;font-size:34px!important;line-height:40px!important;font-weight:700!important;letter-spacing:0!important;color:var(--ink)!important;margin:0 0 8px!important;padding:0!important}}
+{_LOGIN} .login-intro,{_LOGIN} .login-security{{font-family:var(--font)!important;margin:0!important;color:var(--ink-70)!important;font-size:16px!important;line-height:22px!important}}
+{_LOGIN} .login-intro{{margin-bottom:24px!important}}
+{_LOGIN} .login-security{{margin-top:16px!important;font-size:15px!important;line-height:20px!important}}
+{_LOGIN} [data-testid="stForm"]{{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important}}
+{_LOGIN} [data-testid="stWidgetLabel"] p{{font-family:var(--font)!important;font-size:16px!important;line-height:22px!important;font-weight:700!important;color:var(--ink)!important}}
+{_LOGIN} [data-testid="stTextInputRootElement"]{{box-sizing:border-box;min-height:48px;background:#fff!important;border:1px solid var(--ink-10)!important;border-radius:var(--r-panel)!important;box-shadow:none!important;position:relative}}
+{_LOGIN} [data-testid="stTextInputRootElement"]:focus-within{{border-color:var(--orange)!important;box-shadow:0 0 0 1px var(--orange)!important}}
+{_LOGIN} [data-testid="stTextInput"] input,{_LOGIN} [data-testid="stTextInput"] button{{background:transparent!important;color:var(--ink)!important;border:0!important;box-shadow:none!important}}
+{_LOGIN} [data-testid="stTextInput"] input{{font-family:var(--font)!important;font-size:16px!important;padding-left:46px!important}}
+{_LOGIN} [data-testid="stTextInput"] input::placeholder{{color:var(--ink-50)!important;-webkit-text-fill-color:var(--ink-50)!important;opacity:1}}
+{_LOGIN} [data-testid="stTextInputRootElement"]::before{{content:"";position:absolute;z-index:2;left:14px;top:50%;margin-top:-10px;width:20px;height:20px;background:var(--ink-70);pointer-events:none;{_mask("lock")}}}
+{_LOGIN} .st-key-login_wrong [data-testid="stTextInputRootElement"]{{border-color:var(--red)!important;box-shadow:0 0 0 1px var(--red)!important}}
+{_LOGIN} .r1-fielderr{{margin-top:0}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button{{width:100%!important;min-height:48px;border-radius:var(--r-pill)!important;background:var(--orange)!important;border:0!important;box-shadow:none!important;color:#fff!important}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button:hover{{background:#d95b15!important}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button p{{font-family:var(--font)!important;font-size:16px!important;font-weight:700!important;color:#fff!important}}
+@media (max-width:700px){{{_LOGIN} [data-testid="stMainBlockContainer"]{{max-width:none!important;padding:4rem 1rem 1.5rem!important}}}}
+</style>"""
 
 
 
