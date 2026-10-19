@@ -302,6 +302,44 @@ COMPONENT_CSS = f"""
 }}
 /* A date field inside a card on a 390px phone is about 125px wide: a day/month/year at 15px with the calendar at its right would clip its last digit. */
 @media (max-width:700px){{[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"] input{{font-size:14px;padding-left:11px;padding-right:32px}}}}
+/* ---- Traps list and trap history (Part B batch 2b) ---- */
+.stApp [class*="st-key-listrow_net_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+[class*="st-key-chips_traps_filter"] [role="radiogroup"],[class*="st-key-chips_setup_filter"] [role="radiogroup"],[class*="st-key-chips_perf_by"] [role="radiogroup"],[class*="st-key-chips_export_filter"] [role="radiogroup"],[class*="st-key-chips_audit_filter"] [role="radiogroup"]{{display:flex;flex-wrap:wrap;gap:8px}}
+/* ---- Trial performance, lower part (Part B batch 2b, AdmPerfMore) ---- */
+.r1-subhead{{font-size:19px;line-height:26px;font-weight:700;margin:20px 0 8px}}
+.r1-diag{{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}}
+.r1-diag.cols4{{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:701px){{.r1-diag.cols4{{grid-template-columns:repeat(4,1fr)}}}}
+.r1-diagcard{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 18px;display:flex;flex-direction:column;gap:2px;min-width:0}}
+.r1-diagcard b{{font-size:34px;line-height:40px;font-weight:700}}
+.r1-diagcard span{{font-size:15px;line-height:21px;color:var(--ink-70)}}
+@media (max-width:700px){{.r1-diag.cols2{{grid-template-columns:1fr}}}}
+[class*="st-key-card_perf_table_"]{{padding:8px;gap:0}}
+[class*="st-key-card_perf_calc"]{{gap:6px}}
+[class*="st-key-card_perf_calc"] p{{margin:0}}
+.stApp [data-testid="stExpander"]{{background:transparent!important;border:0!important;box-shadow:none!important}}
+.stApp [data-testid="stExpander"] details{{background:transparent;border:0;border-radius:var(--r-panel)}}
+.stApp [data-testid="stExpander"] summary{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 20px;font-size:17px;line-height:22px}}
+.stApp [data-testid="stExpander"] [data-testid="stExpanderDetails"]{{padding:8px 0 4px}}
+.r1-stats3{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}
+.r1-statcard{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;display:flex;flex-direction:column;gap:2px}}
+.r1-statcard b{{font-size:30px;line-height:36px;font-weight:700;color:var(--ink)}}
+.r1-statcard span{{font-size:15px;line-height:20px;color:var(--ink-70)}}
+.r1-hist-day{{font-size:15px;line-height:20px;font-weight:700;color:var(--ink-70);padding:18px 0 8px}}
+.r1-hist-row{{display:flex;gap:16px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
+.r1-hist-row .t{{flex:0 0 52px;font-size:16px;line-height:22px;color:var(--ink-70)}}
+.r1-hist-row .h{{font-size:17px;line-height:22px;font-weight:700;color:var(--ink)}}
+.r1-hist-row .d{{font-size:15px;line-height:20px;color:var(--ink-70)}}
+.stApp [class*="st-key-listrow_win_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+.r1-tag.bad{{background:#ffe1e7;color:var(--red)}}
+/* ---- Data & records landing: a row is one tap, with a chevron at its right ---- */
+.stApp [class*="st-key-listrow_data_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 18px;border-bottom:0}}
+[class*="st-key-listrow_data_"] [data-testid="stColumn"]:last-child{{flex:0 0 44px!important;width:44px!important}}
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"]{{width:44px;min-width:44px;height:44px;min-height:44px;padding:0!important;background:transparent!important;box-shadow:none!important}}
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"] [data-testid="stMarkdownContainer"] p{{font-size:0!important;line-height:0!important;color:transparent!important;margin:0}}  /* the name stays for screen readers and tests; the chevron is drawn */
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"]::after{{content:"";width:22px;height:22px;background:var(--ink);{_mask("chevron-down")};transform:rotate(-90deg)}}
+.stApp [class*="st-key-card_followup_"],.stApp [class*="st-key-card_recovery"]{{gap:12px}}
+[class*="st-key-card_audit_table"]{{padding:8px}}
 /* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
 [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
   box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}

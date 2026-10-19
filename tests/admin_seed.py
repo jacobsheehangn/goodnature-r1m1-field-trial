@@ -15,3 +15,17 @@ ADMIN_EXTRA = """
     app.save_data(d)
 """
 ADMIN_SEED = END_SEED + "\n" + ADMIN_EXTRA
+
+# Two checks with nothing else going on near them (different sites, days apart): each is a Data quality candidate.
+DQ_EXTRA = """
+    import app, pandas as pd
+    d = app.load_data()
+    rows = []
+    for check_id, trap_id, when in [("CHK-DQ-1", "R1-KAI-001", "2026-08-20 08:00:00"), ("CHK-DQ-2", "R1-WAI-001", "2026-08-22 08:00:00")]:
+        row = {c: "" for c in app.SHEETS["Checks"]}
+        row.update({"Check ID": check_id, "Visit ID": "VIS-DQ-" + check_id[-1], "Trap ID": trap_id, "Check Time": when, "Finding": "Trap still set, no animal"})
+        rows.append(row)
+    d["Checks"] = pd.concat([d["Checks"], pd.DataFrame(rows, columns=app.SHEETS["Checks"])], ignore_index=True)
+    app.save_data(d)
+"""
+DQ_SEED = ADMIN_SEED + "\n" + DQ_EXTRA

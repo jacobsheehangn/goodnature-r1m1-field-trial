@@ -20,6 +20,9 @@ import pandas as pd
 import pytest
 from playwright.sync_api import Page, expect
 
+sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = "field_trial_data_v8_6_5.xlsx"
 
@@ -219,14 +222,7 @@ def test_screen_lists_confirms_and_repairs_one_record_at_a_time(page: Page, stra
     url, data_dir = stray_app
     page.goto(url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("What you are recording", exact=True)).to_be_visible(timeout=30_000)
-
-    combo = page.get_by_role("combobox", name="Record type", exact=True)
-    combo.click()
-    page.keyboard.type("Stray window")
-    page.get_by_role("option", name="Stray window on an Inactive trap", exact=True).click()
+    ap.open_data_page(page, "Stray window on an Inactive trap")
     expect(page.get_by_text("2 Inactive traps with an open window.", exact=True)).to_be_visible(timeout=15_000)
 
     button = page.get_by_role("button", name="Close this stray window", exact=True)

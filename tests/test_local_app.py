@@ -110,13 +110,12 @@ def test_data_section_survives_table_change(page: Page, local_app: str) -> None:
     # a fresh (closed) identity instead of staying open over the new page's
     # content - confirm that directly rather than just assuming it worked.
     expect(page.get_by_role("dialog", name="Administration")).not_to_be_visible()
-    page.get_by_role("radio", name="Export and backup").check(force=True)
-    select=page.get_by_label("Inspect data table")
-    select.select_option(label="Checks") if select.evaluate("el => el.tagName") == "SELECT" else None
-    # BaseWeb select fallback.
-    if page.get_by_text("Checks", exact=True).count() == 0:
-        select.click(); page.get_by_role("option", name="Checks").click()
-    expect(page.get_by_role("radio", name="Export and backup")).to_be_checked()
+    page.get_by_role("button", name="Export and backup", exact=True).click()
+    expect(page.get_by_role("heading", name="Export and backup", exact=True)).to_be_visible(timeout=20_000)
+    page.get_by_role("radio", name="Checks", exact=True).click()
+    # Changing the table is a rerun on the same page: the page the operator chose must still be the one on screen.
+    expect(page.get_by_role("heading", name="Export and backup", exact=True)).to_be_visible()
+    expect(page.get_by_role("radio", name="Checks", exact=True)).to_be_checked(timeout=15_000)
 
 
 def test_navigation_labels_and_trap_detail(page: Page, local_app: str) -> None:

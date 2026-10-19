@@ -25,6 +25,9 @@ import pandas as pd
 import pytest
 from playwright.sync_api import Page, expect
 
+sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKBOOK = "field_trial_data_v8_6_5.xlsx"
 
@@ -225,13 +228,9 @@ def test_one_time_correction_and_the_correction_form_still_shows_the_new_value(p
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
-        page.get_by_role("button", name="Administration", exact=False).click()
-        page.get_by_role("link", name="Data & records", exact=True).click()
-        expect(page.get_by_text("What you are recording", exact=True)).to_be_visible(timeout=30_000)
-
-        _pick(page, "Record type", "Kill with no carcass")
-        expect(page.get_by_text("2 kills with an open necropsy review.", exact=True)).to_be_visible(timeout=15_000)
-        button = page.get_by_role("button", name="Mark as no carcass collected", exact=True)
+        ap.open_data_page(page, "Kill with no carcass")
+        expect(page.get_by_text("2 kills with an open necropsy review.", exact=False)).to_be_visible(timeout=15_000)
+        button = page.get_by_role("button", name="Mark as no carcass", exact=True)
         expect(button).to_be_disabled()  # nothing changes without the owner's confirmation
         confirm = page.get_by_role("checkbox", name=re.compile("This kill had no carcass collected"))
         confirm.focus()
@@ -240,7 +239,7 @@ def test_one_time_correction_and_the_correction_form_still_shows_the_new_value(p
         expect(button).to_be_enabled(timeout=10_000)
         button.click()
         expect(page.get_by_text("Kill corrected.", exact=True)).to_be_visible(timeout=30_000)
-        expect(page.get_by_text("1 kill with an open necropsy review.", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("1 kill with an open necropsy review.", exact=False)).to_be_visible(timeout=15_000)
 
         workbook = data_dir / WORKBOOK
         windows = pd.read_excel(workbook, sheet_name="Windows", dtype=str).fillna("")
@@ -256,21 +255,15 @@ def test_one_time_correction_and_the_correction_form_still_shows_the_new_value(p
         # The correction form must show the new value, not fall back to the first
         # option ("Yes"), which a save would then silently write.
         corrected_id = done.iloc[0]["Window ID"]
-        _pick(page, "Record type", "Necropsy evidence")
-        window_picker = page.get_by_role("combobox", name="Select closed test window", exact=True)
+        ap.open_data_page(page, "Necropsy evidence")
+        window_picker = page.get_by_role("combobox", name="Closed test window", exact=True)
         window_picker.click()
         page.keyboard.type(corrected_id)
         page.wait_for_timeout(200)
         page.get_by_role("option", name=re.compile(re.escape(corrected_id))).first.click()
-        expect(page.get_by_role("combobox", name="Final Humane Kill", exact=True)).to_have_value(
-            "Not assessed — no carcass", timeout=15_000
-        )
-        expect(page.get_by_role("combobox", name="Necropsy Status", exact=True)).to_have_value(
-            "Not applicable — no carcass", timeout=15_000
-        )
-        expect(page.get_by_role("combobox", name="Necropsy Assessment", exact=True)).to_have_value(
-            "Not applicable — no carcass", timeout=15_000
-        )
+        expect(page.get_by_role("radiogroup", name="Final humane kill").get_by_role("radio", name="Not assessed — no carcass", exact=True)).to_be_checked(timeout=15_000)
+        for group in ("Necropsy status", "Necropsy assessment"):
+            expect(page.get_by_role("radiogroup", name=group).get_by_role("radio", name="Not applicable — no carcass", exact=True)).to_be_checked(timeout=15_000)
     finally:
         _stop(process)
 

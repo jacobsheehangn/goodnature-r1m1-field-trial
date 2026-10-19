@@ -33,6 +33,8 @@ import pytest
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
 
 
 def _free_port() -> int:
@@ -143,18 +145,12 @@ def test_abandoning_a_stale_visit_closes_it_without_touching_its_real_check(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
+    ap.open_data_page(page, "Incomplete visit")
 
-    combobox = page.get_by_role("combobox", name="Record type")
-    combobox.click()
-    page.keyboard.type("Incomplete visit")
-    page.get_by_role("option", name="Incomplete visit", exact=True).click()
+    expect(page.locator('[class*="st-key-card_task_context"]')).to_contain_text("Checks recorded", timeout=15_000)
+    assert page.locator('[class*="st-key-card_task_context"]').inner_text().replace("\n", " ").endswith("Checks recorded 1")
 
-    expect(page.get_by_text("Checks recorded: 1", exact=False)).to_be_visible(timeout=15_000)
-
-    reason_box = page.get_by_role("textbox", name="Reason for abandoning this visit", exact=True)
+    reason_box = page.get_by_role("textbox", name="Reason", exact=True)
     reason_box.fill("Site traps moved to a new trial before this visit was finished.")
 
     confirm_checkbox = page.get_by_role("checkbox", name="Close out this visit", exact=False)

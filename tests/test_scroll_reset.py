@@ -378,10 +378,9 @@ ANCHOR_TOP = """() => { const a = document.getElementById('r1m1-panel-anchor'); 
 def _window_panel_walk(page: Page, url: str) -> None:
     page.goto(url + "/data-records", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Data & records")).to_be_visible(timeout=40_000); page.wait_for_timeout(2500)
-    page.get_by_role("radio", name="Trial history", exact=True).check(force=True); page.wait_for_timeout(2000)
-    page.get_by_role("button", name="Open trial history").click()
+    page.get_by_role("button", name="Trial periods", exact=True).click()
     expect(page.get_by_role("heading", name="Trial periods")).to_be_visible(timeout=30_000); page.wait_for_timeout(2500)
-    _choose(page, "Show windows", "All"); page.wait_for_timeout(2500)
+    page.get_by_role("radio", name="All", exact=True).click(); page.wait_for_timeout(2500)
     review = page.get_by_role("button", name="Review", exact=True)
     assert review.count() > 4, "the list must be long enough to scroll for this to prove anything"
     page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = (el.scrollHeight - el.clientHeight) / 3 }"); page.wait_for_timeout(500)
@@ -389,11 +388,11 @@ def _window_panel_walk(page: Page, url: str) -> None:
     visible_review = [review.nth(i) for i in range(review.count()) if review.nth(i).is_visible() and 0 <= review.nth(i).bounding_box()["y"] < 600]
     assert visible_review, "a Review button must be on screen to tap"
     visible_review[0].click()
-    expect(page.get_by_role("button", name="Close panel")).to_be_attached(timeout=30_000); page.wait_for_timeout(2500)
+    expect(page.get_by_role("button", name="Back to Trial periods", exact=True)).to_be_attached(timeout=30_000); page.wait_for_timeout(2500)
     top = page.evaluate(ANCHOR_TOP)
     assert top is not None and 0 <= top < 400, f"the test-window panel is brought into view, not left far below the list: its top is at {top}px of a 664px screen"
-    page.get_by_role("button", name="Close panel").click()
-    expect(page.get_by_role("button", name="Close panel")).to_have_count(0, timeout=30_000)
+    page.get_by_role("button", name="Back to Trial periods", exact=True).click()
+    expect(page.get_by_role("button", name="Back to Trial periods", exact=True)).to_have_count(0, timeout=30_000)
     _lands_at_the_top_and_stays(page, "Trial periods after closing the panel")
 
 

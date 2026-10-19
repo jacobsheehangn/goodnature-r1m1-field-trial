@@ -57,3 +57,15 @@ def fill(page: Page, label: str, text: str) -> None:
     page.locator('[role="heading"][aria-level="1"]').first.click()
     page.wait_for_timeout(600)
 
+
+def open_data_page(page: Page, title: str) -> None:
+    """Data & records, then one of its pages (each is a row on the landing page)."""
+    back = page.get_by_role("button", name="Back to Data & records", exact=True)
+    if back.count():  # already inside Data & records: its menu item leaves a page of the section where it is, so the way to the list is the back pill
+        back.click()
+        page.wait_for_timeout(1_200)
+    else:
+        go_to(page, "Data & records")
+    page.get_by_role("button", name=title, exact=True).click()
+    expect(page.get_by_role("heading", name=title, exact=True)).to_be_visible(timeout=30_000)
+    page.wait_for_timeout(600)

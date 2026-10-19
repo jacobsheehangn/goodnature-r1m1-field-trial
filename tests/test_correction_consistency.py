@@ -30,6 +30,8 @@ import pytest
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
 
 
 def _select_streamlit_option(page: Page, combobox, filter_text: str, exact: bool = True) -> None:
@@ -190,12 +192,8 @@ def test_necropsy_correction_form_blocks_inconsistent_save(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
-
-    _select_streamlit_option(page, page.get_by_role("combobox", name="Record type"), "Necropsy evidence")
-    window_picker = page.get_by_role("combobox", name="Select closed test window")
+    ap.open_data_page(page, "Necropsy evidence")
+    window_picker = page.get_by_role("combobox", name="Closed test window")
     expect(window_picker).to_be_visible(timeout=15_000)
     _select_streamlit_option(page, window_picker, seeded["window_id"], exact=False)
 
@@ -203,15 +201,16 @@ def test_necropsy_correction_form_blocks_inconsistent_save(
     # (a fully-consistent seeded state). Break consistency by changing Final to "No"
     # while leaving Assessment at "Supports humane kill" - exactly the contradiction
     # necropsy_consistency_errors() exists to catch.
-    final_picker = page.get_by_role("combobox", name="Final Humane Kill")
-    expect(final_picker).to_be_visible(timeout=15_000)
-    _select_streamlit_option(page, final_picker, "No")
+    final_rows = page.get_by_role("radiogroup", name="Final humane kill")
+    expect(final_rows).to_be_visible(timeout=15_000)
+    final_rows.get_by_text("No", exact=True).click()
+    expect(final_rows.get_by_role("radio", name="No", exact=True)).to_be_checked(timeout=10_000)
 
     reason_box = page.locator('textarea[aria-label="Correction reason"]')
     reason_box.fill("Regression test: inconsistent necropsy correction")
 
     page.get_by_role("button", name="Save correction", exact=True).click()
-    expect(page.get_by_text("Please correct the necropsy result", exact=False)).to_be_visible(timeout=15_000)
+    expect(page.locator(".r1-msg.error").filter(has_text="1 thing to finish")).to_be_visible(timeout=15_000)
     expect(page.get_by_text("A supportive necropsy must have a final humane-kill result of Yes.", exact=False)).to_be_visible()
 
     workbook_path = data_dir / "field_trial_data_v8_6_5.xlsx"
@@ -257,18 +256,15 @@ def test_field_check_correction_propagates_finding_to_its_window(
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
-
-    _select_streamlit_option(page, page.get_by_role("combobox", name="Record type"), "Field check")
-    check_picker = page.get_by_role("combobox", name="Select field check")
+    ap.open_data_page(page, "Field check")
+    check_picker = page.get_by_role("combobox", name="Field check", exact=True)
     expect(check_picker).to_be_visible(timeout=15_000)
     _select_streamlit_option(page, check_picker, seeded["check_id"], exact=False)
 
-    finding_picker = page.get_by_role("combobox", name="Finding", exact=True)
-    expect(finding_picker).to_be_visible(timeout=15_000)
-    _select_streamlit_option(page, finding_picker, "Dead animal found")
+    rows = page.locator('[class*="st-key-rows_corr_check_finding_"]')
+    expect(rows).to_be_visible(timeout=15_000)
+    rows.get_by_text("Dead animal found", exact=True).click()
+    expect(rows.get_by_role("radio", name="Dead animal found", exact=True)).to_be_checked(timeout=10_000)
 
     reason_box = page.locator('textarea[aria-label="Correction reason"]')
     reason_box.fill("Regression test: field-check correction should touch its window")

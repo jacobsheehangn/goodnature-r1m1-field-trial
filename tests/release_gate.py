@@ -57,7 +57,7 @@ required = {
     "Card wrapper": "def app_card():",
     "Stable visit card component": "def render_visit_trap_card(",
     "Checked card app class": "visit-trap-card is-checked",
-    "Stateful data navigation": 'key="data_management_section"',
+    "Stateful data navigation": 'DATA_SUB_PAGES = set(DATA_PAGES)',  # Part B 2b: Data & records is a list of pages, each its own screen, not one page with a section radio
     "Safe-area handling": "env(safe-area-inset-bottom)",
     "Mobile 16px inputs": "font-size: 16px !important",
     "Radio styling selector": 'label[data-baseweb="radio"]',
@@ -72,13 +72,13 @@ required = {
     "Administration popover": 'with st.popover("Administration", key=f"app_top_navigation_admin_popover_',
     "Top navigation administration group": '"Administration": [',
     "Top navigation sign out": 'st.Page(top_nav_sign_out, title="Sign out"',
-    "Traps page title": 'header("Traps",',
+    "Traps page title": 'admin_title("Traps",',  # Part B 2b: the admin pages' title helper (the 7a title), as Follow-ups and Trial performance use r1_title
     "Follow-ups page title": 'r1_title("Follow-ups",',  # Phase 7b (7/8): the list's title is the 7a title helper, as on the other restyled screens
     "Trial performance page title": 'r1_title("Trial performance",',  # Phase 7b (8/8): the same one-token edit as Follow-ups (owner-approved in advance)
     "Trial setup page title": 'admin_title("Trial setup",',
-    "Data and records page title": 'header("Data & records",',
-    "Trial periods page title": 'header("Trial periods",',
-    "Grouped trap-history day heading": 'class="trap-history-day"',
+    "Data and records page title": 'admin_title("Data & records",',
+    "Trial periods page title": 'admin_title("Trial periods",',
+    "Grouped trap-history day heading": 'class="r1-hist-day"',
     "Fixed history time column": "grid-template-columns: 5.25rem minmax(0, 1fr);",
     "Trap editor close control": 'key="close_trap_setup_panel_top"',
 }

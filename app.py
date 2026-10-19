@@ -6763,6 +6763,980 @@ def render_setup_builds(data) -> None:
                                 st.rerun()
 
 
+# ---- Administration: the Traps list and a trap's history (Part B batch 2b; boards AdmTrapsList, AdmTrapsPhone, AdmTrapHistory). Read-only. The list gets a Status
+# filter (proposal 1) and the history lists the trap's open tasks above its timeline, with Review buttons (proposal 2).
+
+def trap_check_summary(data, trap_id) -> dict:
+    checks = data["Checks"][data["Checks"]["Trap ID"].astype(str) == str(trap_id)]
+    kills = checks[checks["Finding"].astype(str) == "Dead animal found"]
+    last_kill = parse_dt(kills.iloc[-1]["Check Time"]) if not kills.empty else None
+    return {"checks": checks, "kills": kills, "last_kill": last_kill}
+
+
+def render_traps_list(data) -> None:
+    ss = st.session_state
+    r1_screen_css(narrow=True)
+    with st.container(key=design.SCREEN_KEY):
+        admin_title("Traps", "Every trap, with its record so far. Open one to see its full history.")
+        sites = ["All sites"] + data["Sites"]["Site ID"].tolist()
+        if ss.get("chips_traps_site") not in sites:
+            ss["chips_traps_site"] = ss.get("traps_site_filter_value") if ss.get("traps_site_filter_value") in sites else "All sites"
+        search = st.text_input("Find a trap", value=ss.get("traps_search_value", ""), placeholder="Find a trap by ID or location", key="traps_search_widget", label_visibility="collapsed")
+        ss["traps_search_value"] = search
+        site_col, status_col = st.columns([2.2, 1.3], vertical_alignment="top")
+        with site_col, st.container(key="chips_traps_filter"):
+            site_filter = st.pills("Site", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_traps_site") or "All sites"
+        ss["traps_site_filter_value"] = site_filter
+        with status_col, st.container(key="seg_traps_status_wrap"):
+            status_filter = st.segmented_control("Status", ["All", "Active", "Inactive"], default="All", key="seg_traps_status", selection_mode="single") or "All"
+        traps = data["Traps"].copy()
+        if site_filter != "All sites":
+            traps = traps[traps["Site ID"] == site_filter]
+        if status_filter != "All":
+            traps = traps[traps["Status"] == status_filter]
+        needle = search.strip().lower()
+        if needle:
+            traps = traps[traps.apply(lambda row: needle in str(row["Trap ID"]).lower() or needle in trap_location_label(row).lower(), axis=1)]
+        if traps.empty:
+            st.markdown(design.message_html("info", "No traps match this filter", "Change the site or status to see more."), unsafe_allow_html=True)
+            return
+        traps = traps.assign(_route_num=pd.to_numeric(traps["Route Order"], errors="coerce"))
+        with st.container(key="setup_trap_rows"):
+            for _, tr in traps.sort_values(["Site ID", "_route_num"]).iterrows():
+                trap_id = str(tr["Trap ID"])
+                summary = trap_check_summary(data, trap_id)
+                active = str(tr["Status"]) == "Active"
+                kills, checks = len(summary["kills"]), len(summary["checks"])
+                last = f"Last kill {r1_short_date(summary['last_kill'])}" if summary["last_kill"] else "No kills recorded"
+                meta = f"{r1_short_build(trial_build_label(tr['Product'], tr['Build Version']))} · {kills} kill{'s' if kills != 1 else ''} · {checks} check{'s' if checks != 1 else ''} · {last}"
+                with st.container(key=f"listrow_net_{trap_id}"):
+                    text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                    text_col.markdown(
+                        f'<div class="r1-row-title">{html.escape(trap_id)} <span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span></div>'
+                        f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div><div class="r1-meta">{html.escape(meta)}</div>',
+                        unsafe_allow_html=True)
+                    button_col.button("View", key=f"network_view_{trap_id}", on_click=set_page, args=("trap_detail",), kwargs={"trap_id": trap_id})
+
+
+def trap_history_events(data, trap_id) -> list:
+    """(moment, title, details) for every check and completed task of the trap, newest first. Today's content, one line each."""
+    checks = data["Checks"][data["Checks"]["Trap ID"].astype(str) == str(trap_id)]
+    events = []
+    for _, check in checks.iterrows():
+        details = []
+        if check["Species"]:
+            details.append(str(check["Species"]))
+        if check["Bag ID"]:
+            details.append(f"Bag {check['Bag ID']}")
+        if check["Lure Condition"]:
+            details.append(f"Lure: {check['Lure Condition']}")
+        if check.get("Trap Ready After Check", ""):
+            details.append(f"Trap ready: {check['Trap Ready After Check']}")
+        if check["Notes"]:
+            details.append(str(check["Notes"]))
+        events.append((parse_dt(check["Check Time"]), check["Finding"] or "Check recorded", " · ".join(details) if details else "No additional notes."))
+    done = data["Followups"][(data["Followups"]["Trap ID"].astype(str) == str(trap_id)) & (data["Followups"]["Status"] == "Complete")]
+    for _, followup in done.iterrows():
+        events.append((parse_dt(followup["Completed Time"]), f"{followup['Follow-up Type']} completed", followup["Notes"] or "Follow-up completed."))
+    return sorted(events, key=lambda e: e[0] or datetime.min, reverse=True)
+
+
+def render_trap_history(data, trap_id: str) -> None:
+    trap = data["Traps"][data["Traps"]["Trap ID"].astype(str) == str(trap_id)]
+    r1_screen_css(narrow=True)
+    with st.container(key=design.SCREEN_KEY):
+        if trap.empty:
+            st.markdown(design.message_html("error", "This trap could not be found", "Return to Traps and choose another record."), unsafe_allow_html=True)
+            st.button("Back to traps", key="back_to_traps", on_click=set_page, args=("network",))
+            return
+        tr = trap.iloc[0]
+        summary = trap_check_summary(data, trap_id)
+        r1_back("Back to traps", "network", "to_traps")
+        admin_title(trap_id, f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)} · {tr['Build Version']}")
+        stats = [(len(summary["kills"]), "Kills"), (len(summary["checks"]), "Checks"), (r1_short_date(summary["last_kill"]) if summary["last_kill"] else "—", "Last kill")]
+        st.markdown('<div class="r1-stats3">' + "".join(f'<div class="r1-statcard"><b>{html.escape(str(v))}</b><span>{label}</span></div>' for v, label in stats) + "</div>", unsafe_allow_html=True)
+        window = open_window(data, trap_id)
+        st.markdown(f'<div class="r1-meta">Current test window: {"since " + task_when(window["Start Time"]) if window is not None else "none"}.</div>', unsafe_allow_html=True)
+        open_tasks = data["Followups"][(data["Followups"]["Trap ID"].astype(str) == str(trap_id)) & (data["Followups"]["Status"] == "Open")]
+        if not open_tasks.empty:
+            st.markdown('<div class="r1-label">Open tasks</div>', unsafe_allow_html=True)
+            with st.container(key="setup_trap_rows"):
+                for _, task in open_tasks.sort_values("Created Time").iterrows():
+                    bits = []
+                    if str(task["Bag ID"]).strip():
+                        bits.append(f"Bag {task['Bag ID']}")
+                    elif str(task["Follow-up Type"]) == "Camera review":
+                        win = data["Windows"][data["Windows"]["Window ID"] == task["Window ID"]]
+                        if not win.empty and parse_dt(win.iloc[0]["End Time"]):
+                            bits.append(f"Window closed {task_when(win.iloc[0]['End Time'])}")
+                    elif str(task["Reason"]).strip():
+                        bits.append(str(task["Reason"]).strip())
+                    bits.append(f"{task['Priority']} priority")
+                    fid = str(task["Follow-up ID"])
+                    with st.container(key=f"listrow_net_task_{fid}"):
+                        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                        text_col.markdown(f'<div class="r1-row-title">{html.escape(str(task["Follow-up Type"]))}</div><div class="r1-meta">{html.escape(" · ".join(bits))}</div>', unsafe_allow_html=True)
+                        if button_col.button("Review", key=f"history_review_{fid}"):
+                            st.session_state["followup_panel"] = fid
+                            st.switch_page(PAGE_FOLLOWUPS)
+        st.markdown('<div class="r1-label">Full history</div>', unsafe_allow_html=True)
+        events = trap_history_events(data, trap_id)
+        if not events:
+            st.markdown(design.message_html("info", "No history recorded for this trap yet", "Checks and completed tasks appear here once they are saved."), unsafe_allow_html=True)
+            return
+        days = {}
+        for when, title, details in events:
+            days.setdefault(when.date() if when else None, []).append((when, title, details))
+        today = now().date()
+        rows = []
+        for day, items in days.items():
+            if day is None:
+                heading = "Unknown date"
+            else:
+                heading = f"{day:%A} {day.day} {day:%B}" + ("" if day.year == today.year else f" {day.year}")
+                if day == today:
+                    heading = f"Today · {heading}"
+            rows.append(f'<div class="r1-hist-day">{html.escape(heading)}</div>')
+            for when, title, details in items:
+                clock = f"{when:%H:%M}" if when else "—"
+                rows.append(f'<div class="r1-hist-row"><div class="t">{clock}</div><div><div class="h">{html.escape(str(title))}</div><div class="d">{html.escape(str(details))}</div></div></div>')
+        with st.container(key="card_history"):
+            st.markdown("".join(rows), unsafe_allow_html=True)
+
+
+# ---- Administration: Trial periods and Data quality (Part B batch 2b; boards AdmPeriods, AdmPeriodsExcluded, AdmDQList, AdmDQReview, AdmDQEmpty). Trial periods is
+# read-only (a filter, a list and a side panel; the panel is its own screen on a phone). Data quality keeps its two actions and their writes
+# (confirm_check_as_real(), void_check_as_test_data()) and today's rule that a void needs a reason.
+
+WINDOW_PANEL_FIELDS = [("Status", "Status"), ("Started", "Start Time"), ("Closed", "End Time"), ("Physical finding", "Finding At Close"), ("Outcome", "Outcome"),
+                       ("Target present", "Target Present"), ("Video assessment", "Video Assessment"), ("Necropsy assessment", "Necropsy Assessment"),
+                       ("Animal weight range", "Animal Weight Range"), ("Final humane kill", "Final Humane Kill"), ("Review status", "Review Status")]
+
+
+def render_trial_periods(data) -> None:
+    ss = st.session_state
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Back to Data & records", "data_management", "periods")
+        admin_title("Trial periods", "Every test window, open and closed. Read-only.")
+        wid = ss.get("window_panel")
+        sites = ["All sites"] + data["Sites"]["Site ID"].tolist()
+        if ss.get("chips_windows_site") not in sites:
+            ss["chips_windows_site"] = "All sites"
+        status_col, export_col = st.columns([2, 1.4], vertical_alignment="bottom")
+        with status_col, st.container(key="seg_windows_status_wrap"):
+            visible = st.segmented_control("Show windows", ["Closed", "Active", "All"], default="Closed", key="seg_windows_status", selection_mode="single") or "Closed"
+        with st.container(key="chips_windows_filter"):
+            window_site = st.pills("Site", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_windows_site") or "All sites"
+        view = data["Windows"].copy()
+        if visible in ("Closed", "Active"):
+            view = view[view["Status"] == {"Closed": "Closed", "Active": "Open"}[visible]]
+        if window_site != "All sites":
+            view = view[view["Site ID"] == window_site]
+        export_col.download_button("Export filtered (CSV)", view.to_csv(index=False).encode("utf-8"), file_name="test_windows_filtered.csv", mime="text/csv", key="export_filtered_windows")
+        with st.container(key="setup_view_panel_windows" if wid else "setup_view_list_windows"):
+            table, panel = st.columns([1.5, 1], gap="large") if wid else (st.container(), None)
+            with table, st.container(key="setup_list"):
+                if view.empty:
+                    st.markdown(design.message_html("info", "No test windows match this filter", "Change the site or status to see more."), unsafe_allow_html=True)
+                else:
+                    st.markdown('<div class="r1-meta">' + ("Active windows are current field deployments. They are not results and do not require evidence review yet." if visible == "Active"
+                                                          else "Review a completed window directly from its row.") + "</div>", unsafe_allow_html=True)
+                    with st.container(key="setup_trap_rows"):
+                        for _, row in view.sort_values("Start Time", ascending=False).iterrows():
+                            row_id = str(row["Window ID"])
+                            outcome = (row["Outcome"] or "—") if row["Status"] == "Closed" else "Active"
+                            state = row["Review Status"] if row["Status"] == "Closed" else "Current deployment"
+                            excluded = '<span class="r1-tag bad">Excluded</span>' if row.get("Excluded") == "Yes" else ""
+                            with st.container(key=f"listrow_win_{'sel_' if row_id == wid else ''}{row_id}"):
+                                text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                                text_col.markdown(
+                                    f'<div class="r1-row-title">{html.escape(row_id)} {excluded}</div>'
+                                    f'<div class="r1-meta">{html.escape(str(row["Trap ID"]))} · {html.escape(str(row["Build Version"] or "—"))} · {html.escape(site_name(data, row["Site ID"]))}</div>'
+                                    f'<div class="r1-meta">Started {html.escape(task_when(row["Start Time"]))} · {html.escape(str(outcome))} · {html.escape(str(state))}</div>', unsafe_allow_html=True)
+                                button_col.button("Review", key=f"window_review_{row_id}", on_click=lambda row_id=row_id: ss.update(window_panel=row_id))
+            if panel is not None:
+                with panel, st.container(key="card_setup_panel"):
+                    scroll_panel_anchor()
+                    found = data["Windows"][data["Windows"]["Window ID"] == wid]
+                    if found.empty:
+                        ss.pop("window_panel", None)
+                        st.rerun()
+                    wr = found.iloc[0]
+                    title_col, close_col = st.columns([1, 0.12], vertical_alignment="center")
+                    title_col.markdown(f'<div class="r1-card-title" role="heading" aria-level="2" style="font-size:24px;line-height:30px">{html.escape(str(wid))}</div><div class="r1-meta">{html.escape(str(wr["Trap ID"]))} · {html.escape(str(wr["Build Version"]))}</div>', unsafe_allow_html=True)
+                    if close_col.button("×", key="close_window_panel", help="Close"):
+                        ss.pop("window_panel", None)
+                        st.rerun()
+                    st.button("Back to Trial periods", key="back_window_panel_phone", on_click=lambda: ss.pop("window_panel", None))
+                    if wr.get("Excluded") == "Yes":
+                        st.markdown(design.message_html("warn", "Excluded from Trial performance", html.escape(str(wr.get("Exclusion Reason") or "No reason recorded."))), unsafe_allow_html=True)
+                    rows = []
+                    for label, col in WINDOW_PANEL_FIELDS:
+                        value = task_when(wr[col]) if col in ("Start Time", "End Time") else (wr[col] or "—")
+                        if col == "Status" and value == "Open":
+                            value = "Active"
+                        rows.append((label, f"<b>{html.escape(str(value))}</b>"))
+                    st.markdown(r1_kv(rows), unsafe_allow_html=True)
+                    if wr["Status"] == "Open":
+                        st.markdown('<div class="r1-meta">This window is still active. Evidence and final assessment are added only after the next field check closes it.</div>', unsafe_allow_html=True)
+
+
+def render_data_quality(data) -> None:
+    ss = st.session_state
+    r1_screen_css(narrow=True)
+    candidates = find_data_quality_candidates(data)
+    reviewing = ss.get("data_quality_review")
+    with st.container(key=design.SCREEN_KEY):
+        if not candidates:
+            ss.pop("data_quality_review", None)
+            admin_title("Data quality review", "Checks with no other trap activity nearby, worth a human look before they are treated as real field data.")
+            st.markdown(design.message_html("success", "Nothing is waiting", "Every check has other activity nearby."), unsafe_allow_html=True)
+            return
+        if reviewing and reviewing not in {c["Check ID"] for c in candidates}:
+            ss.pop("data_quality_review", None)  # resolved since this panel opened
+            st.rerun()
+        if not reviewing:
+            admin_title("Data quality review", "Checks that look like test data because nothing else was checked nearby. Confirm or void each one.")
+            with st.container(key="setup_trap_rows"):
+                for c in candidates:
+                    with st.container(key=f"listrow_net_dq_{c['Check ID']}"):
+                        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+                        text_col.markdown(f'<div class="r1-row-title">{html.escape(str(c["Trap ID"]))} · {html.escape(site_name(data, c["Site ID"]))}</div>'
+                                          f'<div class="r1-meta">Checked {html.escape(task_when(c["Check Time"]))}</div>'
+                                          f'<div class="r1-meta">No other traps at this site checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes</div>', unsafe_allow_html=True)
+                        button_col.button("Review", key=f"data_quality_open_{c['Check ID']}", type="primary", on_click=lambda cid=c["Check ID"]: ss.update(data_quality_review=cid))
+            return
+        candidate = next(c for c in candidates if c["Check ID"] == reviewing)
+        position = next(i for i, c in enumerate(candidates) if c["Check ID"] == reviewing) + 1
+        st.button("Back to Data quality", key="back_data_quality", on_click=lambda: ss.pop("data_quality_review", None))
+        admin_title(str(candidate["Trap ID"]), f"{site_name(data, candidate['Site ID'])} · reviewing {position} of {len(candidates)}")
+        with st.container(key="card_task_context"):
+            checked = data["Checks"][data["Checks"]["Check ID"].astype(str) == str(reviewing)]
+            closed_id = str(checked.iloc[0]["Window Closed"]) if not checked.empty else ""
+            opened = data["Windows"][(data["Windows"]["Trap ID"].astype(str) == str(candidate["Trap ID"])) & (data["Windows"]["Start Time"].astype(str) == str(candidate["Check Time"]))]
+            opened_id = str(opened.iloc[0]["Window ID"]) if not opened.empty else ""
+            window_text = f"{closed_id} closed → {opened_id} opened" if closed_id and opened_id else f"Closed, and a new one opened at {task_when(candidate['Check Time'])}"
+            st.markdown(r1_kv([("Check time", f"<b>{html.escape(task_when(candidate['Check Time']))}</b>"), ("Finding", f"<b>{html.escape(str(candidate['Finding']))}</b>"),
+                               ("Window", f"<b>{html.escape(window_text)}</b>")]), unsafe_allow_html=True)
+        before, after = candidate["closest_before"], candidate["closest_after"]
+        if before is not None and after is not None:
+            nearby = f"The previous check there was {task_when(before)}, and the next was {task_when(after)}."
+        elif before is not None:
+            nearby = f"The previous check there was {task_when(before)}, and no later check was found yet."
+        elif after is not None:
+            nearby = f"No earlier check there was found, and the next was {task_when(after)}."
+        else:
+            nearby = "No earlier or later check there was found."
+        st.markdown(design.message_html("warn", f"No other activity at {html.escape(site_name(data, candidate['Site ID']))} nearby",
+                                        html.escape(f"{nearby} Nothing else was checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes of this record.")), unsafe_allow_html=True)
+        flag = f"dq_errors_shown_{reviewing}"
+        shown = bool(ss.get(flag))
+        reason_key = f"data_quality_reason_{reviewing}"
+        errors = [] if (ss.get(reason_key) or "").strip() else [("reason", "Say why this is test data.")]
+        field, field_line = _task_field_helpers(f"dq_{reviewing}", errors, shown)
+        st.markdown('<div class="r1-label">Reason</div><div class="r1-meta">Needed only if you void it.</div>', unsafe_allow_html=True)
+        with field("reason"):
+            reason = st.text_area("Reason for voiding", key=reason_key, placeholder="For example: bench test while setting up", label_visibility="collapsed")
+        field_line("reason")
+        with st.container(key="actions_row"):
+            void_clicked = two_phase_button("Void as test data", f"data_quality_void_{reviewing}", "Voiding…", type="primary")
+            confirm_clicked = two_phase_button("Confirm as real", f"data_quality_confirm_{reviewing}", "Confirming…")
+        st.markdown('<div class="r1-meta">Void keeps the record but excludes the check and its window from Trial performance. Confirm leaves everything as it is, and the check isn\'t flagged again.</div>', unsafe_allow_html=True)
+        if confirm_clicked:
+            confirm_check_as_real(data, reviewing)
+            for key in (flag, "data_quality_review"):
+                ss.pop(key, None)
+            set_flash("success", "Confirmed as real.", ["No data was changed.", "This check will not be flagged again."])
+            st.rerun()
+        if void_clicked:
+            if errors:
+                ss[flag] = True
+                st.rerun()
+            try:
+                void_check_as_test_data(data, reviewing, reason)
+            except ValueError as exc:
+                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+            else:
+                for key in (flag, "data_quality_review"):
+                    ss.pop(key, None)
+                set_flash("success", "Voided as test data.", ["Excluded from Trial performance and the camera funnel.", "The original record remains in the workbook, marked excluded.", "Recorded in the audit log."])
+                st.rerun()
+
+
+# ---- Administration: Data & records (Part B batch 2b; boards AdmDataRecords, AdmDataRecordsPhone, AdmCorrCamera, AdmCorrNecropsy, AdmCorrCheck, AdmCorrFollowup,
+# AdmCorrVisit, AdmCorrNoCarcass, AdmCorrStray, AdmWinFix, AdmWinFixPreview, AdmAudit, AdmExport). The five-option radio and the record-type dropdown become a landing
+# list; every correction and tool is its own page. Every correction keeps today's fields, options, guards, writes and audit rows, with the same reason required.
+# Short lists are option rows or segmented controls; long or searchable pickers (windows, checks, tasks, visits, kills, backups) stay dropdowns with a search box.
+
+DATA_PAGES = {
+    "corr_camera": ("Camera evidence", "Fix a closed window's camera review answers and event times."),
+    "corr_necropsy": ("Necropsy evidence", "Fix a closed window's necropsy result, species or photos."),
+    "corr_check": ("Field check", "Fix a check's finding or notes."),
+    "corr_followup": ("Follow-up task", "Recreate a missing task, or remove an invalid one."),
+    "corr_visit": ("Incomplete visit", "Close out a visit left in progress."),
+    "corr_nocarcass": ("Kill with no carcass", "Mark a kill as having no carcass collected."),
+    "corr_stray": ("Stray window on an Inactive trap", "Close a leftover window."),
+    "data_winfix": ("Window start corrections", "Fix an R1 trap's earliest window start."),
+}
+DATA_REVIEW_PAGES = {
+    "windows": ("Trial periods", "Every test window, open and closed."),
+    "data_audit": ("Audit log", "Every correction and change, newest first."),
+    "data_export": ("Export and backup", "Inspect a sheet, download the workbook, or restore a backup."),
+}
+DATA_SUB_PAGES = set(DATA_PAGES) | {"data_audit", "data_export"}
+
+
+@contextmanager
+def data_page_frame(title: str, subtitle: str, *, notice: bool = True):
+    """The frame of a Data & records page: the back pill, the title, what it is for, and (for a correction) the standing notice."""
+    r1_screen_css(narrow=True)
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Back to Data & records", "data_management", "data_sub")
+        admin_title(title, subtitle)
+        if notice:
+            st.markdown(design.message_html("info", "", "Use corrections only for known data-entry mistakes. Every change needs a reason and is kept in the audit log."), unsafe_allow_html=True)
+        yield
+
+
+def render_data_landing(data) -> None:
+    r1_screen_css(narrow=True)
+    with st.container(key=design.SCREEN_KEY):
+        admin_title("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
+        for group, (heading, pages) in enumerate((("Correct a record", DATA_PAGES), ("Review and export", DATA_REVIEW_PAGES))):
+            st.markdown(f'<div class="r1-label">{heading}</div>', unsafe_allow_html=True)
+            with st.container(key="setup_trap_rows" if group == 0 else "setup_trap_rows_review"):
+                for page_id, (title, text) in pages.items():
+                    with st.container(key=f"listrow_data_{page_id}"):
+                        text_col, button_col = st.columns([6, 1], vertical_alignment="center")
+                        text_col.markdown(f'<div class="r1-row-title">{html.escape(title)}</div><div class="r1-meta">{html.escape(text)}</div>', unsafe_allow_html=True)
+                        button_col.button(title, key=f"data_open_{page_id}", on_click=set_page, args=(page_id,))
+
+
+def correction_search(label: str, key: str) -> str:
+    st.markdown(f'<div class="r1-label">{html.escape(label)}</div><div class="r1-meta">Search by trap, window, bag or check ID.</div>', unsafe_allow_html=True)
+    return st.text_input(label, key=key, placeholder="Search", label_visibility="collapsed").strip().lower()
+
+
+def _search_mask(frame, columns, needle):
+    if not needle:
+        return frame
+    mask = frame[columns].astype(str).apply(lambda col: col.str.lower().str.contains(needle, na=False)).any(axis=1)
+    return frame[mask]
+
+
+def _correction_flash(title: str, lines: list) -> None:
+    set_flash("success", title, lines)
+    st.rerun()
+
+
+def _empty_panel(title: str, detail: str = "") -> None:
+    st.markdown(design.message_html("success", html.escape(title), html.escape(detail)), unsafe_allow_html=True)
+
+
+def _ctx_card(rows: list, key: str = "card_task_context") -> None:
+    with st.container(key=key):
+        st.markdown(r1_kv([(label, f"<b>{html.escape(str(value))}</b>") for label, value in rows if str(value).strip() != ""]), unsafe_allow_html=True)
+
+
+def _reason_field(key: str, label: str = "Correction reason", placeholder: str = "What was wrong and how you know", *, shown: bool, errors: list):
+    field, field_line = _task_field_helpers(key, errors, shown)
+    with field("reason"):
+        reason = st.text_area(label, key=f"{key}_reason", placeholder=placeholder)
+    field_line("reason")
+    return reason
+
+
+def _audit_pairs(data, sheet: str, idx, changed: dict, record_type: str, record_id: str, reason: str) -> list:
+    rows = []
+    for field, new_value in changed.items():
+        old_value = str(data[sheet].at[idx, field])
+        if str(new_value) != old_value:
+            data[sheet].at[idx, field] = new_value
+            rows.append([make_id("CHG"), dtstr(), record_type, record_id, field, old_value, str(new_value), reason.strip()])
+    return rows
+
+
+# ---- Camera evidence --------------------------------------------------------------------------------------------------------
+
+CAMERA_EVIDENCE_CHOICES = {
+    "Finding At Close": FINDINGS,
+    "Evidence Usable": ["Yes", "No", "Pending"],
+    "Target Present": ["Yes", "No", "Unclear", "Pending"],
+    "Interaction Level": ["Single interaction", "Repeated interaction", "Heavy / repeated interaction", "Not applicable", "Unclear", "Pending"],
+    "Entered Strike Area": ["Yes", "No", "Unclear", "Not applicable", "Pending"],
+    "Trap Activated": ["Yes", "No", "Unclear", "Pending"],
+    "Kill Confirmed": ["Yes", "No", "Unclear", "Pending"],
+    "Video Assessment": ["Humane", "Not humane", "Unclear", "No usable video", "Not applicable", "Pending"],
+}
+CAMERA_EVIDENCE_LABELS = {"Finding At Close": "Finding at close", "Evidence Usable": "Evidence usable?", "Target Present": "Target present?", "Interaction Level": "Interaction level",
+                          "Entered Strike Area": "Entered the strike area?", "Trap Activated": "Trap activated?", "Kill Confirmed": "Kill confirmed?", "Video Assessment": "Video assessment"}
+CAMERA_EVIDENCE_AS_ROWS = ("Finding At Close", "Interaction Level", "Video Assessment")
+CAMERA_EVIDENCE_TIMES = [("First Interaction Time", "First target interaction"), ("Trigger Time", "First activation"), ("Kill Time", "Kill")]
+
+
+def render_correct_camera(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Camera evidence", "Correct a closed window's camera review answers and event times."):
+        needle = correction_search("Closed test window", "corr_camera_search")
+        candidates = _search_mask(data["Windows"][data["Windows"]["Status"] == "Closed"].copy(), ["Window ID", "Trap ID", "Bag ID", "Site ID"], needle)
+        options = candidates["Window ID"].tolist()
+        if not options:
+            _empty_panel("No closed windows match", "Change the search to see more.")
+            return
+        selected = st.selectbox("Closed test window", options, label_visibility="collapsed", key="corr_camera_window",
+                                format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {task_when(r['End Time'])} · {wid}")(candidates[candidates["Window ID"] == wid].iloc[0]))
+        idx = data["Windows"].index[data["Windows"]["Window ID"] == selected][0]
+        row = data["Windows"].loc[idx]
+        start, end = parse_dt(row["Start Time"]), parse_dt(row["End Time"])
+        st.markdown(f'<div class="r1-meta">Evidence period: {html.escape(task_when(start))} – {html.escape(task_when(end))}.</div>', unsafe_allow_html=True)
+        changed = {}
+        for field, choices in CAMERA_EVIDENCE_CHOICES.items():
+            current = str(row[field])
+            index = choices.index(current) if current in choices else 0
+            key = f"corr_{field}_{selected}"
+            if field in CAMERA_EVIDENCE_AS_ROWS:
+                changed[field] = st.radio(CAMERA_EVIDENCE_LABELS[field], choices, index=index, key=f"rows_{key}")
+            else:
+                changed[field] = st.segmented_control(CAMERA_EVIDENCE_LABELS[field], choices, default=current if current in choices else choices[0], key=f"seg_{key}", selection_mode="single") or choices[index]
+        st.markdown('<div class="r1-label">Event times</div><div class="r1-meta">When things happened in the footage, within the evidence period. Leave a date blank to leave that time unchanged.</div>', unsafe_allow_html=True)
+        stamps = {}
+        for field, label in CAMERA_EVIDENCE_TIMES:
+            current = parse_dt(row[field])
+            st.markdown(f'<div class="r1-label">{label}</div>', unsafe_allow_html=True)
+            with st.container(key=f"pair_corr_{field.replace(' ', '_')}_{selected}_w"):
+                date_col, time_col = st.columns(2)
+                stamp_date = date_col.date_input(f"{label} date", value=current.date() if current else None, min_value=start.date() if start else None, max_value=end.date() if end else None,
+                                                 key=f"corr_{field}_date_{selected}", label_visibility="collapsed", format="DD/MM/YYYY")
+                stamp_time = time_col.time_input(f"{label} time", value=current.time() if current else None, key=f"corr_{field}_time_{selected}", label_visibility="collapsed")
+            stamps[field] = (stamp_date, stamp_time)
+        flag = f"corr_camera_errors_{selected}"
+        shown = bool(ss.get(flag))
+        errors = [] if (ss.get(f"corr_camera_{selected}_reason") or "").strip() else [("reason", "Say why this is being corrected.")]
+        reason = _reason_field(f"corr_camera_{selected}", shown=shown, errors=errors)
+        _task_errors_panel(errors, shown)
+        st.markdown('<div class="r1-meta">Saving writes one audit row per changed field and recalculates the window\'s timings and review status. If nothing changed, nothing is saved.</div>', unsafe_allow_html=True)
+        if two_phase_button("Save correction", f"corr_camera_save_{selected}", "Saving…", type="primary"):
+            if errors:
+                ss[flag] = True
+                st.rerun()
+            audit_rows = _audit_pairs(data, "Windows", idx, changed, "Camera evidence", selected, reason)
+            for field, (stamp_date, stamp_time) in stamps.items():
+                if stamp_date is None or stamp_time is None:
+                    continue
+                old_value, new_value = str(data["Windows"].at[idx, field]), dtstr(datetime.combine(stamp_date, stamp_time))
+                if new_value != old_value:
+                    data["Windows"].at[idx, field] = new_value
+                    audit_rows.append([make_id("CHG"), dtstr(), "Camera evidence", selected, field, old_value, new_value, reason.strip()])
+            if not audit_rows:
+                st.markdown(design.message_html("info", "No values changed", "Nothing was saved."), unsafe_allow_html=True)
+                return
+            recalculate_window(data, idx)
+            refresh_review_status(data, selected)
+            data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
+            save_data(data)
+            ss.pop(flag, None)
+            _correction_flash("Correction saved.", [f"{len(audit_rows)} field change(s) were applied.", "The audit log retained the previous and corrected values.", "Next: make another correction or return to the relevant record."])
+
+
+# ---- Necropsy evidence ------------------------------------------------------------------------------------------------------
+
+def render_correct_necropsy(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Necropsy evidence", "Correct a closed window's necropsy result, species or photos."):
+        needle = correction_search("Closed test window", "corr_necropsy_search")
+        candidates = _search_mask(data["Windows"][data["Windows"]["Status"] == "Closed"].copy(), ["Window ID", "Trap ID", "Bag ID", "Site ID"], needle)
+        options = candidates["Window ID"].tolist()
+        if not options:
+            _empty_panel("No closed windows match", "Change the search to see more.")
+            return
+        selected = st.selectbox("Closed test window", options, label_visibility="collapsed", key="corr_necropsy_window",
+                                format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {task_when(r['End Time'])} · {wid}")(candidates[candidates["Window ID"] == wid].iloc[0]))
+        idx = data["Windows"].index[data["Windows"]["Window ID"] == selected][0]
+        row = data["Windows"].loc[idx]
+        st.markdown(f'<div class="r1-meta">Evidence period: {html.escape(task_when(row["Start Time"]))} – {html.escape(task_when(row["End Time"]))}.</div>', unsafe_allow_html=True)
+        status_options = ["Complete", "Not completed", "Unable to assess", "Not started", NECROPSY_NOT_APPLICABLE_NO_CARCASS]
+        assessment_options = ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending", NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS]
+        final_options = ["Yes", "No", "Unclear", "Not assessable", "Pending", NOT_ASSESSED_NO_CARCASS, NOT_ASSESSED_TRIAL_ENDED]
+        st.markdown('<div class="r1-label">Photos</div><div class="r1-meta">Add photos of the animal if they were missed.</div>', unsafe_allow_html=True)
+        photo_gate = render_correction_necropsy_photo_capture(selected, str(row["Trap ID"]), str(row["Site ID"]))
+        photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
+        if photo_gate.get("expected_count", 0):
+            if photo_gate.get("manual_failure_count", 0):
+                count = int(photo_gate["manual_failure_count"])
+                st.markdown(f'<div class="r1-meta">{count} photo{"s" if count != 1 else ""} could not upload</div>', unsafe_allow_html=True)
+            elif photo_gate.get("ready"):
+                st.markdown(f'<div class="r1-meta">{photo_gate["file_count"]} photo{"s" if photo_gate["file_count"] != 1 else ""} saved</div>', unsafe_allow_html=True)
+            else:
+                remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
+                st.markdown(f'<div class="r1-meta">Uploading {remaining} photo{"s" if remaining != 1 else ""}…</div>', unsafe_allow_html=True)
+        def row_of(field, label, options, key):
+            current = str(row[field])
+            return st.radio(label, options, index=options.index(current) if current in options else 0, key=key)
+
+        changed = {}
+        changed["Necropsy Status"] = row_of("Necropsy Status", "Necropsy status", status_options, f"rows_corr_status_{selected}")
+        changed["Necropsy Assessment"] = row_of("Necropsy Assessment", "Necropsy assessment", assessment_options, f"rows_corr_assessment_{selected}")
+        # Species as the tiles of the necropsy task, Rat type as its segmented control, the weight as chips for the species chosen here (live), the result as rows.
+        current_species = str(row["Species"]).strip()
+        species = st.radio("Species", SPECIES, index=SPECIES.index(current_species) if current_species in SPECIES else None, horizontal=True, key=f"species_corr_{selected}")
+        changed["Species"] = species or current_species
+        guess = str(row["Field-Recorded Species"]).strip()
+        st.markdown(f'<div class="r1-meta">Field-recorded: {html.escape(guess or "not recorded")}{" · confirmed at necropsy: " + html.escape(current_species) if row["Species Confirmed"] == "Yes" and current_species else ""}</div>', unsafe_allow_html=True)
+        current_rat = str(row["Rat Type"]).strip()
+        rat = st.segmented_control("Rat type", RAT_TYPES, default=current_rat if current_rat in RAT_TYPES else RAT_TYPES[0], key=f"seg_corr_rat_{selected}", selection_mode="single")
+        changed["Rat Type"] = rat or (current_rat if current_rat in RAT_TYPES else RAT_TYPES[0])
+        guess = str(row["Field-Recorded Rat Type"]).strip()
+        st.markdown(f'<div class="r1-meta">Field-recorded: {html.escape(guess or "not recorded")}{" · confirmed at necropsy: " + html.escape(current_rat) if row["Species Confirmed"] == "Yes" and current_rat else ""}</div>', unsafe_allow_html=True)
+        st.markdown('<div class="r1-label">Animal weight range</div>', unsafe_allow_html=True)
+        weight_options = weight_ranges_for_species(changed["Species"]) + ["Not recorded"]
+        current_weight = str(row["Animal Weight Range"]).strip()
+        with st.container(key="chips_corr_weight"):
+            weight = st.pills("Animal weight range", weight_options, selection_mode="single", default=current_weight if current_weight in weight_options else "Not recorded",
+                              key=f"chips_corr_weight_{selected}_{changed['Species']}", label_visibility="collapsed")
+        changed["Animal Weight Range"] = "" if (weight or "Not recorded") == "Not recorded" else weight
+        changed["Final Humane Kill"] = row_of("Final Humane Kill", "Final humane kill", final_options, f"rows_corr_final_{selected}")
+        flag = f"corr_necropsy_errors_{selected}"
+        shown = bool(ss.get(flag))
+        errors = []
+        if not (ss.get(f"corr_necropsy_{selected}_reason") or "").strip():
+            errors.append(("reason", "Say why this is being corrected."))
+        consistency = necropsy_consistency_errors(changed["Necropsy Status"], changed["Necropsy Assessment"], changed["Final Humane Kill"])
+        errors += [("result", words) for words in consistency]
+        reason = _reason_field(f"corr_necropsy_{selected}", shown=shown, errors=errors)
+        _task_errors_panel(errors, shown)
+        lock_key = f"correct_necropsy_evidence_saving_{selected}"
+        clicked = two_phase_button("Please wait" if photo_blocked else "Save correction", f"correct_necropsy_evidence_save_{selected}", "Saving…", type="primary",
+                                   disabled=photo_blocked or ss.get(lock_key, False))
+        if clicked:
+            ss[lock_key] = True
+            if errors:
+                ss[lock_key] = False
+                ss[flag] = True
+                st.rerun()
+            expected_photo_count = int(photo_gate.get("expected_count", 0))
+            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
+            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
+            audit_rows = _audit_pairs(staged, "Windows", idx, changed, "Necropsy evidence", selected, reason)
+            if not audit_rows and not expected_photo_count:
+                ss[lock_key] = False
+                st.markdown(design.message_html("info", "No values changed", "Nothing was saved."), unsafe_allow_html=True)
+                return
+            recalculate_window(staged, idx)
+            refresh_review_status(staged, selected)
+            if audit_rows:
+                staged["Audit Log"] = pd.concat([staged["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
+            commit_staged_records_with_photos(
+                data=data, staged=staged, original_data=original_data, photo_gate=photo_gate, expected_photo_count=expected_photo_count,
+                record_id=photo_gate["follow_up_id"], photos_id_column="Follow-up ID", verify_persisted=lambda reloaded: {}, log_prefix="correction_necropsy",
+                log_fields={"window_id": selected, "trap_id": str(row["Trap ID"])}, record_noun="correction", record_description="necropsy correction or photo record",
+                session_state_keys_to_clear_on_failure=[lock_key],
+            )
+            ss.pop(lock_key, None)
+            ss.pop(flag, None)
+            _correction_flash("Correction saved.", [f"{len(audit_rows)} field change(s) were applied." if audit_rows else "No field values changed.",
+                                                    f"{expected_photo_count} photo(s) attached." if expected_photo_count else "No new photos attached.",
+                                                    "Next: make another correction or return to the relevant record."])
+
+
+# ---- Field check ------------------------------------------------------------------------------------------------------------
+
+def render_correct_check(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Field check", "Correct a check's finding or notes."):
+        needle = correction_search("Field check", "corr_check_search")
+        candidates = _search_mask(data["Checks"].copy(), ["Check ID", "Trap ID", "Bag ID", "Visit ID"], needle)
+        options = candidates["Check ID"].tolist()
+        if not options:
+            _empty_panel("No checks match", "Change the search to see more.")
+            return
+        selected = st.selectbox("Field check", options, label_visibility="collapsed", key="corr_check_pick",
+                                format_func=lambda cid: (lambda r: f"{r['Trap ID']} · {task_when(r['Check Time'])} · {r['Finding']} · {cid}")(candidates[candidates["Check ID"] == cid].iloc[0]))
+        idx = data["Checks"].index[data["Checks"]["Check ID"] == selected][0]
+        row = data["Checks"].loc[idx]
+        finding = st.radio("Finding", FINDINGS, index=FINDINGS.index(row["Finding"]) if row["Finding"] in FINDINGS else 0, key=f"rows_corr_check_finding_{selected}")
+        notes = st.text_area("Notes", value=row["Notes"], key=f"corr_check_notes_{selected}")
+        flag = f"corr_check_errors_{selected}"
+        shown = bool(ss.get(flag))
+        errors = [] if (ss.get(f"corr_check_{selected}_reason") or "").strip() else [("reason", "Say why this is being corrected.")]
+        reason = _reason_field(f"corr_check_{selected}", shown=shown, errors=errors)
+        _task_errors_panel(errors, shown)
+        st.markdown('<div class="r1-meta">Saving updates the check and the finding on the window it closed, then recalculates that window.</div>', unsafe_allow_html=True)
+        if two_phase_button("Save correction", f"corr_check_save_{selected}", "Saving…", type="primary"):
+            if errors:
+                ss[flag] = True
+                st.rerun()
+            audit_rows = _audit_pairs(data, "Checks", idx, {"Finding": finding, "Notes": notes}, "Field check", selected, reason)
+            # Correcting a check's Finding propagates to the window it closed (UX-audit fix 2026-08-13), as a fresh check does through close_window().
+            window_id = str(row["Window Closed"])
+            if window_id and str(finding) != str(row["Finding"]):
+                matches = data["Windows"].index[data["Windows"]["Window ID"] == window_id].tolist()
+                if matches:
+                    widx = matches[0]
+                    old_window_finding = str(data["Windows"].at[widx, "Finding At Close"])
+                    if old_window_finding != str(finding):
+                        data["Windows"].at[widx, "Finding At Close"] = finding
+                        audit_rows.append([make_id("CHG"), dtstr(), "Field check", window_id, "Finding At Close", old_window_finding, str(finding), reason.strip()])
+                    recalculate_window(data, widx)
+                    refresh_review_status(data, window_id)
+            if not audit_rows:
+                st.markdown(design.message_html("info", "No values changed", "Nothing was saved."), unsafe_allow_html=True)
+                return
+            data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
+            save_data(data)
+            ss.pop(flag, None)
+            _correction_flash("Correction saved.", [f"{len(audit_rows)} field change(s) were applied.", "The audit log retained the previous and corrected values.", "Next: make another correction or return to the relevant record."])
+
+
+# ---- Follow-up task ---------------------------------------------------------------------------------------------------------
+
+def render_correct_followup(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Follow-up task", "Recreate a missing task, or remove an invalid one."):
+        orphaned = missing_followup_windows(data)
+        if not orphaned.empty:
+            with st.container(key="card_followup_recreate"):
+                st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">Recreate a missing task</div><div class="r1-meta">These windows should have a task but don\'t.</div>', unsafe_allow_html=True)
+                picked = st.selectbox("Window", orphaned["Window ID"].tolist(), key="recreate_followup_window",
+                                      format_func=lambda wid: (lambda r: " · ".join(part for part in (str(r["Trap ID"]), site_name(data, r["Site ID"]), str(r["Finding At Close"]), wid) if part))(orphaned[orphaned["Window ID"] == wid].iloc[0]))
+                orphan = orphaned[orphaned["Window ID"] == picked].iloc[0]
+                _ctx_card([("Trap", orphan["Trap ID"]), ("Site", site_name(data, orphan["Site ID"])), ("Bag ID", orphan["Bag ID"]), ("Finding", orphan["Finding At Close"]),
+                           ("Final humane kill", orphan["Final Humane Kill"]), ("Review status", orphan["Review Status"])], key="ctx_followup_orphan")
+                needed = []
+                if orphan["Finding At Close"] == "Dead animal found" and orphan["Final Humane Kill"] != NOT_ASSESSED_NO_CARCASS:
+                    needed.append("Necropsy review")
+                if orphan["Finding At Close"] not in ["Trap missing", "Unable to check"] and orphan["Camera Assigned"] == "Yes":
+                    needed.append("Camera review")
+                kind = st.segmented_control("Task to recreate", needed, default=needed[0], key=f"seg_recreate_followup_type_{picked}", selection_mode="single") if needed else None
+                flag = f"recreate_errors_{picked}"
+                shown = bool(ss.get(flag))
+                errors = [] if (ss.get(f"recreate_followup_{picked}_reason") or "").strip() else [("reason", "Say why the task is being recreated.")]
+                reason = _reason_field(f"recreate_followup_{picked}", "Reason", "Why it is missing", shown=shown, errors=errors)
+                _task_errors_panel(errors, shown)
+                if st.button("Recreate task", type="primary", key=f"recreate_followup_btn_{picked}", disabled=not kind):
+                    if errors:
+                        ss[flag] = True
+                        st.rerun()
+                    try:
+                        recreate_followup(data, picked, kind, reason)
+                    except Exception as exc:
+                        st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                    else:
+                        ss.pop(flag, None)
+                        _correction_flash("Follow-up recreated.", [f"{kind} recreated for {orphan['Trap ID']}.", "It now appears in the normal Follow-ups list to complete.",
+                                                                    "The recreation is recorded in the audit log, referencing the removal reason it followed."])
+        with st.container(key="card_followup_remove"):
+            st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">Remove an invalid task</div>', unsafe_allow_html=True)
+            st.markdown(design.message_html("warn", "Only for an invalid or duplicate task", "The linked check and test window stay."), unsafe_allow_html=True)
+            candidates = data["Followups"].copy()
+            options = candidates["Follow-up ID"].astype(str).tolist()
+            if not options:
+                st.markdown(design.message_html("info", "No tasks match"), unsafe_allow_html=True)
+                return
+            selected = st.selectbox("Task", options, key="corr_followup_pick",
+                                    format_func=lambda fid: (lambda r: f"{r['Follow-up Type']} · {r['Trap ID']} · " + (f"Bag {r['Bag ID']} · " if str(r.get('Bag ID', '')).strip() else "") + f"{r['Status']} · {fid}")(
+                                        candidates[candidates["Follow-up ID"].astype(str) == str(fid)].iloc[0]))
+            row = candidates[candidates["Follow-up ID"].astype(str) == str(selected)].iloc[0]
+            _ctx_card([("Task", row["Follow-up Type"]), ("Trap", row["Trap ID"]), ("Site", site_name(data, row["Site ID"])), ("Bag ID", row["Bag ID"]), ("Window", row["Window ID"]),
+                       ("Reason", row["Reason"]), ("Status", row["Status"])], key="ctx_followup_remove")  # inside the Remove card, so not a card of its own
+            flag = f"remove_followup_errors_{selected}"
+            shown = bool(ss.get(flag))
+            errors = [] if (ss.get(f"remove_followup_{selected}_reason") or "").strip() else [("reason", "Say why the task is being removed.")]
+            reason = _reason_field(f"remove_followup_{selected}", "Reason", "Why it is invalid", shown=shown, errors=errors)
+            with st.container(key=f"tick_remove_followup_{selected}"):
+                confirm = st.checkbox(f"Remove follow-up {selected}", key=f"confirm_remove_followup_{selected}")
+            _task_errors_panel(errors, shown)
+            if st.button("Remove task", type="primary", disabled=not confirm, key=f"remove_followup_{selected}"):
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    removed = remove_followup_task(data, selected, reason)
+                except Exception as exc:
+                    st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                else:
+                    ss.pop(flag, None)
+                    _correction_flash("Follow-up removed.", [f"{removed['Follow-up Type']} for {removed['Trap ID']} was removed.", "The linked check and test window were preserved.", "The removal is recorded in the audit log."])
+
+
+# ---- Incomplete visit, Kill with no carcass, Stray window -------------------------------------------------------------------
+
+def render_correct_visit(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Incomplete visit", "Close out a visit left in progress."):
+        stale = data["Visits"][data["Visits"]["Status"] == "In progress"].copy()
+        needle = correction_search("In-progress visit", "corr_visit_search")
+        stale = _search_mask(stale, ["Visit ID", "Site ID"], needle)
+        if stale.empty:
+            _empty_panel("No visits are in progress", "Every visit has been finished or closed.")
+            return
+        st.markdown('<div class="r1-meta">An old visit that will never be finished normally, most often because its site\'s traps have since been cycled through a new trial setup.</div>', unsafe_allow_html=True)
+        selected = st.selectbox("In-progress visit", stale["Visit ID"].tolist(), label_visibility="collapsed", key="corr_visit_pick",
+                                format_func=lambda vid: (lambda r: f"{site_name(data, r['Site ID'])} · started {task_when(r['Start Time'])} · {len(data['Checks'][data['Checks']['Visit ID'] == vid])} check(s) recorded · {vid}")(
+                                    stale[stale["Visit ID"] == vid].iloc[0]))
+        visit = stale[stale["Visit ID"] == selected].iloc[0]
+        checks = data["Checks"][data["Checks"]["Visit ID"] == selected]
+        _ctx_card([("Site", site_name(data, visit["Site ID"])), ("Started", task_when(visit["Start Time"])), ("Checks recorded", str(len(checks)))])
+        flag = f"abandon_errors_{selected}"
+        shown = bool(ss.get(flag))
+        errors = [] if (ss.get(f"abandon_visit_{selected}_reason") or "").strip() else [("reason", "Say why the visit is being abandoned.")]
+        reason = _reason_field(f"abandon_visit_{selected}", "Reason", "Why it is being abandoned", shown=shown, errors=errors)
+        with st.container(key=f"tick_abandon_{selected}"):
+            confirm = st.checkbox("Close out this visit. It will no longer show as in progress", key=f"confirm_abandon_{selected}")
+        _task_errors_panel(errors, shown)
+        if two_phase_button("Abandon this visit", f"abandon_visit_{selected}", "Closing…", type="primary", disabled=not confirm):
+            if errors:
+                ss[flag] = True
+                st.rerun()
+            try:
+                abandon_incomplete_visit(data, selected, reason.strip())
+            except Exception as exc:
+                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+            else:
+                ss.pop(flag, None)
+                _correction_flash("Visit closed.", [f"{site_name(data, visit['Site ID'])}'s in-progress visit was abandoned.", f"{len(checks)} previously recorded check(s) were left untouched.", "Recorded in the audit log."])
+
+
+def render_correct_nocarcass(data) -> None:
+    with data_page_frame("Kill with no carcass", "Mark a kill as having no carcass collected."):
+        candidates = no_carcass_correction_candidates(data)
+        if candidates.empty:
+            _empty_panel("No dead-animal kills are waiting on an open necropsy review.")
+            return
+        st.markdown(f'<div class="r1-meta">Only kills still waiting on an open necropsy review are listed. {len(candidates)} kill{"s" if len(candidates) != 1 else ""} with an open necropsy review.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="r1-label">Kill</div>', unsafe_allow_html=True)
+        selected = st.selectbox("Kill", candidates["Window ID"].tolist(), label_visibility="collapsed", key="no_carcass_selected_kill",
+                                format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · found {task_when(r['End Time'])}" + (f" · bag {r['Bag ID']}" if str(r['Bag ID']).strip() else ""))(
+                                    candidates[candidates["Window ID"] == wid].iloc[0]))
+        kill = candidates[candidates["Window ID"] == selected].iloc[0]
+        _ctx_card([("Trap", kill["Trap ID"]), ("Site", site_name(data, kill["Site ID"])), ("Found", task_when(kill["End Time"])), ("Bag ID issued", kill["Bag ID"] or "None"),
+                   ("Species recorded", kill["Species"] or "Not recorded")])
+        with st.container(key=f"tick_nocarcass_{selected}"):
+            confirm = st.checkbox("This kill had no carcass collected. Nothing was bagged.", key=f"confirm_no_carcass_{selected}")
+        st.markdown('<div class="r1-meta">The kill still counts, but leaves the humane rate. Its necropsy task closes and the bag is cleared. Audited.</div>', unsafe_allow_html=True)
+        if two_phase_button("Mark as no carcass", f"no_carcass_correct_{selected}", "Saving…", type="primary", disabled=not confirm):
+            try:
+                corrected = correct_kill_to_no_carcass(data, selected)
+            except ValueError as exc:
+                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+            else:
+                _correction_flash("Kill corrected.", [f"{kill['Trap ID']} is now recorded as a kill with no carcass.",
+                                                      f"{corrected['tasks_resolved']} necropsy task closed" + (f" and bag {corrected['bag_id']} cleared." if corrected["bag_id"] else "."),
+                                                      "It still counts as a kill and is not in the humane rate. Recorded in the audit log."])
+
+
+def render_correct_stray(data) -> None:
+    with data_page_frame("Stray window on an Inactive trap", "Close a leftover window."):
+        st.markdown('<div class="r1-meta">For an Inactive trap that was left with an open window (moving or re-building an Inactive trap used to open one). It is closed with a zero-length period and excluded from results, so it can\'t be mistaken for real monitoring and activating the trap later opens only one window. Nothing is changed unless you confirm a specific record.</div>', unsafe_allow_html=True)
+        candidates = stray_window_candidates(data)
+        needle = correction_search("Window", "corr_stray_search")
+        candidates = _search_mask(candidates, ["Window ID", "Trap ID", "Site ID"], needle)
+        if candidates.empty:
+            _empty_panel("No Inactive trap has an open window.", "Nothing to close.")
+            return
+        st.markdown(f'<div class="r1-meta">{len(candidates)} Inactive trap{"s" if len(candidates) != 1 else ""} with an open window.</div>', unsafe_allow_html=True)
+        selected = st.selectbox("Window", candidates["Window ID"].tolist(), label_visibility="collapsed", key="stray_window_selected",
+                                format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · open since {task_when(r['Start Time'])} · {wid}")(
+                                    candidates[candidates["Window ID"] == wid].iloc[0]))
+        stray = candidates[candidates["Window ID"] == selected].iloc[0]
+        _ctx_card([("Trap", stray["Trap ID"]), ("Site", site_name(data, stray["Site ID"])), ("Build", stray["Build Version"]), ("Window open since", task_when(stray["Start Time"]))])
+        with st.container(key=f"tick_stray_{selected}"):
+            confirm = st.checkbox("This window is a leftover. The trap was not being monitored", key=f"confirm_stray_window_{selected}")
+        if two_phase_button("Close this stray window", f"close_stray_window_{selected}", "Closing…", type="primary", disabled=not confirm):
+            try:
+                repaired = close_stray_window(data, selected)
+            except ValueError as exc:
+                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+            else:
+                _correction_flash("Stray window closed.", [f"{repaired['trap_id']}'s leftover window was closed (zero length) and excluded from results.", "No check, follow-up or photo referred to it. Recorded in the audit log."])
+
+
+# ---- Window start corrections -----------------------------------------------------------------------------------------------
+
+def render_window_starts(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Window start corrections", "Fix an R1 trap's earliest window start when it was recorded wrong.", notice=False):
+        candidates = suspect_earliest_window_candidates(data, "R1")
+        if not candidates:
+            _empty_panel("No R1 trap's earliest window looks suspect", "Nothing to correct.")
+            return
+        r1_ids = data["Traps"][data["Traps"]["Product"] == "R1"]["Trap ID"]
+        open_reviews = data["Followups"][(data["Followups"]["Status"] == "Open") & (data["Followups"]["Follow-up Type"] == "Camera review") & (data["Followups"]["Trap ID"].isin(r1_ids))]
+        with_review = len({c["Trap ID"] for c in candidates} & set(open_reviews["Trap ID"].astype(str)))
+        st.markdown(f'<div class="r1-meta">{len(candidates)} R1 trap{"s" if len(candidates) != 1 else ""} flagged · {with_review} with an open camera review.</div>', unsafe_allow_html=True)
+        pending = ss.get("winfix_bulk_pending")
+        reason_key = "winfix_reason"
+        shown = bool(ss.get("winfix_errors_shown"))
+        errors = [] if (ss.get(reason_key) or "").strip() else [("reason", "Say how the true deployment date was confirmed.")]
+        field, field_line = _task_field_helpers("winfix", errors, shown)
+        st.markdown('<div class="r1-label">Reason</div>', unsafe_allow_html=True)
+        with field("reason"):
+            reason = st.text_area("Reason", key=reason_key, placeholder="For example: confirmed against field records and camera timestamps", label_visibility="collapsed", disabled=pending is not None)
+        field_line("reason")
+        st.markdown('<div class="r1-label">Flagged traps</div>', unsafe_allow_html=True)
+        chosen = []
+        for c in candidates:
+            trap_id = c["Trap ID"]
+            with st.container(key=f"card_winfix_{trap_id}"):
+                with st.container(key=f"bsel_winfix_{trap_id}"):
+                    picked = st.checkbox(f"{trap_id} · {site_name(data, c['Site ID'])}", key=f"winfix_select_{trap_id}", disabled=not c["Eligible"] or pending is not None)
+                st.markdown(f'<div class="r1-meta" style="margin:-6px 0 0 34px">{html.escape(str(c["Window ID"]))} · Review status: {html.escape(str(c["Review Status"]))}</div>', unsafe_allow_html=True)
+                st.markdown(r1_kv([("Current earliest start", f"<b>{html.escape(task_when(c['Current Start']))}</b>"),
+                                   ("Deployment Start", f"<b>{html.escape(task_when(c['Deployment Start']) if c['Deployment Start'] else 'Not set')}</b>")]), unsafe_allow_html=True)
+                if not c["Eligible"]:
+                    st.markdown(design.message_html("info", "", "Its review is complete, so it can't be selected."), unsafe_allow_html=True)
+                else:
+                    start = c["Deployment Start"] or c["Current Start"]
+                    st.markdown('<div class="r1-label">True deployment</div>', unsafe_allow_html=True)
+                    date_key, time_key = f"winfix_date_{trap_id}", f"winfix_time_{trap_id}"
+                    if date_key not in ss:  # seeded once: a default passed on every run has handed back the default instead of what was typed
+                        ss[date_key], ss[time_key] = start.date(), start.time()
+                    with st.container(key=f"pair_winfix_{trap_id}"):
+                        d_col, t_col = st.columns(2)
+                        new_date = d_col.date_input("True deployment date", value=None, key=date_key, label_visibility="collapsed", format="DD/MM/YYYY", disabled=pending is not None)
+                        new_time = t_col.time_input("True deployment time", value=None, key=time_key, label_visibility="collapsed", disabled=pending is not None)
+                    if two_phase_button("Apply this trap", f"winfix_apply_{trap_id}", "Applying…", disabled=pending is not None):
+                        if errors:
+                            ss["winfix_errors_shown"] = True
+                            st.rerun()
+                        try:
+                            if new_date is None or new_time is None:
+                                raise ValueError("Enter the true deployment date and time.")
+                            changed = correct_window_start(data, c["Window ID"], datetime.combine(new_date, new_time), reason.strip())
+                        except ValueError as exc:
+                            st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                        else:
+                            ss.pop("winfix_errors_shown", None)
+                            if changed:
+                                save_data(data)
+                                set_flash("success", f"{trap_id} corrected.", [f"Window {c['Window ID']} Start Time updated.", "Recorded in the audit log."])
+                            else:
+                                set_flash("info", "No change", ["The date and time match the current value."])
+                            st.rerun()
+            if picked:
+                chosen.append(trap_id)
+        with st.container(key="card_winfix_bulk"):
+            st.markdown('<div class="r1-card-title" style="font-size:22px;line-height:30px">Apply to the selected traps</div><div class="r1-label">Shared true deployment</div>', unsafe_allow_html=True)
+            admin_default_moment("winfix_bulk", seed=("winfix_bulk_date", "winfix_bulk_time"))
+            with st.container(key="pair_winfix_bulk_w"):
+                d_col, t_col = st.columns(2)
+                bulk_date = d_col.date_input("Shared true deployment date", value=None, key="winfix_bulk_date", label_visibility="collapsed", format="DD/MM/YYYY", disabled=pending is not None)
+                bulk_time = t_col.time_input("Shared true deployment time", value=None, key="winfix_bulk_time", label_visibility="collapsed", disabled=pending is not None)
+            if not pending:
+                preview_errors = list(errors)
+                if not chosen:
+                    preview_errors.append(("traps", "Choose one or more traps."))
+                if bulk_date is None or bulk_time is None:
+                    preview_errors.append(("when", "Enter the shared true deployment date and time."))
+                _task_errors_panel(preview_errors, shown)
+                if st.button("Preview", key="winfix_bulk_preview", type="primary"):
+                    if preview_errors:
+                        ss["winfix_errors_shown"] = True
+                        st.rerun()
+                    ss["winfix_bulk_pending"] = {"trap_ids": list(chosen), "date": bulk_date, "time": bulk_time}
+                    ss.pop("winfix_errors_shown", None)
+                    st.rerun()
+        if pending:
+            new_dt = datetime.combine(pending["date"], pending["time"])
+            rows = [(c["Trap ID"], f"<b>{html.escape(task_when(c['Current Start']))} → {html.escape(task_when(new_dt))}</b>") for c in candidates if c["Trap ID"] in pending["trap_ids"]]
+            with st.container(key="card_bulk_confirm"):
+                st.markdown(f'<div class="r1-card-title" style="font-size:20px;line-height:26px">Confirm {r1_count(len(pending["trap_ids"]), "trap")}</div>' + r1_kv(rows), unsafe_allow_html=True)
+            st.markdown(design.message_html("info", "", "The choices are locked while this preview is open. Cancel to change them."), unsafe_allow_html=True)
+            with st.container(key="actions_row"):
+                if two_phase_button("Confirm bulk apply", "winfix_bulk_confirm", "Applying…", type="primary", disabled=not reason.strip()):
+                    applied, skipped = [], []
+                    for c in candidates:
+                        if c["Trap ID"] not in pending["trap_ids"]:
+                            continue
+                        try:
+                            if correct_window_start(data, c["Window ID"], new_dt, reason.strip()):
+                                applied.append(c["Trap ID"])
+                            else:
+                                skipped.append(f"{c['Trap ID']} (no change)")
+                        except ValueError as exc:
+                            skipped.append(f"{c['Trap ID']} ({exc})")
+                    if applied:
+                        save_data(data)
+                    ss.pop("winfix_bulk_pending", None)
+                    detail = [f"{len(applied)} trap(s) corrected: {', '.join(applied)}."] if applied else []
+                    if skipped:
+                        detail.append(f"Skipped: {'; '.join(skipped)}.")
+                    set_flash("success" if applied else "error", "Bulk correction applied." if applied else "No traps were corrected.", detail)
+                    st.rerun()
+                st.button("Cancel", key="winfix_bulk_cancel", type="secondary", on_click=lambda: ss.pop("winfix_bulk_pending", None))
+
+
+# ---- Audit log and Export and backup ----------------------------------------------------------------------------------------
+
+def render_audit_log(data) -> None:
+    with data_page_frame("Audit log", "Every correction and change, newest first.", notice=False):
+        log = data["Audit Log"]
+        if log.empty:
+            st.markdown(design.message_html("info", "No corrections have been recorded yet"), unsafe_allow_html=True)
+            return
+        needle = st.text_input("Search the log", key="audit_search", placeholder="Search by record, field or reason", label_visibility="collapsed").strip().lower()
+        kinds = ["All"] + sorted(log["Record Type"].astype(str).unique().tolist())
+        if st.session_state.get("chips_audit_type") not in kinds:
+            st.session_state["chips_audit_type"] = "All"
+        with st.container(key="chips_audit_filter"):
+            kind = st.pills("Record type", kinds, selection_mode="single", key="chips_audit_type") or "All"
+        view = log.iloc[::-1]
+        if kind != "All":
+            view = view[view["Record Type"].astype(str) == kind]
+        view = _search_mask(view, ["Record Type", "Record ID", "Field", "Previous Value", "New Value", "Reason"], needle)
+        st.markdown(f'<div class="r1-meta">{len(view)} of {len(log)} entr{"y" if len(log) == 1 else "ies"}.</div>', unsafe_allow_html=True)
+        shown = pd.DataFrame({"Changed": view["Changed Time"].map(task_when), "Record": view["Record Type"], "ID": view["Record ID"], "Field": view["Field"],
+                              "Before": view["Previous Value"], "After": view["New Value"], "Reason": view["Reason"]})
+        with st.container(key="card_audit_table"):
+            st.dataframe(shown, use_container_width=True, hide_index=True)
+
+
+EXPORT_ROW_LIMIT = 200
+
+
+def render_export(data) -> None:
+    ss = st.session_state
+    with data_page_frame("Export and backup", "Inspect a sheet, download the workbook, or restore a backup.", notice=False):
+        with st.container(key="card_export_download"):
+            st.markdown('<div class="r1-card-title" style="font-size:22px;line-height:30px">Download the workbook</div>'
+                        '<div class="r1-meta">A complete Excel copy of every sheet. Opening this page changes nothing.</div>', unsafe_allow_html=True)
+            with open(DATA_FILE, "rb") as f:
+                st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
+        sheets = list(SHEETS)
+        if ss.get("chips_export_sheet") not in sheets:
+            ss["chips_export_sheet"] = sheets[0]
+        with st.container(key="card_export_inspect"):
+            st.markdown('<div class="r1-card-title" style="font-size:22px;line-height:30px">Inspect a sheet</div><div class="r1-label">Sheet</div>', unsafe_allow_html=True)
+            with st.container(key="chips_export_filter"):
+                sheet = st.pills("Sheet", sheets, selection_mode="single", key="chips_export_sheet", label_visibility="collapsed") or sheets[0]
+            frame = data[sheet]
+            note = "Showing the first rows; download for the whole sheet." if len(frame) > EXPORT_ROW_LIMIT else f"All {len(frame)} row{'' if len(frame) == 1 else 's'}."
+            st.markdown(f'<div class="r1-meta">{note}</div>', unsafe_allow_html=True)
+        with st.container(key="card_audit_table"):
+            st.dataframe(frame.head(EXPORT_ROW_LIMIT), use_container_width=True, hide_index=True)
+        if os.getenv("R1M1_ENABLE_RECOVERY_TOOLS", "").strip() == "1":
+            with st.container(key="card_recovery"):
+                st.markdown('<div class="r1-card-title" style="font-size:22px;line-height:30px">Emergency recovery</div>', unsafe_allow_html=True)
+                st.markdown(design.message_html("error", "Replaces the live workbook", "Every check saved since the chosen backup is lost. Use only to recover from a broken workbook."), unsafe_allow_html=True)
+                backups = available_backups()
+                if not backups:
+                    st.markdown(design.message_html("info", "No backups are available"), unsafe_allow_html=True)
+                    return
+                selected = st.selectbox("Backup", [str(path) for path in backups], key="emergency_recovery_backup",
+                                        format_func=lambda value: f"{backup_label(Path(value))} · {workbook_summary(Path(value))}")
+                with st.container(key="tick_restore"):
+                    confirm = st.checkbox("Replace the current workbook with this backup", key="confirm_emergency_restore")
+                with st.container(key="danger_button"):
+                    if st.button("Restore this backup", type="primary", disabled=not confirm, key="emergency_restore"):
+                        try:
+                            restore_backup(Path(selected))
+                        except Exception as exc:
+                            st.markdown(design.message_html("error", "The backup was not restored", html.escape(str(exc))), unsafe_allow_html=True)
+                        else:
+                            set_flash("success", "Backup restored.")
+                            st.rerun()
+
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.markdown(
     """
@@ -8321,7 +9295,7 @@ def top_nav_trial_setup() -> None:
 
 
 def top_nav_data_records() -> None:
-    select_top_navigation("data_management", {"data_management", "windows"})
+    select_top_navigation("data_management", {"data_management", "windows", *DATA_SUB_PAGES})
 
 
 def top_nav_data_quality() -> None:
@@ -8372,7 +9346,7 @@ NAV_KEY_BY_APP_PAGE = {
     "followups": "followups", "results": "performance",
     "network": "traps", "trap_detail": "traps", "setup": "setup", "trap_edit": "setup", "trap_activate": "setup", "trap_deactivate": "setup", "trap_move": "setup",
     "trap_build": "setup", "trap_delete": "setup", "bulk_activate": "setup", "site_rename": "setup", "site_remove": "setup",
-    "data_management": "records", "windows": "records", "data_quality": "quality",
+    "data_management": "records", "windows": "records", "data_quality": "quality", **{p: "records" for p in DATA_SUB_PAGES},
 }
 NAV_ADMIN_KEYS = ("traps", "setup", "records", "quality")
 # Visit mode has no navigation, only its back pill; the check form and Set up / Track as a trial / End trial are flows.
@@ -9678,217 +10652,10 @@ elif page == "trial_end":
             st.button("Back to list", key="te_preview_back", on_click=r1_step, args=("te",), kwargs={"step": "list"})
 
 elif page == "network":
-    header("Traps", "Find a trap and review its kills, checks and full history.")
-
-    filter_col, search_col = st.columns([1, 1.5])
-
-    site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
-    saved_site_filter = st.session_state.get(
-        "traps_site_filter_value", "All sites"
-    )
-    if saved_site_filter not in site_options:
-        saved_site_filter = "All sites"
-
-    site_filter = filter_col.selectbox(
-        "Site",
-        site_options,
-        index=site_options.index(saved_site_filter),
-        format_func=lambda x: x if x == "All sites" else site_name(data, x),
-        key="traps_site_filter_widget",
-    )
-    st.session_state.traps_site_filter_value = site_filter
-
-    search_value = search_col.text_input(
-        "Find trap",
-        value=st.session_state.get("traps_search_value", ""),
-        placeholder="Trap ID or location",
-        key="traps_search_widget",
-    )
-    st.session_state.traps_search_value = search_value
-    search_text = search_value.strip().lower()
-
-    traps = data["Traps"].copy()
-    if site_filter != "All sites":
-        traps = traps[traps["Site ID"] == site_filter]
-    if search_text:
-        traps = traps[
-            traps.apply(
-                lambda row: search_text in str(row["Trap ID"]).lower()
-                or search_text in trap_location_label(row).lower(),
-                axis=1,
-            )
-        ]
-
-    if traps.empty:
-        helper("No traps match this filter.")
-    else:
-        st.caption("Open a trap to see every recorded check and follow-up.")
-        traps = traps.assign(
-            _route_num=pd.to_numeric(traps["Route Order"], errors="coerce")
-        )
-        for _, tr in traps.sort_values(["Site ID", "_route_num"]).iterrows():
-            trap_id = tr["Trap ID"]
-            trap_checks = data["Checks"][
-                data["Checks"]["Trap ID"].astype(str) == str(trap_id)
-            ].copy()
-            kills = trap_checks[
-                trap_checks["Finding"].astype(str) == "Dead animal found"
-            ]
-            last_kill = (
-                human_dt(kills.iloc[-1]["Check Time"])
-                if not kills.empty
-                else "No kills recorded"
-            )
-
-            with app_card():
-                build_prefix = f"{tr['Product']} Build "
-                build_raw = str(tr["Build Version"] or "—")
-                build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
-                render_compact_card_content(
-                    title=trap_id,
-                    right_label=site_name(data, tr["Site ID"]),
-                    main_line=trap_location_label(tr),
-                    meta_line=(
-                        f"Build: {build_text} · "
-                        f"{len(kills)} kill{'s' if len(kills) != 1 else ''} · "
-                        f"{len(trap_checks)} check{'s' if len(trap_checks) != 1 else ''}"
-                    ),
-                    meta_line_2=f"Last kill: {last_kill}",
-                )
-
-                if st.button(
-                    "View",
-                    key=f"network_view_{trap_id}",
-                    use_container_width=True,
-                ):
-                    go("trap_detail", trap_id=trap_id)
+    render_traps_list(data)
 
 elif page == "trap_detail":
-    trap_id = st.session_state.get("trap_id", "")
-    matches = data["Traps"][
-        data["Traps"]["Trap ID"].astype(str) == str(trap_id)
-    ]
-
-    if matches.empty:
-        message_panel(
-            "error",
-            "This trap could not be found.",
-            ["Return to Traps and choose another record."],
-        )
-        if st.button("Back to traps"):
-            go("network")
-        st.stop()
-
-    tr = matches.iloc[0]
-    trap_checks = data["Checks"][
-        data["Checks"]["Trap ID"].astype(str) == str(trap_id)
-    ].copy()
-    kills = trap_checks[
-        trap_checks["Finding"].astype(str) == "Dead animal found"
-    ].copy()
-    completed_followups = data["Followups"][
-        (data["Followups"]["Trap ID"].astype(str) == str(trap_id))
-        & (data["Followups"]["Status"] == "Complete")
-    ].copy()
-
-    if st.button("← Back to traps", key="back_to_traps"):
-        go("network")
-
-    header(
-        trap_id,
-        f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)} · "
-        f"{tr['Build Version']}",
-    )
-
-    kill_col, check_col, last_col = st.columns(3)
-    kill_col.metric("Kills", len(kills))
-    check_col.metric("Checks", len(trap_checks))
-    last_col.metric(
-        "Last kill",
-        human_dt(kills.iloc[-1]["Check Time"]) if not kills.empty else "—",
-    )
-
-    w = open_window(data, trap_id)
-    st.caption(
-        f"Current test window: {w['Window ID'] if w is not None else 'None'}"
-    )
-
-    st.divider()
-    st.markdown("### Full history")
-
-    events = []
-    for _, check in trap_checks.iterrows():
-        finding = check["Finding"] or "Check recorded"
-        details = []
-        if check["Species"]:
-            details.append(str(check["Species"]))
-        if check["Bag ID"]:
-            details.append(f"Bag {check['Bag ID']}")
-        if check["Lure Condition"]:
-            details.append(f"Lure: {check['Lure Condition']}")
-        if check.get("Trap Ready After Check", ""):
-            details.append(f"Trap ready: {check['Trap Ready After Check']}")
-        if check["Notes"]:
-            details.append(str(check["Notes"]))
-
-        events.append(
-            (
-                parse_dt(check["Check Time"]),
-                finding,
-                " · ".join(details) if details else "No additional notes.",
-            )
-        )
-
-    for _, followup in completed_followups.iterrows():
-        events.append(
-            (
-                parse_dt(followup["Completed Time"]),
-                followup["Follow-up Type"],
-                followup["Notes"] or "Follow-up completed.",
-            )
-        )
-
-    events = sorted(
-        events,
-        key=lambda event: event[0] or datetime.min,
-        reverse=True,
-    )
-
-    if not events:
-        helper("No history has been recorded for this trap yet.")
-    else:
-        grouped_events = {}
-        for when, title, details in events:
-            day_key = when.date() if when else None
-            grouped_events.setdefault(day_key, []).append((when, title, details))
-
-        today = now().date()
-        yesterday = today - timedelta(days=1)
-        for day_key, day_events in grouped_events.items():
-            if day_key is None:
-                day_heading = "Unknown date"
-            elif day_key == today:
-                day_heading = f"Today — {day_key.strftime('%-d %B %Y')}"
-            elif day_key == yesterday:
-                day_heading = f"Yesterday — {day_key.strftime('%-d %B %Y')}"
-            else:
-                day_heading = day_key.strftime("%-d %B %Y")
-
-            st.markdown(
-                f'<div class="trap-history-day">{html.escape(day_heading)}</div>',
-                unsafe_allow_html=True,
-            )
-            for when, title, details in day_events:
-                time_text = when.strftime("%-I:%M %p").lower() if when else "—"
-                st.markdown(
-                    '<div class="trap-history-event">'
-                    f'<div class="trap-history-time">{html.escape(time_text)}</div>'
-                    '<div class="trap-history-content">'
-                    f'<div class="trap-history-title">{html.escape(str(title))}</div>'
-                    f'<div class="trap-history-details">{html.escape(str(details))}</div>'
-                    '</div></div>',
-                    unsafe_allow_html=True,
-                )
+    render_trap_history(data, st.session_state.get("trap_id", ""))
 
 elif page == "followups":
     selected_followup_id=st.session_state.get("followup_panel")
@@ -9968,144 +10735,10 @@ elif page == "followups":
                 render_followup_task(data, item)
 
 elif page == "windows":
-    if st.button("← Back to Data & records"):
-        go("data_management")
-    header("Trial periods", "Review active and completed trial periods.")
-    controls_left, action_right = st.columns([4, 1], vertical_alignment="bottom")
-    with controls_left:
-        status_col, site_col = st.columns(2)
-        visible_status = status_col.selectbox("Show windows", ["Closed", "Active", "All"], key="window_status_filter")
-        window_site = site_col.selectbox("Site", ["All sites"] + data["Sites"]["Site ID"].tolist(), format_func=lambda x: x if x == "All sites" else site_name(data, x), key="window_site_filter")
-    view=data["Windows"].copy()
-    status_map = {"Closed": "Closed", "Active": "Open"}
-    if visible_status in status_map:
-        view=view[view["Status"]==status_map[visible_status]]
-    if window_site != "All sites": view=view[view["Site ID"]==window_site]
-    export_windows = view.to_csv(index=False).encode("utf-8")
-    action_right.download_button("Export filtered", export_windows, file_name="test_windows_filtered.csv", mime="text/csv", key="export_filtered_windows")
-
-    wid=st.session_state.get("window_panel")
-    if wid:
-        table, panel = st.columns([1.65,1], gap="large")
-    else:
-        table, panel = st.container(), None
-
-    with table:
-        if view.empty:
-            helper("No test windows match this filter.")
-        else:
-            if visible_status == "Active":
-                st.caption("Active windows are current field deployments. They are not results and do not require evidence review yet.")
-            else:
-                st.caption("Review a completed window directly from its row.")
-            for _, wr_row in view.sort_values("Start Time", ascending=False).iterrows():
-                row_wid = wr_row["Window ID"]
-                with app_card():
-                    c1, c2, c3, c4, action = st.columns([1.05, 1.1, 1.15, 1.1, 0.9], vertical_alignment="center")
-                    c1.markdown(f"**{row_wid}**" + (" " + status_pill("Excluded", "warning") if wr_row.get("Excluded") == "Yes" else ""), unsafe_allow_html=True)
-                    c1.caption(wr_row["Trap ID"])
-                    c2.write(wr_row["Build Version"] or "—")
-                    c2.caption(site_name(data, wr_row["Site ID"]))
-                    c3.write(human_dt(wr_row["Start Time"]))
-                    c3.caption("Started")
-                    display_outcome = wr_row["Outcome"] if wr_row["Status"] == "Closed" else "Active"
-                    c4.write(display_outcome or "—")
-                    c4.caption(wr_row["Review Status"] if wr_row["Status"] == "Closed" else "Current deployment")
-                    if action.button("Review", key=f"window_review_{row_wid}", use_container_width=True):
-                        st.session_state.window_panel = row_wid
-                        st.rerun()
-    if panel is not None:
-        with panel:
-            scroll_panel_anchor()
-            wr=data["Windows"][data["Windows"]["Window ID"]==wid]
-            if wr.empty:
-                st.session_state.pop("window_panel",None)
-                st.rerun()
-            else:
-                wr=wr.iloc[0]; st.subheader(wid); st.caption(f"{wr['Trap ID']} · {wr['Build Version']}")
-                if wr.get("Excluded") == "Yes":
-                    message_panel("warning", "Excluded from Trial performance", [wr.get("Exclusion Reason") or "No reason recorded."])
-                for label,col in [("Status","Status"),("Started","Start Time"),("Closed","End Time"),("Physical finding","Finding At Close"),("Outcome","Outcome"),("Target present","Target Present"),("Video assessment","Video Assessment"),("Necropsy assessment","Necropsy Assessment"),("Animal weight range","Animal Weight Range"),("Final humane kill","Final Humane Kill"),("Review status","Review Status")]:
-                    value = human_dt(wr[col]) if col in ["Start Time", "End Time"] else (wr[col] or "—")
-                    if col == "Status" and value == "Open": value = "Active"
-                    st.write(f"**{label}:** {value}")
-                if wr["Status"] == "Open":
-                    helper("This window is still active. Evidence and final assessment are added only after the next field check closes it.")
-                if st.button("Close panel", key="close_window_panel"): st.session_state.pop("window_panel",None); st.rerun()
+    render_trial_periods(data)
 
 elif page == "data_quality":
-    header("Data quality review", "Checks with no other trap activity nearby at the same site, worth a human look before they're treated as real field data.")
-    candidates = find_data_quality_candidates(data)
-    reviewing_id = st.session_state.get("data_quality_review")
-
-    if not candidates:
-        st.session_state.pop("data_quality_review", None)
-        st.success("No flagged checks right now — every check either has real activity nearby at its site, or has already been reviewed.")
-    elif reviewing_id and reviewing_id not in {c["Check ID"] for c in candidates}:
-        # Resolved (confirmed or voided) since this panel opened, or no longer a candidate for any other reason.
-        st.session_state.pop("data_quality_review", None)
-        st.rerun()
-    elif reviewing_id:
-        candidate = next(c for c in candidates if c["Check ID"] == reviewing_id)
-        position = next(i for i, c in enumerate(candidates) if c["Check ID"] == reviewing_id) + 1
-        if st.button("← Back to Data quality", key="data_quality_back"):
-            st.session_state.pop("data_quality_review", None)
-            st.rerun()
-        st.caption(f"Reviewing candidate {position} of {len(candidates)}")
-        st.subheader(candidate["Trap ID"])
-        st.caption(site_name(data, candidate["Site ID"]))
-
-        workflow_context([
-            ("Check time", human_dt(candidate["Check Time"], include_year=True)),
-            ("Finding", candidate["Finding"]),
-            ("Window closed → new window", human_dt(candidate["Check Time"], include_year=True)),
-        ])
-
-        before_txt = f"the closest earlier check at this site was {human_dt(candidate['closest_before'], include_year=True)}" if candidate["closest_before"] is not None else "no earlier check at this site was found"
-        after_txt = f"the closest later check was {human_dt(candidate['closest_after'], include_year=True)}" if candidate["closest_after"] is not None else "no later check at this site was found yet"
-        message_panel(
-            "warning",
-            f"No other activity at {site_name(data, candidate['Site ID'])} nearby",
-            [f"{before_txt[0].upper()}{before_txt[1:]}, and {after_txt} — nothing else was checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes of this record."],
-        )
-
-        st.markdown("**Reason (required if voiding)**")
-        void_reason = st.text_area(
-            "Reason for voiding",
-            key=f"data_quality_reason_{reviewing_id}",
-            placeholder="e.g. Confirmed this was a UI test click during setup, not a real field visit.",
-            label_visibility="collapsed",
-        )
-        confirm_col, void_col = st.columns(2)
-        with confirm_col:
-            if two_phase_button("Confirm as real", f"data_quality_confirm_{reviewing_id}", "Confirming…", use_container_width=True):
-                confirm_check_as_real(data, reviewing_id)
-                st.session_state.pop("data_quality_review", None)
-                set_flash("success", "Confirmed as real.", ["No data was changed.", "This check will not be flagged again."])
-                st.rerun()
-        with void_col:
-            if two_phase_button("Void as test data", f"data_quality_void_{reviewing_id}", "Voiding…", type="primary", use_container_width=True):
-                if not void_reason.strip():
-                    st.error("Enter a reason before voiding this record.")
-                else:
-                    try:
-                        void_check_as_test_data(data, reviewing_id, void_reason)
-                        st.session_state.pop("data_quality_review", None)
-                        set_flash("success", "Voided as test data.", ["Excluded from Trial performance and the camera funnel.", "The original record remains in the workbook, marked excluded.", "Recorded in the audit log."])
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-    else:
-        st.caption(f"{len(candidates)} check{'s' if len(candidates) != 1 else ''} flagged for review — each was checked with no other trap activity nearby at the same site.")
-        for c in candidates:
-            with app_card():
-                cols = st.columns([3, 1])
-                cols[0].markdown(f"**{c['Trap ID']} · {site_name(data, c['Site ID'])}**")
-                cols[1].caption(human_dt(c["Check Time"], include_year=True))
-                st.caption(f"No other traps at this site checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes")
-                if st.button("Review", key=f"data_quality_open_{c['Check ID']}"):
-                    st.session_state.data_quality_review = c["Check ID"]
-                    st.rerun()
+    render_data_quality(data)
 
 elif page == "results":
     install_grey_footer_tooltips()
@@ -10269,7 +10902,9 @@ elif page == "results":
         st.markdown('<div class="r1-meta">Use one breakdown at a time to see where bad kills or slow kills are clustering.</div>', unsafe_allow_html=True)
         default_breakdown="Build" if selected=="Compare builds" else "Rodent weight"
         breakdown_options=["Rodent weight","Rat type","Build","Site","Trap"]
-        breakdown=st.selectbox("Break down performance by",breakdown_options,index=breakdown_options.index(default_breakdown))
+        st.markdown('<div class="r1-label">Break down performance by</div>', unsafe_allow_html=True)
+        with st.container(key="chips_perf_by"):
+            breakdown=st.pills("Break down performance by",breakdown_options,selection_mode="single",default=default_breakdown,key="chips_perf_breakdown",label_visibility="collapsed") or default_breakdown
 
         group_map={
             "Rodent weight":"Animal Weight Range",
@@ -10320,7 +10955,8 @@ elif page == "results":
                 breakdown_df=breakdown_df.sort_values(["_order",breakdown]).drop(columns=["_order"])
             else:
                 breakdown_df=breakdown_df.sort_values(breakdown)
-            st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
+            with st.container(key="card_perf_table_breakdown"):
+                st.dataframe(breakdown_df,use_container_width=True,hide_index=True)
             if breakdown in ("Rat type","Rodent weight"):
                 # Both are set by the necropsy review, so both carry the same honesty about their own reliability.
                 confirmed_species_n=int((breakdown_source["Species Confirmed"]=="Yes").sum())
@@ -10343,7 +10979,8 @@ elif page == "results":
                 attention_display=attention.copy()
                 attention_display["Interaction → kill"]=attention_display["Interaction To Kill Numeric"].apply(lambda x: human_duration(minutes=x) if pd.notna(x) else "—")
                 cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Final Humane Kill","Interaction → kill","Review Status"]
-                st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
+                with st.container(key="card_perf_table_attention"):
+                    st.dataframe(attention_display[cols],use_container_width=True,hide_index=True)
         elif len(confirmed_kills):
             st.markdown(design.message_html("success", "", "No bad kills, missed time targets or incomplete kill results in this selection."), unsafe_allow_html=True)
 
@@ -10361,38 +10998,44 @@ elif page == "results":
             deployment_to_interaction=median_numeric(interacted,"Time To First Interaction Hr")
             interaction_to_activation=median_numeric(observed_activation,"Interaction To Trigger Min")
 
-            st.markdown("#### Diagnostic measures")
-            d1,d2,d3,d4=st.columns(4)
-            d1.metric("Target interaction",f"{attraction_rate:.0f}%" if attraction_rate is not None else "—")
-            d1.caption(f"{len(interacted)} of {len(camera_assessed)} assessed windows")
-            d2.metric("Interaction → activation",f"{activation_rate:.0f}%" if activation_rate is not None else "—")
-            d2.caption(f"{len(activated)} of {len(interacted)} interactions")
-            d3.metric("Interaction → kill",f"{conversion_rate:.0f}%" if conversion_rate is not None else "—")
-            d3.caption(f"{len(killed)} of {len(interacted)} interactions")
-            d4.metric("Repeated interaction, no kill",len(repeated_no_kill))
+            def stat_cards(cards, columns):
+                st.markdown(f'<div class="r1-diag cols{columns}">' + "".join(
+                    f'<div class="r1-diagcard"><b>{html.escape(str(value))}</b><span>{html.escape(label)}</span>' + (f'<span>{html.escape(note)}</span>' if note else "") + '</div>'
+                    for value, label, note in cards) + "</div>", unsafe_allow_html=True)
 
-            st.markdown("#### Diagnostic timing")
-            t1,t2=st.columns(2)
-            t1.metric("Median deployment → interaction",human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—")
-            t2.metric("Median interaction → observed activation",human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—")
-            t2.caption(f"Based on {len(observed_activation)} observed activations; inferred activations excluded")
+            st.markdown('<div class="r1-subhead">Diagnostic measures</div>', unsafe_allow_html=True)
+            stat_cards([
+                (f"{attraction_rate:.0f}%" if attraction_rate is not None else "—", "Target interaction", f"{len(interacted)} of {len(camera_assessed)} assessed windows"),
+                (f"{activation_rate:.0f}%" if activation_rate is not None else "—", "Interaction → activation", f"{len(activated)} of {len(interacted)} interactions"),
+                (f"{conversion_rate:.0f}%" if conversion_rate is not None else "—", "Interaction → kill", f"{len(killed)} of {len(interacted)} interactions"),
+                (len(repeated_no_kill), "Repeated interaction, no kill", ""),
+            ], 4)
 
-            st.markdown("#### All closed result records")
+            st.markdown('<div class="r1-subhead">Diagnostic timing</div>', unsafe_allow_html=True)
+            stat_cards([
+                (human_duration(hours=deployment_to_interaction) if deployment_to_interaction is not None else "—", "Median deployment → interaction", ""),
+                (human_duration(minutes=interaction_to_activation) if interaction_to_activation is not None else "—", "Median interaction → observed activation",
+                 f"Based on {len(observed_activation)} observed activations; inferred activations excluded"),
+            ], 2)
+
+            st.markdown('<div class="r1-subhead">All closed result records</div>', unsafe_allow_html=True)
             cols=["Window ID","Site ID","Trap ID","Build Version","Animal Weight Range","Rat Type","Evidence Usable","Target Present","Interaction Level","Trap Activated","Activation Evidence","Kill Confirmed","Outcome","Interaction To Kill Min","Final Humane Kill","Review Status"]
-            st.dataframe(windows[cols],use_container_width=True,hide_index=True)
+            with st.container(key="card_perf_table_records"):
+                st.dataframe(windows[cols],use_container_width=True,hide_index=True)
 
-            st.markdown("#### Calculation definitions")
+            st.markdown('<div class="r1-subhead">How these are calculated</div>', unsafe_allow_html=True)
             # The plain-language terms the summary cards' footers used to define (moved here in Phase 7b, 8/8).
-            st.write("**Necropsy:** physical examination of the collected animal.")
-            st.write("**Camera review:** watching footage of the event.")
-            st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
-            st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
-            st.write("**Bad kill:** final humane-kill assessment is No.")
-            st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
-            st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
-            st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
-            st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
-            st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
+            with st.container(key="card_perf_calc"):
+                st.write("**Necropsy:** physical examination of the collected animal.")
+                st.write("**Camera review:** watching footage of the event.")
+                st.write("**Physical kill:** a closed window where a dead animal was found, whether or not a camera was assigned.")
+                st.write("**Good kill:** a physical kill with final humane-kill assessment Yes.")
+                st.write("**Bad kill:** final humane-kill assessment is No.")
+                st.write("**Met time target:** first confirmed target interaction to confirmed kill is strictly less than 24 hours.")
+                st.write("**Humane rate:** good kills divided by good plus bad kills with a completed final assessment.")
+                st.write("**Time-target rate:** physical kills under 24 hours divided by physical kills with usable camera footage and valid interaction-to-kill timing.")
+                st.write("**Camera funnel:** completed, usable camera reviews only; it does not represent non-camera traps.")
+                st.write("**Diagnostic conversion measures:** retained for investigation, but do not drive the top-line result.")
 
 
 elif page == "trap_edit":
@@ -10417,664 +11060,14 @@ elif page == "setup":
 
 elif page in SETUP_PAGES_SITE:
     render_site_action(data, page)
+
 elif page == "data_management":
-    header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
-    active_data_section = st.radio(
-        "Data section",
-        ["Corrections", "Window start corrections", "Trial history", "Audit log", "Export and backup"],
-        horizontal=True,
-        key="data_management_section",
-        label_visibility="collapsed",
-    )
+    render_data_landing(data)
 
-    if active_data_section == "Corrections":
-        helper("Use corrections only for known data-entry mistakes. Every change requires a reason and is retained in the audit log.")
-        st.markdown("#### What you are recording")
-        st.write("The corrected value and why the original entry was wrong.")
-        st.markdown("#### What the app will update")
-        st.write("The linked record, any affected Performance figures, and a permanent audit-log entry.")
-        record_type = st.selectbox("Record type", ["Camera evidence", "Necropsy evidence", "Field check", "Follow-up task", "Incomplete visit", "Kill with no carcass", "Stray window on an Inactive trap"])
-        search_text = st.text_input("Find by trap, window, bag or check ID").strip().lower()
-
-        if record_type == "Follow-up task":
-            orphaned = missing_followup_windows(data)
-            if not orphaned.empty:
-                st.markdown("##### Recreate a missing follow-up")
-                st.caption("Windows whose finding or camera assignment genuinely warrants a review but that currently have no linked follow-up task - most likely one was removed and needs restoring.")
-                orphan_options = orphaned["Window ID"].tolist()
-                orphan_selected = st.selectbox(
-                    "Select window needing a follow-up",
-                    orphan_options,
-                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {r['Finding At Close']} · {wid}")(orphaned[orphaned["Window ID"] == wid].iloc[0]),
-                    key="recreate_followup_window",
-                )
-                orphan_row = orphaned[orphaned["Window ID"] == orphan_selected].iloc[0]
-                workflow_context([
-                    ("Trap", orphan_row["Trap ID"]),
-                    ("Site", site_name(data, orphan_row["Site ID"])),
-                    ("Bag ID", orphan_row["Bag ID"]),
-                    ("Finding at close", orphan_row["Finding At Close"]),
-                    ("Final humane kill", orphan_row["Final Humane Kill"]),
-                    ("Review status", orphan_row["Review Status"]),
-                ])
-                types_needed = []
-                assessable_orphan = orphan_row["Finding At Close"] not in ["Trap missing", "Unable to check"]
-                if orphan_row["Finding At Close"] == "Dead animal found" and orphan_row["Final Humane Kill"] != NOT_ASSESSED_NO_CARCASS:
-                    types_needed.append("Necropsy review")
-                if assessable_orphan and orphan_row["Camera Assigned"] == "Yes":
-                    types_needed.append("Camera review")
-                recreate_type = st.selectbox(
-                    "Follow-up type to recreate", types_needed, key=f"recreate_followup_type_{orphan_selected}"
-                ) if types_needed else None
-                recreate_reason = st.text_area("Reason for recreating", key=f"recreate_followup_reason_{orphan_selected}")
-                if st.button(
-                    "Recreate follow-up",
-                    type="primary",
-                    key=f"recreate_followup_btn_{orphan_selected}",
-                    disabled=not recreate_type,
-                ):
-                    if not recreate_reason.strip():
-                        st.error("Enter a reason for recreating the follow-up.")
-                    else:
-                        try:
-                            recreate_followup(data, orphan_selected, recreate_type, recreate_reason)
-                            set_flash(
-                                "success",
-                                "Follow-up recreated.",
-                                [
-                                    f"{recreate_type} recreated for {orphan_row['Trap ID']}.",
-                                    "It now appears in the normal Follow-ups list to complete.",
-                                    "The recreation is recorded in the audit log, referencing the removal reason it followed.",
-                                ],
-                            )
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
-                st.divider()
-            candidates = data["Followups"].copy()
-            if search_text:
-                mask = candidates[["Follow-up ID", "Trap ID", "Bag ID", "Window ID", "Reason"]].astype(str).apply(
-                    lambda col: col.str.lower().str.contains(search_text, na=False)
-                ).any(axis=1)
-                candidates = candidates[mask]
-            options = candidates["Follow-up ID"].astype(str).tolist()
-            selected_id = st.selectbox(
-                "Select follow-up task",
-                options,
-                format_func=lambda fid: (
-                    lambda r: f"{r['Follow-up Type']} · {r['Trap ID']} · "
-                    + (f"Bag {r['Bag ID']} · " if str(r.get('Bag ID', '')).strip() else "")
-                    + f"{r['Status']} · {fid}"
-                )(candidates[candidates["Follow-up ID"].astype(str) == str(fid)].iloc[0]),
-            ) if options else None
-            if selected_id:
-                row = candidates[candidates["Follow-up ID"].astype(str) == str(selected_id)].iloc[0]
-                workflow_context([
-                    ("Task", row["Follow-up Type"]),
-                    ("Trap", row["Trap ID"]),
-                    ("Site", site_name(data, row["Site ID"])),
-                    ("Bag ID", row["Bag ID"]),
-                    ("Window", row["Window ID"]),
-                    ("Reason", row["Reason"]),
-                    ("Status", row["Status"]),
-                ])
-                st.warning("Use this only for an invalid or bundled dummy task. The linked check and test window will remain.")
-                remove_reason = st.text_area("Reason for removal", key=f"remove_followup_reason_{selected_id}")
-                confirm_remove = st.checkbox(
-                    f"Remove follow-up {selected_id}",
-                    key=f"confirm_remove_followup_{selected_id}",
-                )
-                if st.button(
-                    "Remove invalid follow-up",
-                    type="primary",
-                    disabled=not confirm_remove,
-                    key=f"remove_followup_{selected_id}",
-                ):
-                    try:
-                        removed = remove_followup_task(data, selected_id, remove_reason)
-                        set_flash(
-                            "success",
-                            "Follow-up removed.",
-                            [
-                                f"{removed['Follow-up Type']} for {removed['Trap ID']} was removed.",
-                                "The linked check and test window were preserved.",
-                                "The removal is recorded in the audit log.",
-                            ],
-                        )
-                        st.rerun()
-                    except Exception as exc:
-                        st.error(str(exc))
-        elif record_type in ["Camera evidence", "Necropsy evidence"]:
-            candidates = data["Windows"][data["Windows"]["Status"] == "Closed"].copy()
-            if search_text:
-                mask = candidates[["Window ID", "Trap ID", "Bag ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
-                candidates = candidates[mask]
-            options = candidates["Window ID"].tolist()
-            selected_id = st.selectbox("Select closed test window", options, format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {human_dt(r['End Time'])} · {wid}")(candidates[candidates['Window ID']==wid].iloc[0]) if wid else wid) if options else None
-            if selected_id:
-                idx = data["Windows"].index[data["Windows"]["Window ID"] == selected_id][0]
-                row = data["Windows"].loc[idx]
-                st.caption(f"Evidence period: {human_dt(row['Start Time'])} – {human_dt(row['End Time'])}")
-                timestamp_inputs = {}
-                if record_type == "Camera evidence":
-                    editable = {
-                        "Finding At Close": FINDINGS,
-                        "Evidence Usable": ["Yes", "No", "Pending"],
-                        "Target Present": ["Yes", "No", "Unclear", "Pending"],
-                        "Interaction Level": ["Single interaction", "Repeated interaction", "Heavy / repeated interaction", "Not applicable", "Unclear", "Pending"],
-                        "Entered Strike Area": ["Yes", "No", "Unclear", "Not applicable", "Pending"],
-                        "Trap Activated": ["Yes", "No", "Unclear", "Pending"],
-                        "Kill Confirmed": ["Yes", "No", "Unclear", "Pending"],
-                        "Video Assessment": ["Humane", "Not humane", "Unclear", "No usable video", "Not applicable", "Pending"],
-                    }
-                    timestamp_fields = [
-                        ("First Interaction Time", "First target interaction"),
-                        ("Trigger Time", "First activation"),
-                        ("Kill Time", "Kill"),
-                    ]
-                    window_start = parse_dt(row["Start Time"])
-                    window_end = parse_dt(row["End Time"])
-                    min_evidence_date = window_start.date() if window_start else None
-                    max_evidence_date = window_end.date() if window_end else None
-                    changed = {}
-                    timestamp_inputs = {}
-                    with st.form(f"correct_camera_evidence_{selected_id}"):
-                        for field, choices in editable.items():
-                            current = str(row[field])
-                            index = choices.index(current) if current in choices else 0
-                            changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
-                        st.markdown("##### Event timestamps")
-                        st.caption("Record when events occurred in the footage. Leave a date blank to leave that timestamp unchanged.")
-                        for field, label in timestamp_fields:
-                            current_dt = parse_dt(row[field])
-                            date_col, time_col = st.columns(2)
-                            with date_col:
-                                ts_date = st.date_input(
-                                    f"{label} date",
-                                    value=current_dt.date() if current_dt else None,
-                                    min_value=min_evidence_date,
-                                    max_value=max_evidence_date,
-                                    key=f"corr_{field}_date_{selected_id}",
-                                )
-                            with time_col:
-                                ts_time = st.time_input(
-                                    f"{label} time",
-                                    value=current_dt.time() if current_dt else None,
-                                    key=f"corr_{field}_time_{selected_id}",
-                                )
-                            timestamp_inputs[field] = (ts_date, ts_time)
-                        reason = st.text_area("Correction reason")
-                        save_correction = st.form_submit_button("Save correction", type="primary")
-                    if save_correction:
-                        if not reason.strip():
-                            st.error("Enter a correction reason before saving.")
-                        else:
-                            audit_rows = []
-                            for field, new_value in changed.items():
-                                old_value = str(data["Windows"].at[idx, field])
-                                if str(new_value) != old_value:
-                                    data["Windows"].at[idx, field] = new_value
-                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
-                            for field, (ts_date, ts_time) in timestamp_inputs.items():
-                                if ts_date is None or ts_time is None:
-                                    continue
-                                old_value = str(data["Windows"].at[idx, field])
-                                new_value = dtstr(datetime.combine(ts_date, ts_time))
-                                if new_value != old_value:
-                                    data["Windows"].at[idx, field] = new_value
-                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, new_value, reason.strip()])
-                            if audit_rows:
-                                recalculate_window(data,idx)
-                                refresh_review_status(data,selected_id)
-                                data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
-                                save_data(data)
-                                set_flash("success", "Correction saved.", [f"{len(audit_rows)} field change(s) were applied.", "The audit log retained the previous and corrected values.", "Next: make another correction or return to the relevant record."])
-                                st.rerun()
-                            else:
-                                st.info("No values changed.")
-                else:
-                    editable = {
-                        "Necropsy Status": ["Complete", "Not completed", "Unable to assess", "Not started", NECROPSY_NOT_APPLICABLE_NO_CARCASS],
-                        "Necropsy Assessment": ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable", "Pending", NECROPSY_ASSESSMENT_NOT_APPLICABLE_NO_CARCASS],
-                        "Species": SPECIES,
-                        "Rat Type": RAT_TYPES,
-                        "Animal Weight Range": weight_ranges_for_species(row["Species"]) + [""],
-                        "Final Humane Kill": ["Yes", "No", "Unclear", "Not assessable", "Pending", NOT_ASSESSED_NO_CARCASS, NOT_ASSESSED_TRIAL_ENDED],
-                    }
-                    changed = {}
-                    st.markdown("##### Photos")
-                    st.caption("Attach necropsy photos for the trial record. Same upload behaviour as a necropsy review task - select multiple, each uploads independently.")
-                    photo_gate = render_correction_necropsy_photo_capture(selected_id, str(row["Trap ID"]), str(row["Site ID"]))
-                    photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
-                    if photo_gate.get("expected_count", 0):
-                        if photo_gate.get("manual_failure_count", 0):
-                            count = int(photo_gate["manual_failure_count"])
-                            st.caption(f"{count} photo{'s' if count != 1 else ''} could not upload")
-                        elif photo_gate.get("ready"):
-                            st.caption(f"{photo_gate['file_count']} photo{'s' if photo_gate['file_count'] != 1 else ''} saved")
-                        else:
-                            remaining = max(1, photo_gate.get("expected_count", 0) - photo_gate.get("file_count", 0))
-                            st.caption(f"Uploading {remaining} photo{'s' if remaining != 1 else ''}…")
-                    for field, choices in editable.items():
-                        current = str(row[field])
-                        index = choices.index(current) if current in choices else 0
-                        changed[field] = st.selectbox(field, choices, index=index, key=f"corr_{field}_{selected_id}")
-                        if field in ("Species", "Rat Type"):
-                            # The preserved field guess, read-only, beside the editable (necropsy-confirmed) value.
-                            guess = str(row["Field-Recorded " + field]).strip()
-                            st.caption(f"Field-recorded: {guess or 'not recorded'}" + (" · confirmed at necropsy" if row["Species Confirmed"] == "Yes" else ""))
-                    reason = st.text_area("Correction reason", key=f"corr_reason_{selected_id}")
-                    corr_save_lock_key = f"correct_necropsy_evidence_saving_{selected_id}"
-                    corr_already_saving = st.session_state.get(corr_save_lock_key, False)
-                    save_label = "Please wait" if photo_blocked else "Save correction"
-                    save_correction = two_phase_button(
-                        save_label, f"correct_necropsy_evidence_save_{selected_id}", "Saving…",
-                        type="primary", disabled=photo_blocked or corr_already_saving,
-                    )
-                    if save_correction:
-                        st.session_state[corr_save_lock_key] = True
-                        # UX-audit fix (2026-08-13): this form used to let a correction save a
-                        # necropsy result the original review task would have rejected outright
-                        # (e.g. "Supports humane kill" paired with Final Humane Kill = No) - same
-                        # validator the review task itself calls, so a correction can't reintroduce
-                        # exactly the kind of inconsistency this tool exists to fix.
-                        necropsy_errors = necropsy_consistency_errors(
-                            changed["Necropsy Status"], changed["Necropsy Assessment"], changed["Final Humane Kill"]
-                        )
-                        if not reason.strip():
-                            st.session_state[corr_save_lock_key] = False
-                            st.error("Enter a correction reason before saving.")
-                        elif necropsy_errors:
-                            st.session_state[corr_save_lock_key] = False
-                            st.error("Please correct the necropsy result:\n\n" + "\n".join(f"- {err}" for err in necropsy_errors))
-                        else:
-                            expected_photo_count = int(photo_gate.get("expected_count", 0))
-                            original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
-                            staged = {name: frame.copy(deep=True) for name, frame in data.items()}
-                            audit_rows = []
-                            for field, new_value in changed.items():
-                                old_value = str(staged["Windows"].at[idx, field])
-                                if str(new_value) != old_value:
-                                    staged["Windows"].at[idx, field] = new_value
-                                    audit_rows.append([make_id("CHG"), dtstr(), record_type, selected_id, field, old_value, str(new_value), reason.strip()])
-                            if not audit_rows and not expected_photo_count:
-                                st.session_state[corr_save_lock_key] = False
-                                st.info("No values changed.")
-                            else:
-                                recalculate_window(staged, idx)
-                                refresh_review_status(staged, selected_id)
-                                if audit_rows:
-                                    staged["Audit Log"] = pd.concat([staged["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
-
-                                def _verify_correction_persisted(reloaded):
-                                    return {}
-
-                                commit_staged_records_with_photos(
-                                    data=data,
-                                    staged=staged,
-                                    original_data=original_data,
-                                    photo_gate=photo_gate,
-                                    expected_photo_count=expected_photo_count,
-                                    record_id=photo_gate["follow_up_id"],
-                                    photos_id_column="Follow-up ID",
-                                    verify_persisted=_verify_correction_persisted,
-                                    log_prefix="correction_necropsy",
-                                    log_fields={"window_id": selected_id, "trap_id": str(row["Trap ID"])},
-                                    record_noun="correction",
-                                    record_description="necropsy correction or photo record",
-                                    session_state_keys_to_clear_on_failure=[corr_save_lock_key],
-                                )
-                                st.session_state.pop(corr_save_lock_key, None)
-                                set_flash(
-                                    "success", "Correction saved.",
-                                    [f"{len(audit_rows)} field change(s) were applied." if audit_rows else "No field values changed.",
-                                     f"{expected_photo_count} photo(s) attached." if expected_photo_count else "No new photos attached.",
-                                     "Next: make another correction or return to the relevant record."],
-                                )
-                                st.rerun()
-        elif record_type == "Incomplete visit":
-            stale_visits = data["Visits"][data["Visits"]["Status"] == "In progress"].copy()
-            if search_text:
-                mask = stale_visits[["Visit ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
-                stale_visits = stale_visits[mask]
-            if stale_visits.empty:
-                st.success("No visits are currently in progress.")
-            else:
-                st.caption("An old visit that will never be finished normally - most often because its site's traps have since been cycled through a new trial setup, opening fresh windows the remaining traps now belong to. This only closes the visit record itself; any checks already saved under it are left exactly as they are.")
-                visit_options = stale_visits["Visit ID"].tolist()
-                selected_visit = st.selectbox(
-                    "Select in-progress visit",
-                    visit_options,
-                    format_func=lambda vid: (lambda r: f"{site_name(data, r['Site ID'])} · started {human_dt(r['Start Time'])} · {len(data['Checks'][data['Checks']['Visit ID'] == vid])} check(s) recorded · {vid}")(stale_visits[stale_visits["Visit ID"] == vid].iloc[0]),
-                )
-                visit_row = stale_visits[stale_visits["Visit ID"] == selected_visit].iloc[0]
-                checks_under_visit = data["Checks"][data["Checks"]["Visit ID"] == selected_visit]
-                workflow_context([
-                    ("Site", site_name(data, visit_row["Site ID"])),
-                    ("Started", human_dt(visit_row["Start Time"])),
-                    ("Checks recorded", str(len(checks_under_visit))),
-                ])
-                abandon_reason = st.text_area("Reason for abandoning this visit", key=f"abandon_visit_reason_{selected_visit}")
-                confirm_abandon = st.checkbox(
-                    "Close out this visit - it will no longer show as in progress",
-                    key=f"confirm_abandon_{selected_visit}",
-                )
-                if two_phase_button(
-                    "Abandon this visit", f"abandon_visit_{selected_visit}", "Closing…",
-                    type="primary", disabled=not confirm_abandon,
-                ):
-                    if not abandon_reason.strip():
-                        st.error("Enter a reason for abandoning this visit.")
-                    else:
-                        try:
-                            abandon_incomplete_visit(data, selected_visit, abandon_reason.strip())
-                            set_flash(
-                                "success", "Visit closed.",
-                                [f"{site_name(data, visit_row['Site ID'])}'s in-progress visit was abandoned.",
-                                 f"{len(checks_under_visit)} previously recorded check(s) were left untouched.",
-                                 "Recorded in the audit log."],
-                            )
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
-        elif record_type == "Kill with no carcass":
-            st.caption(
-                "For a kill recorded as a collected carcass where nothing was actually recovered (for example, eaten "
-                "before the check). It stays counted as a kill, but is taken out of the humane rate and the necropsy task is closed. "
-                "Nothing is changed unless you confirm a specific record."
-            )
-            no_carcass_candidates = no_carcass_correction_candidates(data)
-            if search_text:
-                mask = no_carcass_candidates[["Window ID", "Trap ID", "Bag ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
-                no_carcass_candidates = no_carcass_candidates[mask]
-            if no_carcass_candidates.empty:
-                st.success("No dead-animal kills are waiting on an open necropsy review.")
-            else:
-                st.caption(f"{len(no_carcass_candidates)} kill{'s' if len(no_carcass_candidates) != 1 else ''} with an open necropsy review.")
-                kill_options = no_carcass_candidates["Window ID"].tolist()
-                selected_kill = st.selectbox(
-                    "Select kill",
-                    kill_options,
-                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · {human_dt(r['End Time'])}" + (f" · bag {r['Bag ID']}" if str(r['Bag ID']).strip() else "") + f" · {wid}")(no_carcass_candidates[no_carcass_candidates["Window ID"] == wid].iloc[0]),
-                    key="no_carcass_selected_kill",
-                )
-                kill_row = no_carcass_candidates[no_carcass_candidates["Window ID"] == selected_kill].iloc[0]
-                workflow_context([
-                    ("Trap", kill_row["Trap ID"]),
-                    ("Site", site_name(data, kill_row["Site ID"])),
-                    ("Found", human_dt(kill_row["End Time"], include_year=True)),
-                    ("Bag ID issued", kill_row["Bag ID"] or "None"),
-                    ("Species recorded", kill_row["Species"] or "Not recorded"),
-                ])
-                confirm_no_carcass = st.checkbox(
-                    "This kill had no carcass collected - nothing was bagged",
-                    key=f"confirm_no_carcass_{selected_kill}",
-                )
-                if two_phase_button(
-                    "Mark as no carcass collected", f"no_carcass_correct_{selected_kill}", "Saving…",
-                    type="primary", disabled=not confirm_no_carcass,
-                ):
-                    try:
-                        corrected = correct_kill_to_no_carcass(data, selected_kill)
-                        set_flash(
-                            "success", "Kill corrected.",
-                            [f"{kill_row['Trap ID']} is now recorded as a kill with no carcass.",
-                             f"{corrected['tasks_resolved']} necropsy task closed" + (f" and bag {corrected['bag_id']} cleared." if corrected['bag_id'] else "."),
-                             "It still counts as a kill and is not in the humane rate. Recorded in the audit log."],
-                        )
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-        elif record_type == "Stray window on an Inactive trap":
-            st.caption(
-                "For an Inactive trap that was left with an open window (moving or re-building an Inactive trap used to "
-                "open one). It is closed with a zero-length period and excluded from results, so it can't be mistaken for "
-                "real monitoring and activating the trap later opens only one window. Nothing is changed unless you confirm a specific record."
-            )
-            stray_candidates = stray_window_candidates(data)
-            if search_text:
-                mask = stray_candidates[["Window ID", "Trap ID", "Site ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
-                stray_candidates = stray_candidates[mask]
-            if stray_candidates.empty:
-                st.success("No Inactive trap has an open window.")
-            else:
-                st.caption(f"{len(stray_candidates)} Inactive trap{'s' if len(stray_candidates) != 1 else ''} with an open window.")
-                stray_options = stray_candidates["Window ID"].tolist()
-                selected_stray = st.selectbox(
-                    "Select window",
-                    stray_options,
-                    format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · open since {human_dt(r['Start Time'], include_year=True)} · {wid}")(stray_candidates[stray_candidates["Window ID"] == wid].iloc[0]),
-                    key="stray_window_selected",
-                )
-                stray_row = stray_candidates[stray_candidates["Window ID"] == selected_stray].iloc[0]
-                workflow_context([
-                    ("Trap", stray_row["Trap ID"]),
-                    ("Site", site_name(data, stray_row["Site ID"])),
-                    ("Build", stray_row["Build Version"]),
-                    ("Window open since", human_dt(stray_row["Start Time"], include_year=True)),
-                ])
-                confirm_stray = st.checkbox(
-                    "This window is a leftover - the trap was not being monitored",
-                    key=f"confirm_stray_window_{selected_stray}",
-                )
-                if two_phase_button(
-                    "Close this stray window", f"close_stray_window_{selected_stray}", "Closing…",
-                    type="primary", disabled=not confirm_stray,
-                ):
-                    try:
-                        repaired = close_stray_window(data, selected_stray)
-                        set_flash(
-                            "success", "Stray window closed.",
-                            [f"{repaired['trap_id']}'s leftover window was closed (zero length) and excluded from results.",
-                             "No check, follow-up or photo referred to it. Recorded in the audit log."],
-                        )
-                        st.rerun()
-                    except ValueError as exc:
-                        st.error(str(exc))
-        else:
-            candidates = data["Checks"].copy()
-            if search_text:
-                mask = candidates[["Check ID", "Trap ID", "Bag ID", "Visit ID"]].astype(str).apply(lambda col: col.str.lower().str.contains(search_text, na=False)).any(axis=1)
-                candidates = candidates[mask]
-            options = candidates["Check ID"].tolist()
-            selected_id = st.selectbox("Select field check", options, format_func=lambda cid: (lambda r: f"{r['Trap ID']} · {human_dt(r['Check Time'])} · {r['Finding']} · {cid}")(candidates[candidates['Check ID']==cid].iloc[0]) if cid else cid) if options else None
-            if selected_id:
-                idx = data["Checks"].index[data["Checks"]["Check ID"] == selected_id][0]
-                row = data["Checks"].loc[idx]
-                with st.form("correct_field_check"):
-                    finding_choices = FINDINGS
-                    finding = st.selectbox("Finding", finding_choices, index=finding_choices.index(row["Finding"]) if row["Finding"] in finding_choices else 0)
-                    notes = st.text_area("Notes", value=row["Notes"])
-                    reason = st.text_area("Correction reason")
-                    save_correction = st.form_submit_button("Save correction", type="primary")
-                if save_correction:
-                    if not reason.strip():
-                        st.error("Enter a correction reason before saving.")
-                    else:
-                        changed = {"Finding": finding, "Notes": notes}
-                        audit_rows=[]
-                        for field,new_value in changed.items():
-                            old_value=str(data["Checks"].at[idx,field])
-                            if str(new_value)!=old_value:
-                                data["Checks"].at[idx,field]=new_value
-                                audit_rows.append([make_id("CHG"),dtstr(),record_type,selected_id,field,old_value,str(new_value),reason.strip()])
-                        # UX-audit fix (2026-08-13): correcting a check's Finding used to leave
-                        # the Window it closed untouched - Trial Performance and the Kills sheet
-                        # are both Windows-driven, so the correction silently didn't move the
-                        # numbers it exists to fix. Propagate to the window this check closed,
-                        # same as a fresh check does via close_window(), and recompute/re-review it.
-                        window_id=str(row["Window Closed"])
-                        if window_id and str(finding)!=str(row["Finding"]):
-                            window_matches=data["Windows"].index[data["Windows"]["Window ID"]==window_id].tolist()
-                            if window_matches:
-                                widx=window_matches[0]
-                                old_window_finding=str(data["Windows"].at[widx,"Finding At Close"])
-                                if old_window_finding!=str(finding):
-                                    data["Windows"].at[widx,"Finding At Close"]=finding
-                                    audit_rows.append([make_id("CHG"),dtstr(),record_type,window_id,"Finding At Close",old_window_finding,str(finding),reason.strip()])
-                                recalculate_window(data,widx)
-                                refresh_review_status(data,window_id)
-                        if audit_rows:
-                            data["Audit Log"] = pd.concat([data["Audit Log"], pd.DataFrame(audit_rows, columns=SHEETS["Audit Log"])], ignore_index=True)
-                            save_data(data); set_flash("success","Correction saved.",[f"{len(audit_rows)} field change(s) were applied.","The audit log retained the previous and corrected values.","Next: make another correction or return to the relevant record."]); st.rerun()
-                        else: st.info("No values changed.")
-
-    if active_data_section == "Window start corrections":
-        helper("A trap's earliest test window can end up with a Start Time later than when the trap was truly deployed, if the trap was physically live in the field before being added to the app. That blocks entering real footage timestamps from before the window's recorded start.")
-        st.write("Correct a flagged trap's earliest window individually, or select several traps and apply one confirmed date and time to all of them at once.")
-
-        r1_candidates = suspect_earliest_window_candidates(data, "R1")
-        if not r1_candidates:
-            st.success("No R1 trap's earliest window currently looks suspect.")
-        else:
-            r1_trap_ids = data["Traps"][data["Traps"]["Product"] == "R1"]["Trap ID"]
-            open_camera_reviews = data["Followups"][
-                (data["Followups"]["Status"] == "Open")
-                & (data["Followups"]["Follow-up Type"] == "Camera review")
-                & (data["Followups"]["Trap ID"].isin(r1_trap_ids))
-            ]
-            st.caption(f"{len(r1_candidates)} R1 trap(s) flagged with a suspect earliest-window start · {len(open_camera_reviews)} open camera review task(s) exist for R1 traps. If these counts don't roughly line up, some cases may be missing from this list.")
-
-            reason = st.text_area(
-                "Reason for these corrections",
-                placeholder="e.g. Confirmed true deployment date against field records and camera footage timestamps.",
-                key="winfix_reason",
-            )
-
-            st.markdown("#### Flagged traps")
-            selected_ids = []
-            for c in r1_candidates:
-                with app_card():
-                    sel_col, info_col = st.columns([0.08, 0.92])
-                    with sel_col:
-                        selected = st.checkbox(
-                            "Select",
-                            key=f"winfix_select_{c['Trap ID']}",
-                            label_visibility="collapsed",
-                            disabled=not c["Eligible"],
-                        )
-                    with info_col:
-                        st.markdown(f"**{c['Trap ID']}** · {site_name(data, c['Site ID'])}")
-                        st.caption(f"Window {c['Window ID']} · Review status: {c['Review Status']}")
-                        st.write(f"Current earliest-window start: {human_dt(c['Current Start'], include_year=True)}")
-                        st.write(f"Trap's Deployment Start: {human_dt(c['Deployment Start'], include_year=True) if c['Deployment Start'] else 'Not set'}")
-                        if not c["Eligible"]:
-                            st.warning("This window's review has already been completed — it can no longer be corrected through this tool.")
-                        else:
-                            d_col, t_col = st.columns(2)
-                            with d_col:
-                                new_date = st.date_input("True deployment date", value=c["Current Start"].date(), key=f"winfix_date_{c['Trap ID']}")
-                            with t_col:
-                                new_time = st.time_input("True deployment time", value=c["Current Start"].time(), key=f"winfix_time_{c['Trap ID']}")
-                            if two_phase_button("Apply this trap", f"winfix_apply_{c['Trap ID']}", "Applying…"):
-                                if not reason.strip():
-                                    st.error("Enter a reason before applying a correction.")
-                                else:
-                                    try:
-                                        changed = correct_window_start(data, c["Window ID"], datetime.combine(new_date, new_time), reason.strip())
-                                        if changed:
-                                            save_data(data)
-                                            set_flash("success", f"{c['Trap ID']} corrected.", [f"Window {c['Window ID']} Start Time updated.", "Recorded in the audit log."])
-                                        else:
-                                            st.info("No change — the entered date and time match the current value.")
-                                        st.rerun()
-                                    except ValueError as exc:
-                                        st.error(str(exc))
-                if selected:
-                    selected_ids.append(c["Trap ID"])
-
-            st.markdown("#### Bulk apply to selected traps")
-            if not selected_ids:
-                st.caption("Select one or more traps above to apply one date and time to all of them.")
-            else:
-                bulk_date = st.date_input("Shared true deployment date", key="winfix_bulk_date")
-                bulk_time = st.time_input("Shared true deployment time", key="winfix_bulk_time")
-                if st.button("Preview bulk apply", key="winfix_bulk_preview"):
-                    st.session_state["winfix_bulk_pending"] = {
-                        "trap_ids": list(selected_ids),
-                        "date": bulk_date,
-                        "time": bulk_time,
-                    }
-                    st.rerun()
-
-            pending = st.session_state.get("winfix_bulk_pending")
-            if pending:
-                st.markdown("##### Confirm bulk correction")
-                new_dt = datetime.combine(pending["date"], pending["time"])
-                preview_rows = [
-                    {"Trap ID": c["Trap ID"], "Old Start": human_dt(c["Current Start"], include_year=True), "New Start": human_dt(new_dt, include_year=True)}
-                    for c in r1_candidates if c["Trap ID"] in pending["trap_ids"]
-                ]
-                st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
-                confirm_col, cancel_col = st.columns(2)
-                with confirm_col:
-                    if two_phase_button("Confirm bulk apply", "winfix_bulk_confirm", "Applying…", type="primary", disabled=not reason.strip()):
-                        applied, skipped = [], []
-                        for c in r1_candidates:
-                            if c["Trap ID"] not in pending["trap_ids"]:
-                                continue
-                            try:
-                                if correct_window_start(data, c["Window ID"], new_dt, reason.strip()):
-                                    applied.append(c["Trap ID"])
-                                else:
-                                    skipped.append(f"{c['Trap ID']} (no change)")
-                            except ValueError as exc:
-                                skipped.append(f"{c['Trap ID']} ({exc})")
-                        if applied:
-                            save_data(data)
-                        st.session_state.pop("winfix_bulk_pending", None)
-                        detail = [f"{len(applied)} trap(s) corrected: {', '.join(applied)}."] if applied else []
-                        if skipped:
-                            detail.append(f"Skipped: {'; '.join(skipped)}.")
-                        set_flash("success" if applied else "error", "Bulk correction applied." if applied else "No traps were corrected.", detail)
-                        st.rerun()
-                with cancel_col:
-                    if st.button("Cancel", key="winfix_bulk_cancel"):
-                        st.session_state.pop("winfix_bulk_pending", None)
-                        st.rerun()
-
-    if active_data_section == "Trial history":
-        helper("Trial history shows each period between a trap being set or relured and its next field check.")
-        st.write("Use it to trace how a field finding, camera review and final performance result link together.")
-        if st.button("Open trial history", type="primary", key="open_trial_history"):
-            go("windows")
-
-    if active_data_section == "Audit log":
-        if data["Audit Log"].empty:
-            st.info("No corrections have been recorded yet.")
-        else:
-            audit_view = data["Audit Log"].copy().iloc[::-1]
-            st.dataframe(audit_view, use_container_width=True, hide_index=True)
-
-    if active_data_section == "Export and backup":
-        sheet = st.selectbox("Inspect data table", list(SHEETS), key="data_management_sheet")
-        st.dataframe(data[sheet], use_container_width=True, hide_index=True)
-        st.caption("Export is read-only. Opening this page does not change trial data.")
-        with open(DATA_FILE, "rb") as f:
-            st.download_button("Download complete Excel backup", f, file_name=DATA_FILE.name, type="primary")
-
-        if os.getenv("R1M1_ENABLE_RECOVERY_TOOLS", "").strip() == "1":
-            with st.expander("Emergency recovery tools"):
-                backups = available_backups()
-                if backups:
-                    backup_options = [str(path) for path in backups]
-                    selected_backup = st.selectbox(
-                        "Backup",
-                        backup_options,
-                        format_func=lambda value: f"{backup_label(Path(value))} · {workbook_summary(Path(value))}",
-                        key="emergency_recovery_backup",
-                    )
-                    confirm_restore = st.checkbox(
-                        "Replace the current workbook with this backup",
-                        key="confirm_emergency_restore",
-                    )
-                    if st.button("Restore selected backup", disabled=not confirm_restore):
-                        try:
-                            restore_backup(Path(selected_backup))
-                            set_flash("success", "Backup restored.")
-                            st.rerun()
-                        except Exception as exc:
-                            st.error(str(exc))
+elif page in DATA_SUB_PAGES:
+    {"corr_camera": render_correct_camera, "corr_necropsy": render_correct_necropsy, "corr_check": render_correct_check, "corr_followup": render_correct_followup,
+     "corr_visit": render_correct_visit, "corr_nocarcass": render_correct_nocarcass, "corr_stray": render_correct_stray, "data_winfix": render_window_starts,
+     "data_audit": render_audit_log, "data_export": render_export}[page](data)
 
 
 # Navigation scroll reset runs last so the destination DOM is already mounted.
