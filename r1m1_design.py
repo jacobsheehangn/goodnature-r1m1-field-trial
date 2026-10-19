@@ -248,6 +248,60 @@ COMPONENT_CSS = f"""
 [class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
 [class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
 [class*="st-key-fielderr_"] [data-baseweb="input"],[class*="st-key-fielderr_"] [data-baseweb="textarea"],[class*="st-key-fielderr_"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+/* ---- Administration (Part B batch 2a): the trap page and its actions ---- */
+.r1-status.strong{{color:var(--ink);font-weight:700}}
+.r1-happen{{display:flex;gap:10px;align-items:flex-start;font-size:16px;line-height:22px;padding:6px 0;color:var(--ink)}}
+.r1-happen svg{{flex:0 0 auto;margin-top:1px;color:var(--ink-70)}}
+.r1-blocker{{display:flex;gap:8px;align-items:flex-start;font-size:15px;line-height:20px;color:var(--ink);margin-top:6px}}
+.r1-blocker svg{{flex:0 0 auto;margin-top:1px}}
+.r1-row-title.blocked{{color:var(--ink-70)}}
+[class*="st-key-actrow_"]{{border-bottom:1px solid var(--ink-05);padding:14px 0}}
+[class*="st-key-actrow_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
+[class*="st-key-actrow_"] [data-testid="stColumn"]{{min-width:0!important}}
+[class*="st-key-actrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important;width:auto!important}}
+[class*="st-key-actrow_trap_delete"] button p{{color:var(--red)}}
+.st-key-danger_button button[kind="primary"]{{background:var(--red)!important}}
+.st-key-danger_button button[kind="primary"]:hover:not(:disabled){{background:#c4002f!important}}
+.st-key-danger_button button[kind="primary"]:disabled{{background:#f4a3b5!important}}
+@media (min-width:701px){{
+  .st-key-actions_row{{flex-direction:row!important;align-items:center;gap:12px}}
+  .st-key-actions_row>div{{width:auto!important}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-trap_side"])>[data-testid="stColumn"]:first-child{{order:2}}
+}}
+@media (max-width:700px){{
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-trap_side"]){{row-gap:16px}}
+}}
+[class*="st-key-rows_build"] [data-testid="stRadioOption"] p{{white-space:pre-line;line-height:20px}}
+/* ---- Trial setup (Part B batch 2a) ---- */
+.stApp [class*="st-key-listrow_trap_"],.stApp [class*="st-key-listrow_site_"],.stApp [class*="st-key-listrow_build_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+.stApp [class*="st-key-listrow_"][class*="_sel_"]{{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+/* A pill button on a grey row, in the card of the trap page's actions and in the panels is white with a hairline, as the boards draw it. */
+.stApp :is([class*="st-key-listrow_trap_"],[class*="st-key-listrow_site_"],[class*="st-key-listrow_build_"],[class*="st-key-listrow_net_"],[class*="st-key-listrow_win_"],[class*="st-key-actrow_"],[class*="st-key-card_setup_bulk"]) button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10)}}
+.r1-readonly{{background:var(--ink-05);border-radius:var(--r-input);padding:12px 14px;font-size:16px;line-height:22px;color:var(--ink-70);margin:6px 0 10px}}
+.st-key-setup_trap_rows,.st-key-setup_trap_rows_review{{gap:12px}}
+[class*="st-key-card_setup_bulk"]{{padding:14px 16px}}
+[class*="st-key-card_setup_bulk"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px;align-items:center}}
+[class*="st-key-card_setup_bulk"] [data-testid="stColumn"]{{min-width:0!important;flex:1 1 0!important}}
+[class*="st-key-card_setup_bulk"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important;width:auto!important}}
+[class*="st-key-tickcard_bulk_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;gap:8px;box-sizing:border-box}}
+[class*="st-key-tickcard_bulk_"]:has([class*="st-key-bsel_"] input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-bsel_"]{{width:100%!important}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:32px;cursor:pointer;position:relative}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label::before{{content:"";position:static;left:auto;top:auto;transform:none;flex:0 0 24px;width:24px;height:24px;
+  box-sizing:border-box;margin:0;border-radius:8px;border:2px solid var(--ink-50);background:transparent}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label::after{{display:none!important}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{display:none}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label:has(input:checked)::before{{border-color:var(--orange);background:var(--orange) {_CHECK_DATA_URI} center/14px no-repeat}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px;font-weight:700}}
+[class*="st-key-close_trap_setup_panel_top"] button,[class*="st-key-close_site_panel"] button,[class*="st-key-close_build_panel"] button,[class*="st-key-close_window_panel"] button{{min-height:40px;height:40px;width:40px;padding:0;border-radius:50%;background:var(--ink-05)}}
+@media (min-width:701px){{[class*="st-key-back_setup_panel_phone"],[class*="st-key-back_close_"],[class*="st-key-back_window_panel_phone"]{{display:none}}}}
+@media (max-width:700px){{
+  [class*="st-key-close_trap_setup_panel_top"],[class*="st-key-close_site_panel"],[class*="st-key-close_build_panel"],[class*="st-key-close_window_panel"]{{display:none}}
+  [class*="st-key-setup_view_panel"] [data-testid="stColumn"]:has([class*="st-key-setup_list"]){{display:none}}
+  [class*="st-key-setup_view_panel"] [data-testid="stHorizontalBlock"]{{row-gap:0}}
+}}
+/* A date field inside a card on a 390px phone is about 125px wide: a day/month/year at 15px with the calendar at its right would clip its last digit. */
+@media (max-width:700px){{[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"] input{{font-size:14px;padding-left:11px;padding-right:32px}}}}
 /* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
 [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
   box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}

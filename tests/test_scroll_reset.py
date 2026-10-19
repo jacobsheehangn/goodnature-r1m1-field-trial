@@ -335,7 +335,7 @@ def _panel_walk(page: Page, url: str) -> None:
     page.goto(url + "/trial-setup", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Trial setup")).to_be_visible(timeout=40_000); page.wait_for_timeout(2500)
     for section, button, heading in (("Traps", "Add trap", "Add trap"), ("Trap sites", "Add site", "Add site"), ("Builds", "Add build", "Add build")):
-        page.get_by_role("radio", name=section, exact=True).check(force=True); page.wait_for_timeout(2000)
+        page.get_by_role("radio", name=section, exact=True).click(); page.wait_for_timeout(2000)
         page.locator('section[data-testid="stMain"]').evaluate("el => { el.scrollTop = 0 }")
         page.get_by_role("button", name=button, exact=True).click()
         panel = page.get_by_role("heading", name=heading).first

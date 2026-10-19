@@ -1273,9 +1273,14 @@ def trap_can_be_deleted(data, trap_id):
     )
 
 
-def delete_unused_trap(data, trap_id):
+def delete_unused_trap(data, trap_id, reason=""):
+    """Deletes a trap with no field history, and its untouched window. With a reason, an audit row is written in the same single save (the old, hidden delete
+    wrote none)."""
     if not trap_can_be_deleted(data, trap_id):
         raise ValueError("This trap has trial history and cannot be deleted. Set it to Inactive instead.")
+    if str(reason).strip():
+        tr = trap_row(data, trap_id)
+        audit_change(data, "Trap", trap_id, "Deleted", f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)}", "", str(reason).strip())
     data["Windows"] = data["Windows"][data["Windows"]["Trap ID"].astype(str) != str(trap_id)].copy()
     data["Traps"] = data["Traps"][data["Traps"]["Trap ID"].astype(str) != str(trap_id)].copy()
     save_data(data)
@@ -5743,6 +5748,1021 @@ def render_followup_task(data, item) -> None:
             st.markdown(design.message_html("info", "This task has no form yet", "It stays on the list."), unsafe_allow_html=True)
 
 
+# ---- Administration: the trap page and its five action pages (Part B batch 2a; boards AdmTrapActive, AdmTrapInactive, AdmTrapPhone, AdmActivate,
+# AdmActivateRefused, AdmDeactivate, AdmMove, AdmChangeBuild, AdmDelete). Presentation only: what each action writes is activate_trap(), deactivate_trap(),
+# move_trap(), change_trap_build() and delete_unused_trap(), which keep their own refusals. The trap page splits the details form from the actions, lists
+# every action that exists for the trap's state and says why one is not available. Every action that opens or closes a window is its own page.
+
+TRAP_ACTION_PAGES = {"trap_activate", "trap_deactivate", "trap_move", "trap_build", "trap_delete"}
+ADMIN_SETUP_PAGES = {"setup", "trap_edit", "bulk_activate", *TRAP_ACTION_PAGES}
+
+
+def admin_title(title: str, subtitle: str = "", status: str = "") -> None:
+    """The title of an administration page: the name, then a grey line (what it is) and, for a trap, its status as a dot and a word."""
+    SCREEN_TITLES.append(str(title))
+    badge = ""
+    if status:
+        badge = f'<span class="r1-status strong{" done" if status == "Active" else ""}">{html.escape(status)}</span>'
+    sub = f'<span class="r1-meta">{html.escape(subtitle)}</span>' if subtitle else ""
+    row = f'<div class="r1-statusrow">{sub}{badge}</div>' if (sub or badge) else ""
+    st.markdown(f'<div class="r1-titlerow"><div><div class="r1-title" role="heading" aria-level="1">{html.escape(str(title))}</div>{row}</div></div>', unsafe_allow_html=True)
+
+
+def admin_default_moment(key: str, *, seed=()):
+    """The moment a time field starts at: the minute the screen was opened. Held for the visit to the screen. `seed` names the session keys of the date and time
+    fields, which are given that moment when the visit begins; the fields themselves then take no default of their own (a default that moves on every minute is a
+    different widget to Streamlit, and one that is passed on every run has been seen to hand back the default instead of what was typed after an earlier refusal)."""
+    ss = st.session_state
+    sequence = int(ss.get("navigation_sequence", 0))
+    held = ss.get(f"{key}_start")
+    if not held or held[0] != sequence:
+        held = (sequence, now().replace(second=0, microsecond=0))
+        ss[f"{key}_start"] = held
+        if seed:
+            ss[seed[0]], ss[seed[1]] = held[1].date(), held[1].time()
+    return held[1]
+
+
+def admin_when_inputs(key: str, heading: str, hint: str = "", *, minimum=None):
+    """"Effective from": a heading, a line under it, then a date and a time, today and now to begin with. Returns the moment."""
+    st.markdown(f'<div class="r1-label">{html.escape(heading)}</div>' + (f'<div class="r1-meta">{html.escape(hint)}</div>' if hint else ""), unsafe_allow_html=True)
+    admin_default_moment(key, seed=(f"{key}_d", f"{key}_t"))
+    with st.container(key=f"pair_{key}_w"):
+        day_col, time_col = st.columns(2)
+        day = day_col.date_input(f"{heading} date", value=None, key=f"{key}_d", label_visibility="collapsed", format="DD/MM/YYYY")
+        clock = time_col.time_input(f"{heading} time", value=None, key=f"{key}_t", label_visibility="collapsed")
+    return task_moment(day, clock)
+
+
+def admin_happen_card(lines: list) -> None:
+    """"What will happen": the effect of an action in plain lines, each with a tick."""
+    items = "".join(f'<div class="r1-happen">{design.icon("check-circle", 20)}<span>{html.escape(line)}</span></div>' for line in lines)
+    with st.container(key="card_happen"):
+        st.markdown(f'<div class="r1-card-title" style="font-size:20px;line-height:26px">What will happen</div>{items}', unsafe_allow_html=True)
+
+
+def trap_open_trial_blocks_build(data, trap) -> bool:
+    return str(trap["Status"]) == "Active" and open_trial(data, trap["Site ID"]) is not None
+
+
+def trap_page_actions(data, trap) -> list:
+    """The actions a trap page lists for this trap's state: (kind, title, text, blocker or "", button label). A blocked action stays listed with its reason."""
+    trap_id, active = str(trap["Trap ID"]), str(trap["Status"]) == "Active"
+    site = site_name(data, trap["Site ID"])
+    out = []
+    if active:
+        out.append(("trap_deactivate", "Deactivate", "Closes the open test window and takes the trap out of service.", "", "Deactivate"))
+        if trap_open_trial_blocks_build(data, trap):
+            out.append(("trap_build", "Change build", "Closes the window and starts a new one on another build.", f"Builds can't change inside a trial. End the trial at {site} first.", "Change build"))
+        else:
+            out.append(("trap_build", "Change build", "Closes the window and starts a new one on another build.", "", "Change build"))
+        out.append(("trap_move", "Move to another site", "Changes the trap's site, location and route.", "Deactivate the trap first. An Active trap can't move.", "Move"))
+    else:
+        out.append(("trap_activate", "Activate", "Starts a new test window, stamped with the site's running trial.", "", "Activate"))
+        out.append(("trap_build", "Change build", "Stages a build before a trial. No window is opened.", "", "Change build"))
+        out.append(("trap_move", "Move to another site", "Changes the trap's site, location and route.", "", "Move"))
+        if trap_can_be_deleted(data, trap_id):
+            out.append(("trap_delete", "Delete this trap", "It has no checks, tasks or photos, so it can be removed.", "", "Delete"))
+    return out
+
+
+def _admin_missing_trap(trap_id: str) -> None:
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        st.markdown(design.message_html("error", "This trap could not be found", "It may have been deleted or renamed."), unsafe_allow_html=True)
+        st.button("Back to Trial setup", key="back_trap_missing", on_click=set_page, args=("setup",))
+
+
+def render_trap_page(data, trap_id: str) -> None:
+    trap = data["Traps"][data["Traps"]["Trap ID"].astype(str) == str(trap_id)]
+    if trap.empty:
+        _admin_missing_trap(trap_id)
+        return
+    trap = trap.iloc[0]
+    active = str(trap["Status"]) == "Active"
+    site = site_name(data, trap["Site ID"])
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Back to Trial setup", "setup", "trap_page")
+        admin_title(trap_id, f"{site} · {trap_location_label(trap)}", "Active" if active else "Inactive")
+        side, main = st.columns([1, 1.35], gap="large")  # the facts and actions come first on a phone; on desktop the details are the left column
+        with side, st.container(key="trap_side"):
+            trial = open_trial(data, trap["Site ID"])
+            window = open_window(data, trap_id)
+            with st.container(key="card_trap_facts"):
+                st.markdown(r1_kv([
+                    ("Build", f"<b>{html.escape(trial_build_label(trap['Product'], trap['Build Version']))}</b>"),
+                    ("Trial", f"<b>{html.escape('Running since ' + r1_short_date(parse_dt(trial['Start Time'])) if trial is not None else 'None running at ' + site)}</b>"),
+                    ("Open test window", f"<b>{html.escape('since ' + task_when(window['Start Time']) if window is not None else 'None')}</b>"),
+                ]), unsafe_allow_html=True)
+            with st.container(key="card_trap_actions"):
+                st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">Actions</div>', unsafe_allow_html=True)
+                for kind, title, text, blocker, label in trap_page_actions(data, trap):
+                    with st.container(key=f"actrow_{kind}"):
+                        text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
+                        text_col.markdown(f'<div class="r1-row-title{" blocked" if blocker else ""}">{html.escape(title)}</div><div class="r1-meta">{html.escape(text)}</div>', unsafe_allow_html=True)
+                        if blocker:
+                            st.markdown(f'<div class="r1-blocker">{design.icon("info-circle", 18)}<span>{html.escape(blocker)}</span></div>', unsafe_allow_html=True)
+                        else:
+                            button_col.button(label, key=f"trap_action_{kind}", on_click=set_page, args=(kind,), kwargs={"trap_id": trap_id})
+                if trap_open_trial_blocks_build(data, trap):
+                    if st.button("Go to trial", key="trap_go_to_trial", type="tertiary"):
+                        navigate("trial", rerun=False, site_id=trap["Site ID"])
+                        st.switch_page(PAGE_TRAP_SITES)
+        with main, st.container(key="card_trap_details"):
+            st.markdown('<div class="r1-card-title" style="font-size:20px;line-height:26px">Details</div>', unsafe_allow_html=True)
+            with st.form(f"trap_edit_page_{trap_id}", border=False):
+                location = st.text_input("Location description", value=trap_location_label(trap))
+                camera = st.text_input("Camera ID", value=trap["Camera ID"])
+                order = st.number_input("Route reference", min_value=1, step=1, value=int(float(trap["Route Order"])) if str(trap["Route Order"]).strip() else 1)
+                notes = st.text_area("Notes", value=trap["Notes"])
+                st.markdown('<div class="r1-meta">Status, site and build change through the actions, because each one opens or closes a test window.</div>', unsafe_allow_html=True)
+                save_edit = st.form_submit_button("Save changes", type="primary")
+    if save_edit:
+        idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
+        data["Traps"].at[idx, "Location"] = location.strip()
+        data["Traps"].at[idx, "Camera ID"] = camera.strip()
+        data["Traps"].at[idx, "Route Order"] = str(order)
+        data["Traps"].at[idx, "Notes"] = notes
+        save_data(data)
+        set_flash("success", f"{trap_id} updated.")
+        go("setup")
+
+
+def activate_refusal(data, trap_id: str) -> str:
+    """What activate_trap() would refuse right now, in its own words, or "". A dry run on a copy: the one rule stays in the one function."""
+    try:
+        activate_trap(_staged_copy(data), trap_id, now(), "check", commit=False)
+    except ValueError as exc:
+        return str(exc)
+    return ""
+
+
+def deactivate_floor_error(data, trap_id: str, when) -> str:
+    """"Effective from" can't be before the window that is open started (backlog 2.4: the time gap in single-trap Deactivate)."""
+    window = open_window(data, trap_id)
+    started = parse_dt(window["Start Time"]) if window is not None else None
+    if when is not None and started is not None and when < started:
+        return f"Effective from can't be before the open window started ({task_when(started)})."
+    return ""
+
+
+def _action_buttons(trap_id: str, key: str, label: str, busy: str, *, disabled: bool, destructive: bool = False, on_click=None) -> bool:
+    """The action's button (named for it) and Cancel, side by side on desktop and stacked on a phone. Returns True on the run that does the work."""
+    armed = bool(st.session_state.get(f"__two_phase_pending_{key}", False))
+    with st.container(key="actions_row"):
+        with st.container(key=("save_saving" if armed else ("danger_button" if destructive else "save_ready"))):
+            clicked = two_phase_button(label, key, busy, type="primary", disabled=disabled, **({"on_click": on_click} if on_click else {}))
+        st.button("Cancel", key=f"cancel_{key}", type="secondary", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
+    return clicked
+
+
+def render_trap_action(data, trap_id: str, page: str) -> None:
+    trap = data["Traps"][data["Traps"]["Trap ID"].astype(str) == str(trap_id)]
+    if trap.empty:
+        _admin_missing_trap(trap_id)
+        return
+    trap = trap.iloc[0]
+    active = str(trap["Status"]) == "Active"
+    site_id, site = trap["Site ID"], site_name(data, trap["Site ID"])
+    sub = f"{trap_id} · {site} · {trap_location_label(trap)}"
+    verb = {"trap_activate": "Activate", "trap_deactivate": "Deactivate", "trap_move": "Move", "trap_build": "Change build of", "trap_delete": "Delete"}[page]
+    r1_screen_css(narrow=True)
+    ss = st.session_state
+    with st.container(key=design.SCREEN_KEY):
+        r1_back(f"Back to {trap_id}", "trap_edit", "trap_action", trap_id=trap_id)
+        admin_title(f"{verb} {trap_id}", sub)
+        flag, notice = f"admin_errors_shown_{page}_{trap_id}", f"admin_notice_{page}_{trap_id}"
+        show_errors = bool(ss.get(flag))
+        if ss.get(notice):
+            st.markdown(design.message_html("error", html.escape(ss[notice][0]), html.escape(ss[notice][1])), unsafe_allow_html=True)
+
+        def stop_with(kind: str, title: str, detail: str = "") -> None:
+            st.markdown(design.message_html(kind, html.escape(title), html.escape(detail)), unsafe_allow_html=True)
+            st.button(f"Back to {trap_id}", key="back_trap_action_link", type="tertiary", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
+
+        def finish(flash_title: str, lines: list) -> None:
+            for k in (flag, notice):
+                ss.pop(k, None)
+            set_flash("success", flash_title, lines)
+            go("setup")
+
+        def fail(exc: Exception) -> None:
+            ss[notice] = ("Nothing was saved.", str(exc) if isinstance(exc, ValueError) else "Check your signal and try again.")
+            if not isinstance(exc, ValueError):
+                _logger.exception("Trap action failed")
+            st.rerun()
+
+        # ---- Deactivate ----------------------------------------------------------------------------------------------------
+        if page == "trap_deactivate":
+            if not active:
+                stop_with("info", f"{trap_id} is already Inactive", "There is nothing to deactivate.")
+                return
+            window = open_window(data, trap_id)
+            admin_happen_card([
+                f"Closes the test window open since {task_when(window['Start Time'])} (no review needed)." if window is not None else "Closes no window (none is open).",
+                f"Sets {trap_id} to Inactive.", "Starts no new window."])
+            reason_key = f"deactivate_reason_{trap_id}"
+            errors = []
+            if not (ss.get(reason_key) or "").strip():
+                errors.append(("reason", "Say why the trap is being deactivated."))
+            when_now = task_moment(ss.get(f"deactivate_when_{trap_id}_d"), ss.get(f"deactivate_when_{trap_id}_t"))
+            floor = deactivate_floor_error(data, trap_id, when_now)
+            if floor:
+                errors.append(("when", floor))
+            field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why it is coming out of service")
+            field_line("reason")
+            with field("when"):
+                when = admin_when_inputs(f"deactivate_when_{trap_id}", "Effective from", "When it actually came out of service. It can't be before the open window started.")
+            field_line("when")
+            with st.container(key=f"tick_deactivate_{trap_id}"):
+                confirm = st.checkbox("Close the current window and set this trap to Inactive", key=f"confirm_deactivate_{trap_id}")
+            _task_errors_panel(errors, show_errors)
+            if _action_buttons(trap_id, f"commit_deactivate_{trap_id}", f"Deactivate {trap_id}", "Deactivating…", disabled=not confirm, on_click=lambda: ss.__setitem__(flag, True)) and not errors:
+                try:
+                    deactivate_trap(data, trap_id, when, reason.strip())
+                except Exception as exc:
+                    fail(exc)
+                finish(f"{trap_id} deactivated.", ["Any open window was closed.", "No new window was started."])
+
+        # ---- Activate ------------------------------------------------------------------------------------------------------
+        elif page == "trap_activate":
+            if active:
+                stop_with("info", f"{trap_id} is already Active", "There is nothing to activate.")
+                return
+            refusal = activate_refusal(data, trap_id)
+            if refusal.startswith("No trial is running"):
+                st.markdown(design.message_html("error", f"No trial is running at {html.escape(site)}", "A trap can only start a test window inside a trial. Start one first."), unsafe_allow_html=True)
+                if st.button("Start a trial", key=f"start_trial_from_activate_{trap_id}", type="primary"):
+                    begin_trial_start(site_id)
+                    st.switch_page(PAGE_TRAP_SITES)
+                st.button(f"Back to {trap_id}", key="back_trap_action_link", type="tertiary", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
+                return
+            if refusal:
+                st.markdown(design.message_html("error", f"{html.escape(trap_id)} can't be activated yet", html.escape(refusal)), unsafe_allow_html=True)
+                st.button("Change build", key=f"build_from_activate_{trap_id}", type="primary", on_click=set_page, args=("trap_build",), kwargs={"trap_id": trap_id})
+                st.button(f"Back to {trap_id}", key="back_trap_action_link", type="tertiary", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
+                return
+            trial = open_trial(data, site_id)
+            admin_happen_card([f"Starts a new test window from the time below, stamped with trial {trial['Trial ID']}.", f"Sets {trap_id} to Active."])
+            reason_key = f"activate_reason_{trap_id}"
+            errors = [] if (ss.get(reason_key) or "").strip() else [("reason", "Say why the trap is being activated.")]
+            field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why it is going into service")
+            field_line("reason")
+            when = admin_when_inputs(f"activate_when_{trap_id}", "Effective from")
+            with st.container(key=f"tick_activate_{trap_id}"):
+                confirm = st.checkbox("Start a new monitoring window and set this trap to Active", key=f"confirm_activate_{trap_id}")
+            _task_errors_panel(errors, show_errors)
+            if _action_buttons(trap_id, f"commit_activate_{trap_id}", f"Activate {trap_id}", "Activating…", disabled=not confirm):
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    activate_trap(data, trap_id, when, reason.strip())
+                except Exception as exc:
+                    fail(exc)
+                finish(f"{trap_id} activated.", ["A new monitoring window was started."])
+
+        # ---- Move ----------------------------------------------------------------------------------------------------------
+        elif page == "trap_move":
+            if active:
+                stop_with("info", f"Deactivate {trap_id} first", "An Active trap can't move. Leaving a trial ends its part in it: deactivate, move, then activate it into the destination site's trial.")
+                return
+            destinations = data["Sites"][(data["Sites"]["Status"] == "Active") & (data["Sites"]["Site ID"] != site_id)]["Site ID"].tolist()
+            if not destinations:
+                stop_with("info", "No other active sites are available", "A trap can only move to an Active site.")
+                return
+            admin_happen_card([f"Moves {trap_id} from {site} to the site below.", "Updates its location, route and camera.", f"Opens no window (the trap stays Inactive)."])
+            errors = []
+            if not ss.get(f"move_destination_{trap_id}"):
+                errors.append(("destination", "Choose the site it is moving to."))
+            field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
+            with field("destination"):
+                destination = st.radio("Destination site", destinations, index=None, format_func=lambda x: site_name(data, x), key=f"move_destination_{trap_id}")
+            field_line("destination")
+            move_location = st.text_input("Location at destination", value="", placeholder="For example: north fence, post 4", key=f"move_location_{trap_id}")
+            with st.container(key=f"pair_move_route_{trap_id}"):
+                route_col, camera_col = st.columns(2)
+                move_order = route_col.number_input("Route reference", min_value=1, step=1, value=int(float(trap["Route Order"])) if str(trap["Route Order"]).strip() else 1, key=f"move_order_{trap_id}")
+                move_camera = camera_col.text_input("Camera ID", value=trap["Camera ID"], key=f"move_camera_{trap_id}")
+            move_reason = st.text_area("Reason", placeholder="Why it is moving", key=f"move_reason_{trap_id}")
+            when = admin_when_inputs(f"move_when_{trap_id}", "Effective from")
+            with st.container(key=f"tick_move_{trap_id}"):
+                confirm = st.checkbox("Move this trap to the destination site", key=f"confirm_move_{trap_id}")
+            _task_errors_panel(errors, show_errors)
+            if _action_buttons(trap_id, f"move_trap_{trap_id}", f"Move {trap_id}", "Moving…", disabled=not confirm):
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    move_trap(data, trap_id, destination, when, move_reason.strip(), move_order, move_location.strip(), move_camera.strip())
+                except Exception as exc:
+                    fail(exc)
+                finish(f"{trap_id} moved.", [f"New site: {site_name(data, destination)}."])
+            st.markdown("<div class='r1-meta'>Can't move while a visit is in progress at either site.</div>", unsafe_allow_html=True)
+
+        # ---- Change build ----------------------------------------------------------------------------------------------------
+        elif page == "trap_build":
+            if trap_open_trial_blocks_build(data, trap):
+                stop_with("info", "Builds can't change inside a trial", f"End the trial at {site} first, then start a new trial with the builds you want.")
+                return
+            builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
+            builds["Label"] = builds["Product"].astype(str) + " · " + builds["Build Version"].astype(str)
+            current_label = f"{trap['Product']} · {trap['Build Version']}"
+            options = [x for x in builds["Label"].tolist() if x != current_label]
+            if not options:
+                stop_with("info", "No other available builds", "Add a build in Trial setup first.")
+                return
+            st.markdown(r1_kv([("Current build", f"<b>{html.escape(current_label)}</b>")]), unsafe_allow_html=True)
+            status_of = dict(zip(builds["Label"], builds["Build Status"]))
+            errors = []
+            reason_key = f"build_reason_{trap_id}"
+            if not ss.get(f"rows_build_new_{trap_id}"):
+                errors.append(("build", "Choose the new build."))
+            if not (ss.get(reason_key) or "").strip():
+                errors.append(("reason", "Say why the build is changing."))
+            field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
+            with field("build"):
+                new_label = st.radio("New build", options, index=None, format_func=lambda x: f"{x}\n{status_of.get(x, '')}", key=f"rows_build_new_{trap_id}")
+            field_line("build")
+            if not active:
+                st.markdown(design.message_html("info", "", f"The trap is Inactive, so this stages the build before a trial. No window is opened."), unsafe_allow_html=True)
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why the build is changing")
+            field_line("reason")
+            when = admin_when_inputs(f"build_when_{trap_id}", "Effective from")
+            with st.container(key=f"tick_build_{trap_id}"):
+                confirm = st.checkbox("Change this trap's build" if not active else "Close the current window and start a new window on this build", key=f"confirm_build_{trap_id}")
+            _task_errors_panel(errors, show_errors)
+            if _action_buttons(trap_id, f"change_build_{trap_id}", "Change build", "Changing…", disabled=not confirm):
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                selected = builds[builds["Label"] == new_label].iloc[0]
+                try:
+                    change_trap_build(data, trap_id, str(selected["Product"]), str(selected["Build Version"]), when, reason.strip())
+                except Exception as exc:
+                    fail(exc)
+                finish(f"{trap_id} build changed.", [f"New build: {new_label}."])
+
+        # ---- Delete ----------------------------------------------------------------------------------------------------------
+        elif page == "trap_delete":
+            if active or not trap_can_be_deleted(data, trap_id):
+                stop_with("info", f"{trap_id} can't be deleted", "A trap with checks, tasks or photos, or one that is Active, is kept: set it to Inactive instead.")
+                return
+            st.markdown(design.message_html("warn", "This can't be undone", f"{html.escape(trap_id)} has no checks, tasks or photos. Its untouched test window, if any, is removed with it."), unsafe_allow_html=True)
+            reason_key = f"delete_reason_{trap_id}"
+            errors = [] if (ss.get(reason_key) or "").strip() else [("reason", "Say why the trap is being deleted.")]
+            field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why it is being deleted")
+            field_line("reason")
+            with st.container(key=f"tick_delete_{trap_id}"):
+                confirm = st.checkbox(f"Delete {trap_id}", key=f"confirm_delete_{trap_id}")
+            _task_errors_panel(errors, show_errors)
+            if _action_buttons(trap_id, f"delete_unused_{trap_id}", f"Delete {trap_id}", "Deleting…", disabled=not confirm, destructive=True):
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    delete_unused_trap(data, trap_id, reason=reason.strip())
+                except Exception as exc:
+                    fail(exc)
+                finish(f"{trap_id} deleted.", ["The unused trap and its untouched test window were removed."])
+
+
+# ---- Administration: Trial setup, the Traps section, the Add trap panel and the Bulk activate page (Part B batch 2a; boards AdmSetupTraps, AdmSetupTrapsPhone,
+# AdmAddTrap, AdmBulkSelect, AdmBulkPreview). A segmented control (Traps / Trap sites / Builds) replaces the radio; the site filter is chips; Add trap is a side panel
+# on desktop and its own screen on a phone; Bulk activate is its own page with the same flow it had as an expander (choose traps, shared time or a time per trap,
+# a reason, a locked preview, then one confirm). What each writes is today's.
+
+SETUP_SECTIONS = ["Traps", "Trap sites", "Builds"]
+
+
+def build_short_label(product, version) -> str:
+    """"R1" and "R1 Build 4.3" -> "R1 · Build 4.3" (the product is not repeated in the build)."""
+    short = r1_short_build(trial_build_label(product, version))
+    return f"{product} · {short}"
+
+
+def render_setup_header(data) -> str:
+    """The Trial setup title and the section control. Returns the section chosen (Traps when the control is cleared)."""
+    admin_title("Trial setup", "Manage the sites, traps and builds used in trials. Visit and result history is kept.")
+    st.session_state.setdefault("seg_setup_section", "Traps")  # set here, not as the control's default: callbacks that open a section set it too
+    chosen = st.segmented_control("Trial setup section", SETUP_SECTIONS, key="seg_setup_section", selection_mode="single", label_visibility="collapsed")
+    return chosen or "Traps"
+
+
+def _setup_trap_row(data, tr) -> None:
+    trap_id = str(tr["Trap ID"])
+    active = str(tr["Status"]) == "Active"
+    camera = str(tr["Camera ID"]).strip() or "No camera"
+    meta = f"{r1_short_build(trial_build_label(tr['Product'], tr['Build Version']))} · {('Camera ' + camera) if camera != 'No camera' else camera} · Route {str(tr['Route Order']).strip() or '—'}"
+    with st.container(key=f"listrow_trap_{trap_id}"):
+        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+        text_col.markdown(
+            f'<div class="r1-row-title">{html.escape(trap_id)} <span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span></div>'
+            f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
+            f'<div class="r1-meta">{html.escape(meta)}</div>', unsafe_allow_html=True)
+        button_col.button("Edit", key=f"setup_edit_trap_{trap_id}", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
+
+
+def add_trap_errors(data, trap_id: str) -> list:
+    errors = []
+    if not trap_id.strip():
+        errors.append(("trap_id", "Enter the trap's ID."))
+    elif trap_id.strip() in data["Traps"]["Trap ID"].astype(str).tolist():
+        errors.append(("trap_id", "That Trap ID already exists."))
+    return errors
+
+
+def render_add_trap_panel(data, *, in_panel: bool = True) -> None:
+    """The Add trap panel. New traps start Inactive with no deployment date: both only mean something once activating the trap opens a window."""
+    ss = st.session_state
+    scroll_panel_anchor()
+    title_col, close_col = st.columns([1, 0.12], vertical_alignment="center")
+    title_col.markdown('<div class="r1-card-title" role="heading" aria-level="2" style="font-size:24px;line-height:30px">Add trap</div>', unsafe_allow_html=True)
+    if close_col.button("×", key="close_trap_setup_panel_top", help="Close"):
+        ss.pop("setup_mode", None)
+        st.rerun()
+    st.button("Back to Trial setup", key="back_setup_panel_phone", on_click=lambda: ss.pop("setup_mode", None))
+    errors = add_trap_errors(data, ss.get("add_trap_id") or "") if ss.get("add_trap_errors_shown") else []
+    field, field_line = _task_field_helpers("add_trap", errors, bool(ss.get("add_trap_errors_shown")))
+    with field("trap_id"):
+        st.markdown('<div class="r1-label">Trap ID</div><div class="r1-meta">The permanent physical ID, without a site code.</div>', unsafe_allow_html=True)
+        trap_id = st.text_input("Trap ID", key="add_trap_id", placeholder="For example: R16-13", label_visibility="collapsed")
+    field_line("trap_id")
+    builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
+    labels = {f"{r['Product']}|{r['Build Version']}": build_short_label(r["Product"], r["Build Version"]) for _, r in builds.iterrows()}
+    if not labels:
+        st.markdown(design.message_html("warn", "There is no build to give the trap", "Add a build in the Builds section first."), unsafe_allow_html=True)
+        return
+    with st.container(key="field_build_add"):
+        build_key = st.radio("Build", list(labels), index=0, format_func=lambda k: labels[k], key="rows_add_trap_build")
+    product, build = build_key.split("|", 1)
+    st.markdown(f'<div class="r1-meta">Trap type: {html.escape(product)} (from the build).</div>', unsafe_allow_html=True)
+    sites = data["Sites"][data["Sites"]["Status"] == "Active"]["Site ID"].tolist()
+    with st.container(key="field_site_add"):
+        site = st.radio("Site", sites, index=0, format_func=lambda x: site_name(data, x), key="rows_add_trap_site")
+    location = st.text_input("Location description", key="add_trap_location", placeholder="Where it sits on the line")
+    at_site = pd.to_numeric(data["Traps"][data["Traps"]["Site ID"] == site]["Route Order"], errors="coerce").dropna()
+    with st.container(key="pair_add_trap_w"):
+        camera_col, order_col = st.columns(2)
+        camera = camera_col.text_input("Camera ID", key="add_trap_camera", placeholder="Optional")
+        order = order_col.number_input("Trap order", min_value=1, step=1, value=int(at_site.max()) + 1 if not at_site.empty else 1, key=f"add_trap_order_{site}")
+    image = st.text_input("Setup image link", key="add_trap_image", placeholder="Optional")
+    notes = st.text_area("Notes", key="add_trap_notes")
+    st.markdown(design.message_html("info", "", "New traps start Inactive. Activate them when a trial starts."), unsafe_allow_html=True)
+    _task_errors_panel(errors, bool(ss.get("add_trap_errors_shown")))
+    with st.container(key="actions_row"):
+        clicked = two_phase_button("Add trap", "add_trap_save", "Adding…", type="primary")
+        st.button("Cancel", key="cancel_trap_panel", type="secondary", on_click=lambda: ss.pop("setup_mode", None))
+    if clicked:
+        found = add_trap_errors(data, trap_id)
+        if found:
+            ss["add_trap_errors_shown"] = True
+            st.rerun()
+        row = [trap_id.strip(), product, build, site, str(order), location, camera, "", image, "Inactive", notes]
+        data["Traps"] = pd.concat([data["Traps"], pd.DataFrame([row], columns=SHEETS["Traps"])], ignore_index=True)
+        save_data(data)
+        for key in [k for k in ss.keys() if str(k).startswith("add_trap_") or k in ("rows_add_trap_build", "rows_add_trap_site", "setup_mode")]:
+            ss.pop(key, None)
+        set_flash("success", f"{trap_id.strip()} added.", [f"Assigned to {site_name(data, site)}.", "The trap was added as inactive. Activate it when a trial starts."])
+        st.rerun()
+
+
+def render_setup_traps(data) -> None:
+    ss = st.session_state
+    mode = ss.get("setup_mode")
+    sites = ["All sites"] + data["Sites"]["Site ID"].tolist()
+    if ss.get("chips_setup_site") not in sites:
+        ss["chips_setup_site"] = "All sites"  # (a key held in session state, so the pills below take no default)
+    view_key = "setup_view_panel" if mode == "add" else "setup_view_list"
+    with st.container(key=view_key):
+        if mode == "add":
+            list_col, panel = st.columns([1.65, 1], gap="large")
+        else:
+            list_col, panel = st.container(), None
+        with list_col, st.container(key="setup_list"):
+            chips_col, add_col = st.columns([4, 1], vertical_alignment="bottom")
+            with chips_col, st.container(key="chips_setup_filter"):
+                site_filter = st.pills("Show traps from", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_setup_site") or "All sites"
+            if add_col.button("Add trap", type="primary", key="setup_add_trap"):
+                ss["setup_mode"] = "add"
+                st.rerun()
+            inactive = data["Traps"][data["Traps"]["Status"] == "Inactive"]
+            if site_filter != "All sites":
+                inactive = inactive[inactive["Site ID"] == site_filter]
+            with st.container(key="card_setup_bulk"):
+                text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
+                count = len(inactive)
+                text_col.markdown(
+                    '<div class="r1-row-title">Bulk activate traps</div>'
+                    f'<div class="r1-meta">{count} inactive trap{"s" if count != 1 else ""} can be activated together inside a running trial.</div>', unsafe_allow_html=True)
+                if button_col.button("Bulk activate", key="setup_bulk_activate", on_click=set_page, args=("bulk_activate",), kwargs={"bulk_site": site_filter}, disabled=count == 0):
+                    pass
+            view = data["Traps"].copy()
+            if site_filter != "All sites":
+                view = view[view["Site ID"] == site_filter]
+            if view.empty:
+                st.markdown(design.message_html("info", "No traps match this filter", "Change the site or status to see more."), unsafe_allow_html=True)
+            else:
+                view = view.assign(_route_num=pd.to_numeric(view["Route Order"], errors="coerce"))
+                with st.container(key="setup_trap_rows"):
+                    for _, tr in view.sort_values(["Site ID", "_route_num"]).iterrows():
+                        _setup_trap_row(data, tr)
+        if panel is not None:
+            with panel, st.container(key="card_setup_panel"):
+                render_add_trap_panel(data)
+
+
+def render_bulk_activate(data) -> None:
+    """Bulk activate as its own page. Same flow and same writes as the expander it replaces: pick traps, a shared time or one per trap, a reason, a locked preview,
+    one confirm; each trap goes through activate_trap(), so a refused one is skipped and named."""
+    ss = st.session_state
+    site_filter = ss.get("bulk_site", "All sites")
+    inactive = data["Traps"][data["Traps"]["Status"] == "Inactive"].copy()
+    if site_filter != "All sites":
+        inactive = inactive[inactive["Site ID"] == site_filter]
+    trial = open_trial(data, site_filter) if site_filter != "All sites" else None
+    subtitle = "All sites" if site_filter == "All sites" else f"{site_name(data, site_filter)}" + (f" · {trial['Trial ID']} running" if trial is not None else "")
+    r1_screen_css(narrow=True)
+    with st.container(key=design.SCREEN_KEY):
+        r1_back("Back to Trial setup", "setup", "bulk_page")
+        admin_title("Bulk activate traps", subtitle)
+        if inactive.empty:
+            st.markdown(design.message_html("info", "No inactive traps to activate" + (f" at {html.escape(site_name(data, site_filter))}" if site_filter != "All sites" else "")), unsafe_allow_html=True)
+            return
+        if site_filter != "All sites" and trial is None:
+            headline, _, rest = no_open_trial_message(data, site_filter).partition(". ")  # the rule's one copy of the words
+            st.markdown(design.message_html("error", html.escape(headline), html.escape(rest)), unsafe_allow_html=True)
+            if st.button("Start a trial", key="bulkact_start_trial", type="primary"):
+                begin_trial_start(site_filter)
+                st.switch_page(PAGE_TRAP_SITES)
+            return
+        pending = ss.get("bulkact_pending")
+        locked = pending is not None  # the preview is exactly what is committed: the choices below it can't change while it is open
+        selected_ids, individual_times = [], {}
+        st.markdown('<div class="r1-label">Inactive traps</div>', unsafe_allow_html=True)
+        for _, tr in inactive.sort_values(["Site ID", "Trap ID"]).iterrows():
+            trap_id = str(tr["Trap ID"])
+            with st.container(key=f"tickcard_bulk_{trap_id}"):
+                with st.container(key=f"bsel_{trap_id}"):
+                    selected = st.checkbox(f"{trap_id}", key=f"bulkact_select_{trap_id}", disabled=locked)
+                st.markdown(f'<div class="r1-meta" style="margin:-6px 0 0 34px">{html.escape(trap_location_label(tr))} · {html.escape(build_short_label(tr["Product"], tr["Build Version"]))}</div>', unsafe_allow_html=True)
+                if selected:
+                    with st.container(key=f"sw_bulk_{trap_id}"):
+                        use_individual = st.toggle("Use a different time", key=f"bulkact_individual_toggle_{trap_id}", disabled=locked)
+                    if use_individual:
+                        with st.container(key=f"pair_bulk_{trap_id}_w"):
+                            d_col, t_col = st.columns(2)
+                            admin_default_moment(f"bulkact_{trap_id}", seed=(f"bulkact_date_{trap_id}", f"bulkact_time_{trap_id}"))
+                            ind_date = d_col.date_input("Effective date", value=None, key=f"bulkact_date_{trap_id}", disabled=locked, label_visibility="collapsed", format="DD/MM/YYYY")
+                            ind_time = t_col.time_input("Effective time", value=None, key=f"bulkact_time_{trap_id}", disabled=locked, label_visibility="collapsed")
+                        individual_times[trap_id] = datetime.combine(ind_date, ind_time)
+            if selected:
+                selected_ids.append(trap_id)
+        errors = []
+        if not selected_ids:
+            errors.append(("traps", "Choose one or more traps."))
+        reason_key = "bulkact_reason"
+        if not (ss.get(reason_key) or "").strip():
+            errors.append(("reason", "Say why these traps are being activated."))
+        show_errors = bool(ss.get("bulkact_errors_shown"))
+        field, field_line = _task_field_helpers("bulk", errors, show_errors)
+        field_line("traps")
+        st.markdown('<div class="r1-label">Shared effective time</div><div class="r1-meta">Applies to every chosen trap that has no time of its own.</div>', unsafe_allow_html=True)
+        with st.container(key="pair_bulk_shared_w"):
+            shared_d_col, shared_t_col = st.columns(2)
+            admin_default_moment("bulkact_shared", seed=("bulkact_bulk_date", "bulkact_bulk_time"))
+            shared_date = shared_d_col.date_input("Shared effective date", value=None, key="bulkact_bulk_date", disabled=locked, label_visibility="collapsed", format="DD/MM/YYYY")
+            shared_time = shared_t_col.time_input("Shared effective time", value=None, key="bulkact_bulk_time", disabled=locked, label_visibility="collapsed")
+        with field("reason"):
+            reason = st.text_area("Reason", key=reason_key, placeholder="Why these traps are being activated", disabled=locked)
+        field_line("reason")
+        if pending:
+            shared_dt = datetime.combine(pending["date"], pending["time"])
+            rows = [(tid, f"<b>Inactive → Active · {html.escape(task_when(pending['individual_times'].get(tid, shared_dt)))}</b>") for tid in pending["trap_ids"]]
+            with st.container(key="card_bulk_confirm"):
+                st.markdown(f'<div class="r1-card-title" style="font-size:20px;line-height:26px">Confirm {r1_count(len(pending["trap_ids"]), "trap")}</div>' + r1_kv(rows)
+                            + f'<div class="r1-meta">Each starts a test window stamped with the site\'s running trial. Reason: {html.escape(pending["reason"].strip())}</div>', unsafe_allow_html=True)
+            st.markdown(design.message_html("info", "", "The choices are locked while this preview is open. Cancel to change them."), unsafe_allow_html=True)
+            with st.container(key="actions_row"):
+                if two_phase_button(f"Activate {r1_count(len(pending['trap_ids']), 'trap')}", "bulkact_confirm", "Activating…", type="primary", disabled=not pending["reason"].strip()):
+                    applied, skipped = [], []
+                    for tid in pending["trap_ids"]:
+                        effective = pending["individual_times"].get(tid, shared_dt)
+                        try:
+                            activate_trap(data, tid, effective, pending["reason"].strip(), commit=False)
+                            applied.append(tid)
+                        except ValueError as exc:
+                            skipped.append(f"{tid} ({exc})")
+                    if applied:
+                        save_data(data)
+                    ss.pop("bulkact_pending", None)
+                    detail = [f"{len(applied)} trap(s) activated: {', '.join(applied)}."] if applied else []
+                    if skipped:
+                        detail.append(f"Skipped: {'; '.join(skipped)}.")
+                    set_flash("success" if applied else "error", "Bulk activation applied." if applied else "No traps were activated.", detail)
+                    go("setup")
+                st.button("Cancel", key="bulkact_cancel", type="secondary", on_click=lambda: ss.pop("bulkact_pending", None))
+        else:
+            _task_errors_panel(errors, show_errors)
+            with st.container(key="actions_row"):
+                if st.button("Preview activation", key="bulkact_preview", type="primary"):
+                    if errors:
+                        ss["bulkact_errors_shown"] = True
+                        st.rerun()
+                    ss["bulkact_pending"] = {"trap_ids": list(selected_ids), "date": shared_date, "time": shared_time, "individual_times": dict(individual_times), "reason": reason}
+                    ss.pop("bulkact_errors_shown", None)
+                    st.rerun()
+                st.button("Cancel", key="bulkact_leave", type="secondary", on_click=set_page, args=("setup",))
+
+
+# ---- Administration: Trial setup, Trap sites and Builds, with Rename site code and Permanently remove as their own pages (Part B batch 2a; boards AdmSites, AdmBuilds,
+# AdmSiteRename, AdmSiteRemove). Lists are rows with a status dot and an Edit button; Add and Edit open a side panel on desktop (its own screen on a phone). What each
+# writes is today's (site rows, build rows, commit_site_code_rename(), permanently_remove_site(), remove_unused_build()), with today's guards.
+
+SETUP_PAGES_SITE = {"site_rename", "site_remove"}
+ADMIN_SETUP_PAGES = {*ADMIN_SETUP_PAGES, *SETUP_PAGES_SITE}
+
+
+def _panel_header(title: str, close_key: str, state_keys: tuple) -> None:
+    """The side panel's title, its close button (desktop) and a back pill (phone)."""
+    ss = st.session_state
+    title_col, close_col = st.columns([1, 0.12], vertical_alignment="center")
+    title_col.markdown(f'<div class="r1-card-title" role="heading" aria-level="2" style="font-size:24px;line-height:30px">{html.escape(title)}</div>', unsafe_allow_html=True)
+    if close_col.button("×", key=close_key, help="Close"):
+        for key in state_keys:
+            ss.pop(key, None)
+        st.rerun()
+    st.button("Back to Trial setup", key=f"back_{close_key}", on_click=lambda: [ss.pop(k, None) for k in state_keys])
+
+
+def _setup_row(kind: str, ident: str, selected: bool, title: str, status: str, status_kind: str, lines: list, edit_key: str, on_edit) -> None:
+    dot = {"success": " done", "warn": " progress", "none": ""}[status_kind]
+    with st.container(key=f"listrow_{kind}_{'sel_' if selected else ''}{ident}"):
+        text_col, button_col = st.columns([3, 1], vertical_alignment="center")
+        text_col.markdown(
+            f'<div class="r1-row-title">{html.escape(title)} <span class="r1-status strong{dot}">{html.escape(status)}</span></div>'
+            + "".join(f'<div class="r1-meta">{html.escape(line)}</div>' for line in lines), unsafe_allow_html=True)
+        button_col.button("Edit", key=edit_key, on_click=on_edit)
+
+
+def _setup_two_columns(open_state: bool, view_key: str):
+    """The list and, when a panel is open, the panel beside it (a phone shows one or the other: CSS hides the list while a panel is open)."""
+    with st.container(key=view_key if open_state else view_key.replace("panel", "list")):
+        if open_state:
+            return st.columns([1.65, 1], gap="large")
+        return st.container(), None
+
+
+# ---- Trap sites -------------------------------------------------------------------------------------------------------------
+
+def site_form_errors(data, mode: str, sid: str, name: str, coverage: str, status: str) -> list:
+    """What the site form still needs, as (field, words), with today's rules and today's words."""
+    errors = []
+    code = normalise_site_code(sid)
+    code_error = validate_site_code(code) if mode == "add" else ""
+    if code_error:
+        errors.append(("sid", code_error))
+    if not name.strip():
+        errors.append(("name", "Site name is required."))
+    if mode == "add" and not code_error and code in data["Sites"]["Site ID"].astype(str).str.upper().tolist():
+        errors.append(("sid", "That site code already exists."))
+    if status == "Active" and coverage != "Yes":
+        errors.append(("coverage", "Confirm reliable mobile coverage before activating this site."))
+    if mode == "edit" and status == "Inactive":
+        active = len(data["Traps"][(data["Traps"]["Site ID"] == normalise_site_code(sid)) & (data["Traps"]["Status"] == "Active")])
+        if active:
+            errors.append(("status", f"Move or deactivate the {active} active trap{'s' if active != 1 else ''} at this site before making it inactive."))
+    return errors
+
+
+def render_setup_sites(data) -> None:
+    ss = st.session_state
+    mode = ss.get("site_mode")
+    list_col, panel = _setup_two_columns(mode in ("add", "edit"), "setup_view_panel_sites")
+    with list_col, st.container(key="setup_list"):
+        if st.button("Add site", type="primary", key="setup_add_site"):
+            ss["setup_site"], ss["site_mode"] = "", "add"
+            st.rerun()
+        with st.container(key="setup_trap_rows"):
+            for _, site_row in data["Sites"].sort_values("Site Name").iterrows():
+                sid = str(site_row["Site ID"])
+                count = len(data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")])
+                covered = "Mobile coverage confirmed" if site_row.get("Mobile Coverage Confirmed", "") == "Yes" else "Mobile coverage not confirmed"
+                _setup_row("site", sid, mode == "edit" and ss.get("setup_site") == sid, str(site_row["Site Name"]), str(site_row["Status"]),
+                           "success" if site_row["Status"] == "Active" else "none",
+                           [f"{sid} · {count} active trap{'s' if count != 1 else ''}", f"Every {site_row['Visit Interval Days']} days · {covered}"],
+                           f"setup_edit_site_{sid}", lambda sid=sid: ss.update(setup_site=sid, site_mode="edit"))
+    if panel is None:
+        return
+    with panel, st.container(key="card_setup_panel"):
+        scroll_panel_anchor()
+        match = data["Sites"][data["Sites"]["Site ID"] == ss.get("setup_site", "")]
+        ex = match.iloc[0] if mode == "edit" and not match.empty else None
+        if mode == "edit" and ex is None:
+            ss.pop("site_mode", None)
+            st.rerun()
+        _panel_header(f"Edit {ex['Site Name']}" if ex is not None else "Add site", "close_site_panel", ("site_mode", "setup_site"))
+        shown = bool(ss.get("site_errors_shown"))
+        k = f"site_{ss.get('setup_site') or 'new'}"
+        cov_default = "Yes" if ex is not None and ex.get("Mobile Coverage Confirmed", "") == "Yes" else "No"
+        status_default = "Inactive" if ex is not None and ex["Status"] == "Inactive" else "Active"
+        errors = site_form_errors(data, mode, ex["Site ID"] if ex is not None else (ss.get(f"{k}_sid") or ""), ss.get(f"{k}_name", ex["Site Name"] if ex is not None else "") or "",
+                                  ss.get(f"seg_{k}_coverage") or cov_default, ss.get(f"seg_{k}_status") or status_default) if shown else []
+        field, field_line = _task_field_helpers(k, errors, shown)
+        with field("sid"):
+            if ex is not None:
+                st.markdown(f'<div class="r1-label">Site code</div><div class="r1-readonly">{html.escape(str(ex["Site ID"]))}</div>', unsafe_allow_html=True)
+                sid = str(ex["Site ID"])
+            else:
+                sid = st.text_input("Site code", key=f"{k}_sid", placeholder="For example: MGF")
+        field_line("sid")
+        with field("name"):
+            name = st.text_input("Site name", value=ex["Site Name"] if ex is not None else "", key=f"{k}_name")
+        field_line("name")
+        st.markdown('<div class="r1-label">Visit interval</div><div class="r1-meta">Fixed at 3 days for this trial design.</div><div class="r1-readonly">Every 3 days</div>', unsafe_allow_html=True)
+        with field("coverage"):
+            coverage = st.segmented_control("Mobile coverage confirmed?", ["Yes", "No"], default=cov_default, key=f"seg_{k}_coverage", selection_mode="single") or cov_default
+        field_line("coverage")
+        with field("status"):
+            status = st.segmented_control("Status", ["Active", "Inactive"], default=status_default, key=f"seg_{k}_status", selection_mode="single") or status_default
+        field_line("status")
+        notes = st.text_area("Notes", value=ex["Notes"] if ex is not None else "", key=f"{k}_notes")
+        errors = site_form_errors(data, mode, sid, name, coverage, status) if shown else []
+        _task_errors_panel(errors, shown)
+        with st.container(key="actions_row"):
+            clicked = two_phase_button("Save site changes" if ex is not None else "Add site", f"site_save_{k}", "Saving…", type="primary")
+            st.button("Cancel", key="cancel_site_panel", type="secondary", on_click=lambda: [ss.pop(x, None) for x in ("site_mode", "setup_site", "site_errors_shown")])
+        if clicked:
+            if site_form_errors(data, mode, sid, name, coverage, status):
+                ss["site_errors_shown"] = True
+                st.rerun()
+            code = normalise_site_code(sid)
+            row = [code, name.strip(), "3", coverage, status, notes]
+            if ex is not None:
+                idx = data["Sites"].index[data["Sites"]["Site ID"] == code][0]
+                data["Sites"].loc[idx, SHEETS["Sites"]] = row
+            else:
+                data["Sites"] = pd.concat([data["Sites"], pd.DataFrame([row], columns=SHEETS["Sites"])], ignore_index=True)
+            save_data(data)
+            set_flash("success", f"{name.strip()} saved.", ["Site settings were updated."])
+            for x in ("site_mode", "setup_site", "site_errors_shown"):
+                ss.pop(x, None)
+            st.rerun()
+        if ex is not None:
+            with st.container(key="card_site_actions"):
+                for action_page, title, text, label, enabled in (
+                    ("site_rename", "Rename site code", "Updates every linked record and moves its evidence files.", "Rename", True),
+                    ("site_remove", "Permanently remove this site", "Deletes the site and all its history. Only for an Inactive site.", "Remove", str(ex["Status"]) == "Inactive"),
+                ):
+                    if not enabled:
+                        continue
+                    with st.container(key=f"actrow_{action_page}"):
+                        text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
+                        text_col.markdown(f'<div class="r1-row-title">{html.escape(title)}</div><div class="r1-meta">{html.escape(text)}</div>', unsafe_allow_html=True)
+                        button_col.button(label, key=f"{action_page}_open", on_click=set_page, args=(action_page,), kwargs={"setup_site": ex["Site ID"]})
+
+
+def _site_counts_card(title: str, items: list) -> None:
+    with st.container(key="card_site_counts"):
+        st.markdown(f'<div class="r1-card-title" style="font-size:20px;line-height:26px">{html.escape(title)}</div>' + r1_kv([(label, f"<b>{count}</b>") for label, count in items]), unsafe_allow_html=True)
+
+
+def render_site_action(data, page: str) -> None:
+    ss = st.session_state
+    sid = ss.get("setup_site", "")
+    found = data["Sites"][data["Sites"]["Site ID"] == sid]
+    r1_screen_css(narrow=True)
+    if found.empty:
+        with st.container(key=design.SCREEN_KEY):
+            st.markdown(design.message_html("error", "This site could not be found", "It may have been removed."), unsafe_allow_html=True)
+            st.button("Back to Trial setup", key="back_site_missing", on_click=set_page, args=("setup",))
+        return
+    ex = found.iloc[0]
+    back_state = {"site_mode": "edit", "setup_site": sid, "seg_setup_section": "Trap sites"}
+    with st.container(key=design.SCREEN_KEY):
+        r1_back(f"Back to {ex['Site Name']}", "setup", "site_action", **back_state)
+        flag, notice = f"site_action_errors_{page}_{sid}", f"site_action_notice_{page}_{sid}"
+        shown = bool(ss.get(flag))
+        if ss.get(notice):
+            st.markdown(design.message_html("error", html.escape(ss[notice][0]), html.escape(ss[notice][1])), unsafe_allow_html=True)
+
+        def fail(exc: Exception, lead: str) -> None:
+            ss[notice] = (lead, str(exc))
+            st.rerun()
+
+        if page == "site_rename":
+            admin_title("Rename site code", f"{ex['Site Name']} · current code {sid}")
+            st.markdown(design.message_html("warn", f"This changes every record linked to {html.escape(sid)}", "It also moves the site's evidence files. A backup of the workbook is made first."), unsafe_allow_html=True)
+            counts = site_code_link_counts(data, sid)
+            _site_counts_card("This will update", [("Traps", counts.get("Traps", 0)), ("Visits", counts.get("Visits", 0)), ("Test windows", counts.get("Windows", 0)),
+                                                   ("Follow-up tasks", counts.get("Followups", 0)), ("Photos", counts.get("Photos", 0))])
+            new_key, reason_key = f"rename_site_code_{sid}", f"rename_site_reason_{sid}"
+            errors = []
+            if not (ss.get(new_key) or "").strip():
+                errors.append(("code", "Enter the new site code."))
+            if not (ss.get(reason_key) or "").strip():
+                errors.append(("reason", "Say why the code is changing."))
+            field, field_line = _task_field_helpers(f"{page}_{sid}", errors, shown)
+            with field("code"):
+                new_code = st.text_input("New site code", key=new_key, placeholder="For example: MGF")
+            field_line("code")
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why the code is changing")
+            field_line("reason")
+            with st.container(key=f"tick_rename_{sid}"):
+                confirm = st.checkbox("I understand this updates every linked Site ID and moves linked evidence files", key=f"confirm_site_rename_{sid}")
+            _task_errors_panel(errors, shown)
+            target = normalise_site_code(new_code) if new_code.strip() else "the new code"
+            with st.container(key="actions_row"):
+                clicked = two_phase_button(f"Rename to {target}" if new_code.strip() else "Rename site code", f"rename_site_button_{sid}", "Renaming…", type="primary", disabled=not confirm)
+                st.button("Cancel", key="cancel_site_action", type="secondary", on_click=set_page, args=("setup",), kwargs=back_state)
+            if clicked:
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    _renamed, counts_done, moved_files = commit_site_code_rename(data, sid, new_code, reason)
+                except Exception as exc:
+                    fail(exc, "The site code was not changed.")
+                code = normalise_site_code(new_code)
+                if ss.get("site_id") == sid:
+                    ss.site_id = code
+                total = sum(c for n, c in counts_done.items() if n != "Sites")
+                set_flash("success", f"Site code changed from {sid} to {code}.", [
+                    f"{total} linked record{'s' if total != 1 else ''} updated.", f"{moved_files} evidence file{'s' if moved_files != 1 else ''} moved.",
+                    "Trap IDs, bag IDs and existing record IDs were left unchanged.", "A unique workbook backup and audit-log entry were created."])
+                for key in (flag, notice):
+                    ss.pop(key, None)
+                go("setup", site_mode="edit", setup_site=code, seg_setup_section="Trap sites")
+        else:
+            admin_title(f"Remove {ex['Site Name']}", f"{ex['Status']} site · code {sid}")
+            if str(ex["Status"]) != "Inactive":
+                st.markdown(design.message_html("info", f"{html.escape(str(ex['Site Name']))} is Active", "Only an Inactive site can be removed."), unsafe_allow_html=True)
+                return
+            st.markdown(design.message_html("error", "This permanently deletes real trial history", "It can't be undone. A backup of the workbook is made first."), unsafe_allow_html=True)
+            counts = site_code_link_counts(data, sid)
+            trap_ids = data["Traps"][data["Traps"]["Site ID"].astype(str).str.upper() == normalise_site_code(sid)]["Trap ID"].astype(str)
+            checks = int(data["Checks"]["Trap ID"].astype(str).isin(trap_ids).sum()) if not data["Checks"].empty else 0
+            _site_counts_card("This will remove", [("Traps", counts.get("Traps", 0)), ("Visits", counts.get("Visits", 0)), ("Test windows", counts.get("Windows", 0)), ("Checks", checks),
+                                                   ("Follow-up tasks", counts.get("Followups", 0)), ("Photos", counts.get("Photos", 0))])
+            reason_key, name_key = f"remove_site_reason_{sid}", f"remove_site_confirm_name_{sid}"
+            errors = []
+            if not (ss.get(reason_key) or "").strip():
+                errors.append(("reason", "Say why the site is being removed."))
+            field, field_line = _task_field_helpers(f"{page}_{sid}", errors, shown)
+            with field("reason"):
+                reason = st.text_area("Reason", key=reason_key, placeholder="Why the site is being removed")
+            field_line("reason")
+            st.markdown(f'<div class="r1-label">Type the site name to confirm</div><div class="r1-meta">{html.escape(str(ex["Site Name"]))}</div>', unsafe_allow_html=True)
+            typed = st.text_input("Site name", key=name_key, label_visibility="collapsed")
+            with st.container(key=f"tick_remove_{sid}"):
+                confirm = st.checkbox("I understand this permanently deletes real trial history and can't be undone", key=f"confirm_site_removal_{sid}")
+            ready = confirm and typed.strip() == str(ex["Site Name"]).strip()
+            _task_errors_panel(errors, shown)
+            with st.container(key="actions_row"):
+                with st.container(key="danger_button"):
+                    clicked = two_phase_button("Remove permanently", f"remove_site_button_{sid}", "Removing…", type="primary", disabled=not ready)
+                st.button("Cancel", key="cancel_site_action", type="secondary", on_click=set_page, args=("setup",), kwargs=back_state)
+            st.markdown('<div class="r1-meta">Remove permanently unlocks when the name matches and the box is ticked.</div>', unsafe_allow_html=True)
+            if clicked:
+                if errors:
+                    ss[flag] = True
+                    st.rerun()
+                try:
+                    removed = permanently_remove_site(data, sid, reason)
+                except Exception as exc:
+                    fail(exc, "The site was not removed.")
+                total = sum(removed.values())
+                set_flash("success", f"{ex['Site Name']} permanently removed.", [f"{total} linked record{'s' if total != 1 else ''} deleted.",
+                                                                                 "A workbook backup and audit-log entry were created before removal."])
+                for key in (flag, notice):
+                    ss.pop(key, None)
+                go("setup", site_mode=None, setup_site="", seg_setup_section="Trap sites")
+
+
+# ---- Builds -----------------------------------------------------------------------------------------------------------------
+
+BUILD_STATUSES = ["Current", "Trial comparison", "Superseded", "Withdrawn"]
+
+
+def build_form_errors(data, mode: str, product: str, version: str) -> list:
+    errors = []
+    version = version.strip()
+    if not version:
+        errors.append(("version", "Build version is required."))
+    elif mode == "add" and ((data["Builds"]["Product"].astype(str) == str(product)) & (data["Builds"]["Build Version"].astype(str).str.casefold() == version.casefold())).any():
+        errors.append(("version", "That build version already exists for this trap type."))
+    return errors
+
+
+def render_setup_builds(data) -> None:
+    ss = st.session_state
+    mode = ss.get("build_mode")
+    list_col, panel = _setup_two_columns(mode in ("add", "edit"), "setup_view_panel_builds")
+    with list_col, st.container(key="setup_list"):
+        if st.button("Add build", type="primary", key="setup_add_build"):
+            ss["setup_build"], ss["build_mode"] = "", "add"
+            st.rerun()
+        with st.container(key="setup_trap_rows"):
+            for _, build_row in data["Builds"].sort_values(["Product", "First Active Date"], ascending=[True, False]).iterrows():
+                product_code, version = str(build_row["Product"]), str(build_row["Build Version"])
+                identity = f"{product_code}::{version}"
+                count = len(data["Traps"][(data["Traps"]["Product"].astype(str) == product_code) & (data["Traps"]["Build Version"].astype(str) == version) & (data["Traps"]["Status"] == "Active")])
+                first = parse_dt(build_row["First Active Date"])
+                notes_raw = str(build_row["Notes"] or "No notes")
+                source = notes_raw[len("Built from "):].rstrip(".") if notes_raw.startswith("Built from ") else notes_raw
+                state = str(build_row["Build Status"])
+                _setup_row("build", re.sub(r"[^A-Za-z0-9_-]", "_", identity), mode == "edit" and ss.get("setup_build") == identity, build_short_label(product_code, version), state,
+                           "success" if state == "Current" else ("warn" if state == "Trial comparison" else "none"),
+                           [f"{count} active trap{'s' if count != 1 else ''}", f"First active: {first.strftime('%d %b %Y').lstrip('0') if first else '—'} · Source: {source}"],
+                           f"setup_edit_build_{product_code}_{version}", lambda identity=identity: ss.update(setup_build=identity, build_mode="edit"))
+    if panel is None:
+        return
+    with panel, st.container(key="card_setup_panel"):
+        scroll_panel_anchor()
+        ex = None
+        if mode == "edit":
+            product_sel, version_sel = str(ss.get("setup_build", "")).split("::", 1)
+            match = data["Builds"][(data["Builds"]["Product"].astype(str) == product_sel) & (data["Builds"]["Build Version"].astype(str) == version_sel)]
+            if match.empty:
+                ss.pop("build_mode", None)
+                st.rerun()
+            ex = match.iloc[0]
+        _panel_header(f"Edit {build_short_label(ex['Product'], ex['Build Version'])}" if ex is not None else "Add build", "close_build_panel", ("build_mode", "setup_build"))
+        k = f"build_{ss.get('setup_build') or 'new'}"
+        shown = bool(ss.get("build_errors_shown"))
+        if ex is not None:
+            st.markdown(f'<div class="r1-label">Trap type</div><div class="r1-readonly">{html.escape(str(ex["Product"]))}</div>'
+                        f'<div class="r1-label">Build version</div><div class="r1-readonly">{html.escape(str(ex["Build Version"]))}</div>', unsafe_allow_html=True)
+            product, version = str(ex["Product"]), str(ex["Build Version"])
+        else:
+            product = st.segmented_control("Trap type", ["R1", "M1"], default="R1", key=f"seg_{k}_product", selection_mode="single") or "R1"
+            errors_now = build_form_errors(data, mode, product, ss.get(f"{k}_version") or "") if shown else []
+            field, field_line = _task_field_helpers(k, errors_now, shown)
+            with field("version"):
+                version = st.text_input("Build version", key=f"{k}_version", placeholder="For example: 4.4")
+            field_line("version")
+        status = st.radio("Build status", BUILD_STATUSES, index=BUILD_STATUSES.index(ex["Build Status"]) if ex is not None and ex["Build Status"] in BUILD_STATUSES else 0, key=f"rows_{k}_status")
+        first = parse_dt(ex["First Active Date"]) if ex is not None else None
+        st.markdown('<div class="r1-label">First active date</div>', unsafe_allow_html=True)
+        first_date = st.date_input("First active date", value=first.date() if first else (now().date() if ex is None else None), key=f"{k}_first", label_visibility="collapsed", format="DD/MM/YYYY")
+        notes = st.text_area("Notes", value=ex["Notes"] if ex is not None else "", key=f"{k}_notes")
+        errors = build_form_errors(data, mode, product, version) if shown else []
+        _task_errors_panel(errors, shown)
+        with st.container(key="actions_row"):
+            clicked = two_phase_button("Save build changes" if ex is not None else "Add build", f"build_save_{k}", "Saving…", type="primary")
+            st.button("Cancel", key="cancel_build_panel", type="secondary", on_click=lambda: [ss.pop(x, None) for x in ("build_mode", "setup_build", "build_errors_shown")])
+        if clicked:
+            if build_form_errors(data, mode, product, version):
+                ss["build_errors_shown"] = True
+                st.rerun()
+            row = [product, version.strip(), status, first_date.strftime("%Y-%m-%d") if first_date else "", notes]
+            if ex is not None:
+                idx = data["Builds"].index[(data["Builds"]["Product"] == ex["Product"]) & (data["Builds"]["Build Version"] == ex["Build Version"])][0]
+                data["Builds"].loc[idx, SHEETS["Builds"]] = row
+            else:
+                data["Builds"] = pd.concat([data["Builds"], pd.DataFrame([row], columns=SHEETS["Builds"])], ignore_index=True)
+            save_data(data)
+            set_flash("success", f"{version.strip()} saved.", ["It is now available when adding a trap unless marked Withdrawn."])
+            for x in ("build_mode", "setup_build", "build_errors_shown"):
+                ss.pop(x, None)
+            st.rerun()
+        if ex is not None:
+            used = ((data["Traps"]["Product"].astype(str) == str(ex["Product"])) & (data["Traps"]["Build Version"].astype(str) == str(ex["Build Version"]))).any() or \
+                   ((data["Windows"]["Product"].astype(str) == str(ex["Product"])) & (data["Windows"]["Build Version"].astype(str) == str(ex["Build Version"]))).any()
+            if not used:
+                with st.container(key="card_site_actions"):
+                    with st.container(key="actrow_build_remove"):
+                        text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
+                        text_col.markdown('<div class="r1-row-title">Remove this build</div><div class="r1-meta">Nothing uses it, so it can be removed.</div>', unsafe_allow_html=True)
+                        if button_col.button("Remove", key="build_remove_open"):
+                            ss["build_remove_open"] = True
+                if ss.get("build_remove_open"):
+                    reason_key = f"remove_build_reason_{ex['Product']}_{ex['Build Version']}"
+                    reason = st.text_area("Reason", key=reason_key, placeholder="Why the build is being removed")
+                    with st.container(key=f"tick_remove_build"):
+                        confirm = st.checkbox(f"Remove {build_short_label(ex['Product'], ex['Build Version'])}", key=f"confirm_remove_build_{ex['Product']}_{ex['Build Version']}")
+                    with st.container(key="danger_button"):
+                        if two_phase_button("Remove unused build", f"remove_unused_build_{ex['Product']}_{ex['Build Version']}", "Removing…", type="primary", disabled=not confirm):
+                            try:
+                                remove_unused_build(data, str(ex["Product"]), str(ex["Build Version"]), reason)
+                            except Exception as exc:
+                                st.markdown(design.message_html("error", "The build was not removed", html.escape(str(exc))), unsafe_allow_html=True)
+                            else:
+                                set_flash("success", f"{ex['Product']} · {ex['Build Version']} removed.")
+                                for x in ("build_mode", "setup_build", "build_remove_open"):
+                                    ss.pop(x, None)
+                                st.rerun()
+
+
 st.set_page_config(page_title=APP_TITLE, layout="wide")
 st.markdown(
     """
@@ -7297,7 +8317,7 @@ def top_nav_performance() -> None:
 
 
 def top_nav_trial_setup() -> None:
-    select_top_navigation("setup", {"setup", "trap_edit"})
+    select_top_navigation("setup", ADMIN_SETUP_PAGES)
 
 
 def top_nav_data_records() -> None:
@@ -7350,7 +8370,8 @@ NAV_KEY_BY_APP_PAGE = {
     "sites": "sites", "site": "sites", "start_visit": "sites", "visit": "sites", "check": "sites", "check_confirm": "sites",
     "trial": "sites", "trial_start": "sites", "trial_adopt": "sites", "trial_end": "sites",
     "followups": "followups", "results": "performance",
-    "network": "traps", "trap_detail": "traps", "setup": "setup", "trap_edit": "setup",
+    "network": "traps", "trap_detail": "traps", "setup": "setup", "trap_edit": "setup", "trap_activate": "setup", "trap_deactivate": "setup", "trap_move": "setup",
+    "trap_build": "setup", "trap_delete": "setup", "bulk_activate": "setup", "site_rename": "setup", "site_remove": "setup",
     "data_management": "records", "windows": "records", "data_quality": "quality",
 }
 NAV_ADMIN_KEYS = ("traps", "setup", "records", "quality")
@@ -9375,787 +10396,27 @@ elif page == "results":
 
 
 elif page == "trap_edit":
-    trap_id = st.session_state.get("trap_id", "")
-    existing = trap_row(data, trap_id)
-    if existing is None:
-        message_panel("error", "This trap could not be found.")
-        if st.button("Back to Trial setup"):
-            go("setup")
-        st.stop()
+    render_trap_page(data, st.session_state.get("trap_id", ""))
 
-    if st.button("← Back to Trial setup"):
-        go("setup")
-    header(f"Edit {trap_id}", f"{site_name(data, existing['Site ID'])} · {trap_location_label(existing)}")
+elif page in TRAP_ACTION_PAGES:
+    render_trap_action(data, st.session_state.get("trap_id", ""), page)
 
-    with st.form(f"trap_edit_page_{trap_id}"):
-        location = st.text_input("Location description", value=trap_location_label(existing))
-        camera = st.text_input("Camera ID", value=existing["Camera ID"])
-        order = st.number_input(
-            "Route reference",
-            min_value=1,
-            step=1,
-            value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1,
-        )
-        st.markdown(status_pill(existing["Status"], "success" if existing["Status"] == "Active" else "none"), unsafe_allow_html=True)
-        st.caption("Use Activate trap / Deactivate trap below to change status - it opens or closes a monitoring window, so it isn't a plain field edit.")
-        notes = st.text_area("Notes", value=existing["Notes"])
-        save_edit = st.form_submit_button("Save changes", type="primary")
-    if save_edit:
-        idx = data["Traps"].index[data["Traps"]["Trap ID"] == trap_id][0]
-        data["Traps"].at[idx, "Location"] = location.strip()
-        data["Traps"].at[idx, "Camera ID"] = camera.strip()
-        data["Traps"].at[idx, "Route Order"] = str(order)
-        data["Traps"].at[idx, "Notes"] = notes
-        save_data(data)
-        set_flash("success", f"{trap_id} updated.")
-        go("setup")
-
-    st.divider()
-    if existing["Status"] == "Active":
-        with st.expander("Deactivate trap"):
-            deactivate_reason = st.text_area("Reason for deactivation", key=f"deactivate_reason_{trap_id}")
-            deactivate_date = st.date_input("Effective date", value=now().date(), key=f"deactivate_date_{trap_id}")
-            deactivate_time = st.time_input("Effective time", value=now().time(), key=f"deactivate_time_{trap_id}")
-            confirm_deactivate = st.checkbox(
-                "Close the current window (if open) and set this trap to Inactive",
-                key=f"confirm_deactivate_{trap_id}",
-            )
-            if two_phase_button("Deactivate trap", f"commit_deactivate_{trap_id}", "Deactivating…", type="primary", disabled=not confirm_deactivate):
-                if not deactivate_reason.strip():
-                    st.error("Enter a reason for deactivation.")
-                else:
-                    try:
-                        effective = datetime.combine(deactivate_date, deactivate_time).replace(microsecond=0)
-                        deactivate_trap(data, trap_id, effective, deactivate_reason.strip())
-                        set_flash("success", f"{trap_id} deactivated.", ["Any open window was closed.", "No new window was started."])
-                        go("setup")
-                    except Exception as exc:
-                        st.error(str(exc))
-    else:
-        with st.expander("Activate trap"):
-            activate_reason = st.text_area("Reason for activation", key=f"activate_reason_{trap_id}")
-            activate_date = st.date_input("Effective date", value=now().date(), key=f"activate_date_{trap_id}")
-            activate_time = st.time_input("Effective time", value=now().time(), key=f"activate_time_{trap_id}")
-            confirm_activate = st.checkbox(
-                "Start a new monitoring window and set this trap to Active",
-                key=f"confirm_activate_{trap_id}",
-            )
-            if two_phase_button("Activate trap", f"commit_activate_{trap_id}", "Activating…", type="primary", disabled=not confirm_activate):
-                if not activate_reason.strip():
-                    st.error("Enter a reason for activation.")
-                else:
-                    try:
-                        effective = datetime.combine(activate_date, activate_time).replace(microsecond=0)
-                        activate_trap(data, trap_id, effective, activate_reason.strip())
-                        set_flash("success", f"{trap_id} activated.", ["A new monitoring window was started."])
-                        go("setup")
-                    except Exception as exc:
-                        st.error(str(exc))
-                        if str(exc).startswith("No trial is running"):
-                            # Trial setup is its own native page, so crossing to the Trap sites section needs switch_page.
-                            if st.button("Start a trial", key=f"start_trial_from_activate_{trap_id}", type="tertiary"):
-                                begin_trial_start(existing["Site ID"])
-                                st.switch_page(PAGE_TRAP_SITES)
-
-    st.divider()
-    show_move = st.toggle("Move trap", key=f"show_move_{trap_id}")
-    if show_move:
-        active_destinations = data["Sites"][
-            (data["Sites"]["Status"] == "Active")
-            & (data["Sites"]["Site ID"] != existing["Site ID"])
-        ]["Site ID"].tolist()
-        if active_destinations:
-            destination = st.selectbox("Destination site", active_destinations, format_func=lambda x: site_name(data, x))
-            move_location = st.text_input("Location at destination", value="")
-            move_order = st.number_input("Route reference at destination", min_value=1, step=1, value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1)
-            move_camera = st.text_input("Camera ID at destination", value=existing["Camera ID"])
-            move_reason = st.text_area("Reason for move")
-            move_date = st.date_input("Effective date", value=now().date())
-            move_time = st.time_input("Effective time", value=now().time())
-            confirm_move = st.checkbox("Move this trap to the destination site (a trap that is Inactive has no window, so none is opened)")
-            if two_phase_button("Move trap", f"move_trap_{trap_id}", "Moving…", type="primary", disabled=not confirm_move):
-                try:
-                    move_trap(
-                        data, trap_id, destination,
-                        datetime.combine(move_date, move_time).replace(microsecond=0),
-                        move_reason.strip(), move_order, move_location.strip(), move_camera.strip()
-                    )
-                    set_flash("success", f"{trap_id} moved.", [f"New site: {site_name(data, destination)}."])
-                    go("setup")
-                except Exception as exc:
-                    st.error(str(exc))
-        else:
-            st.caption("No other active sites are available.")
-
-    with st.expander("Change build"):
-        available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
-        available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
-        current_label = f"{existing['Product']} · {existing['Build Version']}"
-        options = [x for x in available_builds["Label"].tolist() if x != current_label]
-        if options:
-            is_inactive_trap = existing["Status"] != "Active"
-            if is_inactive_trap:
-                st.caption("Allowed while the trap is Inactive — this is how builds are staged before a trial. No monitoring window is opened.")
-            new_label = st.selectbox("New build", options)
-            build_reason = st.text_area("Reason for build change")
-            build_date = st.date_input("Effective date", value=now().date(), key=f"dedicated_build_date_{trap_id}")
-            build_time = st.time_input("Effective time", value=now().time(), key=f"dedicated_build_time_{trap_id}")
-            confirm_build = st.checkbox(
-                "Change this trap's build" if is_inactive_trap else "Close the current window and start a new window on this build"
-            )
-            if two_phase_button("Change build", f"change_build_{trap_id}", "Changing…", type="primary", disabled=not confirm_build):
-                selected = available_builds[available_builds["Label"] == new_label].iloc[0]
-                try:
-                    change_trap_build(
-                        data, trap_id, str(selected["Product"]), str(selected["Build Version"]),
-                        datetime.combine(build_date, build_time).replace(microsecond=0),
-                        build_reason.strip(),
-                    )
-                    set_flash("success", f"{trap_id} build changed.", [f"New build: {new_label}."])
-                    go("setup")
-                except Exception as exc:
-                    st.error(str(exc))
-                    if str(exc).startswith("A build can't change inside a trial"):
-                        if st.button("Go to trial", key=f"go_to_trial_from_build_{trap_id}", type="tertiary"):
-                            navigate("trial", rerun=False, site_id=existing["Site ID"])
-                            st.switch_page(PAGE_TRAP_SITES)
-        else:
-            st.caption("No other available builds.")
+elif page == "bulk_activate":
+    render_bulk_activate(data)
 
 elif page == "setup":
-    header("Trial setup", "Manage the sites, traps and build versions used in this trial.")
-    section = st.radio("What do you need to manage?", ["Traps", "Trap sites", "Builds"], horizontal=True)
-    helper("Select a record to edit or add a new one. Historical visit and result records are preserved.")
-
-    if section == "Traps":
-        mode = st.session_state.get("setup_mode")
-        if mode in ["edit", "add"]:
-            list_col, panel = st.columns([1.65, 1], gap="large")
+    r1_screen_css()
+    with st.container(key=design.SCREEN_KEY):
+        section = render_setup_header(data)
+        if section == "Traps":
+            render_setup_traps(data)
+        elif section == "Trap sites":
+            render_setup_sites(data)
         else:
-            list_col, panel = st.container(), None
-        with list_col:
-            filter_col, action_col = st.columns([4, 1], vertical_alignment="bottom")
-            site_filter = filter_col.selectbox("Show traps from", ["All sites"] + data["Sites"]["Site ID"].tolist(), format_func=lambda x: x if x=="All sites" else site_name(data,x), key="setup_trap_site")
-            if action_col.button("Add trap", type="primary"):
-                st.session_state.setup_trap=""; st.session_state.setup_mode="add"; st.rerun()
+            render_setup_builds(data)
 
-            inactive_traps = data["Traps"][data["Traps"]["Status"] == "Inactive"].copy()
-            if site_filter != "All sites":
-                inactive_traps = inactive_traps[inactive_traps["Site ID"] == site_filter]
-            with st.expander(f"Bulk activate traps ({len(inactive_traps)} inactive)"):
-                # Trap activation window brief Phase 2 - same multi-select-plus-preview
-                # shape as Window start corrections (Data & records), reused directly
-                # rather than a new pattern: per-trap select + optional individual
-                # time, a shared bulk time, a preview step, then one confirmed commit.
-                if inactive_traps.empty:
-                    st.caption("No inactive traps to activate" + (f" at {site_name(data, site_filter)}" if site_filter != "All sites" else "") + ".")
-                elif site_filter != "All sites" and open_trial(data, site_filter) is None:
-                    # Same refusal activate_trap() would give each trap, shown once up front
-                    # instead of after the operator has filled the whole form in.
-                    st.error(no_open_trial_message(data, site_filter))
-                    if st.button("Start a trial", key="bulkact_start_trial", type="tertiary"):
-                        begin_trial_start(site_filter)
-                        st.switch_page(PAGE_TRAP_SITES)
-                else:
-                    pending = st.session_state.get("bulkact_pending")
-                    # UX-audit fix (2026-08-13): the selection checkboxes and time
-                    # inputs used to stay live under an already-shown preview, so
-                    # editing them after clicking "Preview" could silently commit
-                    # something different from what the preview displayed. Locking
-                    # everything below once a preview is pending means Cancel is the
-                    # only way to change the selection - what's previewed is always
-                    # exactly what gets committed.
-                    locked = pending is not None
-                    bulk_reason = st.text_area(
-                        "Reason for these activations",
-                        placeholder="e.g. New traps deployed for tomorrow's field pass.",
-                        key="bulkact_reason",
-                        disabled=locked,
-                    )
-                    st.markdown("#### Inactive traps")
-                    selected_ids = []
-                    individual_times = {}
-                    for _, tr in inactive_traps.sort_values(["Site ID", "Trap ID"]).iterrows():
-                        trap_id = tr["Trap ID"]
-                        with app_card():
-                            sel_col, info_col = st.columns([0.12, 0.88])
-                            with sel_col:
-                                selected = st.checkbox("Select", key=f"bulkact_select_{trap_id}", label_visibility="collapsed", disabled=locked)
-                            with info_col:
-                                st.markdown(f"**{trap_id}** · {site_name(data, tr['Site ID'])}")
-                                st.caption(f"{tr['Product']} · {tr['Build Version']}")
-                                use_individual = st.checkbox("Use a different time for this trap", key=f"bulkact_individual_toggle_{trap_id}", disabled=locked)
-                                if use_individual:
-                                    d_col, t_col = st.columns(2)
-                                    with d_col:
-                                        ind_date = st.date_input("Effective date", value=now().date(), key=f"bulkact_date_{trap_id}", disabled=locked)
-                                    with t_col:
-                                        ind_time = st.time_input("Effective time", value=now().time(), key=f"bulkact_time_{trap_id}", disabled=locked)
-                                    individual_times[trap_id] = datetime.combine(ind_date, ind_time)
-                        if selected:
-                            selected_ids.append(trap_id)
-
-                    st.markdown("#### Bulk apply")
-                    if not selected_ids:
-                        st.caption("Select one or more traps above to activate them together.")
-                    else:
-                        bulk_date = st.date_input("Shared effective date", value=now().date(), key="bulkact_bulk_date", disabled=locked)
-                        bulk_time = st.time_input("Shared effective time", value=now().time(), key="bulkact_bulk_time", disabled=locked)
-                        st.caption("Applies to every selected trap that doesn't have its own individual time set above.")
-                        if st.button("Preview activation", key="bulkact_preview", disabled=locked):
-                            st.session_state["bulkact_pending"] = {
-                                "trap_ids": list(selected_ids),
-                                "date": bulk_date,
-                                "time": bulk_time,
-                                "individual_times": dict(individual_times),
-                                "reason": bulk_reason,
-                            }
-                            st.rerun()
-
-                    if pending:
-                        st.markdown("##### Confirm bulk activation")
-                        pending_individual_times = pending["individual_times"]
-                        shared_dt = datetime.combine(pending["date"], pending["time"])
-                        preview_rows = [
-                            {"Trap ID": trap_id, "Status": "Inactive → Active", "Effective time": human_dt(pending_individual_times.get(trap_id, shared_dt), include_year=True)}
-                            for trap_id in pending["trap_ids"]
-                        ]
-                        st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
-                        confirm_col, cancel_col = st.columns(2)
-                        with confirm_col:
-                            if two_phase_button("Confirm bulk activate", "bulkact_confirm", "Activating…", type="primary", disabled=not pending["reason"].strip()):
-                                applied, skipped = [], []
-                                for trap_id in pending["trap_ids"]:
-                                    effective = pending_individual_times.get(trap_id, shared_dt)
-                                    try:
-                                        activate_trap(data, trap_id, effective, pending["reason"].strip(), commit=False)
-                                        applied.append(trap_id)
-                                    except ValueError as exc:
-                                        skipped.append(f"{trap_id} ({exc})")
-                                if applied:
-                                    save_data(data)
-                                st.session_state.pop("bulkact_pending", None)
-                                detail = [f"{len(applied)} trap(s) activated: {', '.join(applied)}."] if applied else []
-                                if skipped:
-                                    detail.append(f"Skipped: {'; '.join(skipped)}.")
-                                set_flash("success" if applied else "error", "Bulk activation applied." if applied else "No traps were activated.", detail)
-                                st.rerun()
-                        with cancel_col:
-                            if st.button("Cancel", key="bulkact_cancel"):
-                                st.session_state.pop("bulkact_pending", None)
-                                st.rerun()
-
-            view=data["Traps"].copy()
-            if site_filter!="All sites": view=view[view["Site ID"]==site_filter]
-            if view.empty:
-                helper("No traps match this filter.")
-            else:
-                view = view.assign(_route_num=pd.to_numeric(view["Route Order"], errors="coerce"))
-                for _, tr in view.sort_values(["Site ID", "_route_num"]).iterrows():
-                    trap_id = tr["Trap ID"]
-                    with app_card():
-                        st.markdown('<span class="setup-trap-card-marker" aria-hidden="true"></span>', unsafe_allow_html=True)
-                        camera_text = tr["Camera ID"] or "None"
-                        build_prefix = f"{tr['Product']} Build "
-                        build_raw = str(tr["Build Version"] or "—")
-                        build_text = build_raw[len(build_prefix):] if build_raw.startswith(build_prefix) else build_raw
-                        st.markdown(
-                            '<div class="shared-card-copy">'
-                            f'<div class="shared-card-heading"><strong>{html.escape(str(trap_id))}</strong>{status_pill(str(tr["Status"]), "success" if tr["Status"] == "Active" else "none")}</div>'
-                            f'<div class="shared-card-main">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
-                            f'<div class="shared-card-meta">Build: {html.escape(build_text)} · Camera: {html.escape(str(camera_text))} · Route: {html.escape(str(tr["Route Order"] or "—"))}</div>'
-                            '</div>',
-                            unsafe_allow_html=True,
-                        )
-                        if st.button("Edit", key=f"setup_edit_trap_{trap_id}"):
-                            go("trap_edit", trap_id=trap_id)
-        if panel is not None:
-            with panel:
-                scroll_panel_anchor()
-                existing = trap_row(data,st.session_state.setup_trap) if mode=="edit" else None
-                setup_title, setup_close = st.columns([1, 0.13], vertical_alignment="top")
-                with setup_title:
-                    st.subheader("Edit trap" if mode=="edit" else "Add trap")
-                with setup_close:
-                    st.markdown('<span class="drawer-close-marker"></span>', unsafe_allow_html=True)
-                    if st.button("×", key="close_trap_setup_panel_top", help="Close trap editor"):
-                        st.session_state.pop("setup_mode", None)
-                        st.session_state.pop("setup_trap", None)
-                        st.rerun()
-                assignable_builds=data["Builds"][data["Builds"]["Build Status"]!="Withdrawn"].copy()
-                assignable_builds["Build label"]=assignable_builds["Product"].astype(str)+" · "+assignable_builds["Build Version"].astype(str)
-                build_options=assignable_builds["Build label"].tolist()
-                existing_build_label=(f"{existing['Product']} · {existing['Build Version']}" if existing is not None else "")
-                with st.form("trap_setup_panel"):
-                    trap_id=st.text_input("Trap ID",value=existing["Trap ID"] if existing is not None else "",disabled=mode=="edit",help="Permanent physical trap ID. Do not include the site code.")
-                    build_label=st.selectbox("Build",build_options,index=(build_options.index(existing_build_label) if existing_build_label in build_options else 0),disabled=mode=="edit",help="Use Change build for an existing trap.")
-                    build_row=assignable_builds[assignable_builds["Build label"]==build_label].iloc[0]
-                    product=str(build_row["Product"]); build=str(build_row["Build Version"])
-                    st.caption(f"Trap type: {product}")
-                    active_site_options=data["Sites"][data["Sites"]["Status"]=="Active"]["Site ID"].tolist()
-                    site_options=active_site_options.copy()
-                    if existing is not None and existing["Site ID"] not in site_options:
-                        site_options=[existing["Site ID"]]+site_options
-                    site=st.selectbox("Site",site_options,index=(site_options.index(existing["Site ID"]) if existing is not None and existing["Site ID"] in site_options else 0),format_func=lambda x:site_name(data,x),help="Use Move trap for an existing trap.",disabled=mode=="edit")
-                    location=st.text_input("Location description", value=trap_location_label(existing) if existing is not None else "")
-                    camera=st.text_input("Camera ID",value=existing["Camera ID"] if existing is not None else "")
-                    order=st.number_input("Trap order",min_value=1,step=1,value=int(float(existing["Route Order"])) if existing is not None and str(existing["Route Order"]).strip() else 1)
-                    # A new trap is always created Inactive with no deployment date: both only
-                    # mean something once a monitoring window opens, which activating the trap
-                    # (into a trial) does. Edit shows the stored value, and writes back exactly
-                    # what is stored - never today's date in place of a blank one.
-                    stored_deployment=parse_dt(existing["Deployment Start"]) if existing is not None else None
-                    dep_date=dep_time=None
-                    if mode=="edit" and stored_deployment is not None:
-                        dep_date=st.date_input("Deployment start date",value=stored_deployment.date())
-                        dep_time=st.time_input("Deployment start time",value=stored_deployment.time())
-                    elif mode=="edit":
-                        st.caption("Deployment start: not set yet. It is recorded when the trap is first activated.")
-                    else:
-                        st.caption("New traps start Inactive. Activate the trap when a trial starts.")
-                    image=st.text_input("Setup image link",value=existing["Setup Image Link"] if existing is not None else "")
-                    if mode=="edit":
-                        status=st.selectbox("Status",["Active","Inactive"],index=0 if existing["Status"]=="Active" else 1,disabled=True,help="Use Activate trap / Deactivate trap for an existing trap.")
-                    else:
-                        status="Inactive"
-                    notes=st.text_area("Notes",value=existing["Notes"] if existing is not None else "")
-                    save=st.form_submit_button("Save trap changes" if mode=="edit" else "Add trap",type="primary")
-                if save:
-                    if not trap_id.strip(): st.error("Trap ID is required.")
-                    elif mode=="add" and trap_id in data["Traps"]["Trap ID"].tolist(): st.error("That Trap ID already exists.")
-                    else:
-                        deployment_value=""
-                        if mode=="edit":
-                            deployment_value=str(existing["Deployment Start"])
-                            if stored_deployment is not None and dep_date is not None:
-                                picked_deployment=datetime.combine(dep_date,dep_time)
-                                if picked_deployment.replace(second=0,microsecond=0)!=stored_deployment.replace(second=0,microsecond=0):
-                                    deployment_value=dtstr(picked_deployment)
-                        row=[trap_id,product,build,site,str(order),location,camera,deployment_value,image,status,notes]
-                        if mode=="edit":
-                            idx=data["Traps"].index[data["Traps"]["Trap ID"]==trap_id][0]
-                            old_build=data["Traps"].at[idx,"Build Version"]
-                            old_site=data["Traps"].at[idx,"Site ID"]
-                            old_status=data["Traps"].at[idx,"Status"]
-                            if old_site!=site:
-                                st.error("Use Move trap to change sites. Direct site changes are blocked so trial history is not rewritten.")
-                            elif old_build!=build and open_window(data,trap_id) is not None:
-                                st.error("Close the active test window before changing this trap's build.")
-                            elif old_status!=status:
-                                st.error("Use Activate trap / Deactivate trap to change status. Direct status changes are blocked so a trial window is never silently opened or left open.")
-                            else:
-                                data["Traps"].loc[idx,SHEETS["Traps"]]=row
-                                save_data(data)
-                                set_flash("success", f"{trap_id} updated.", ["Trap setup changes were saved."])
-                                st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
-                        else:
-                            data["Traps"]=pd.concat([data["Traps"],pd.DataFrame([row],columns=SHEETS["Traps"])],ignore_index=True)
-                            save_data(data)
-                            set_flash("success", f"{trap_id} added.", [f"Assigned to {site_name(data,site)}.", "The trap was added as inactive. Activate it when a trial starts."])
-                            st.session_state.pop("setup_mode",None); st.rerun()
-                if mode=="edit":
-                    st.divider()
-                    show_inline_move = st.toggle("Move trap", key=f"show_inline_move_{trap_id}")
-                    if show_inline_move:
-                        active_destinations = data["Sites"][
-                            (data["Sites"]["Status"] == "Active")
-                            & (data["Sites"]["Site ID"] != existing["Site ID"])
-                        ]["Site ID"].tolist()
-                        if not active_destinations:
-                            st.caption("No other active sites are available.")
-                        else:
-                            destination = st.selectbox(
-                                "Destination site",
-                                active_destinations,
-                                format_func=lambda x: site_name(data, x),
-                                key=f"move_destination_{trap_id}",
-                            )
-                            move_order = st.number_input(
-                                "Route reference",
-                                min_value=1,
-                                step=1,
-                                value=int(float(existing["Route Order"])) if str(existing["Route Order"]).strip() else 1,
-                                key=f"move_order_{trap_id}",
-                            )
-                            move_location = st.text_input(
-                                "Location at destination",
-                                value="",
-                                key=f"move_location_{trap_id}",
-                            )
-                            move_camera = st.text_input(
-                                "Camera ID at destination",
-                                value=existing["Camera ID"],
-                                key=f"move_camera_{trap_id}",
-                            )
-                            move_date = st.date_input("Effective date", value=now().date(), key=f"move_date_{trap_id}")
-                            move_time = st.time_input("Effective time", value=now().time(), key=f"move_time_{trap_id}")
-                            move_reason = st.text_area("Reason for move", key=f"move_reason_{trap_id}")
-                            confirm_move = st.checkbox(
-                                f"Move {trap_id} from {site_name(data, existing['Site ID'])} and start a new window",
-                                key=f"confirm_move_{trap_id}",
-                            )
-                            if st.button("Move trap", type="primary", key=f"move_trap_{trap_id}", disabled=not confirm_move):
-                                if not move_reason.strip():
-                                    st.error("Enter a reason for the move.")
-                                elif not move_location.strip():
-                                    st.error("Enter the trap location at the destination.")
-                                else:
-                                    try:
-                                        effective = datetime.combine(move_date, move_time).replace(microsecond=0)
-                                        move_trap(data, trap_id, destination, effective, move_reason.strip(), move_order, move_location.strip(), move_camera.strip())
-                                        set_flash("success", f"{trap_id} moved.", [f"New site: {site_name(data, destination)}.", "Historical windows remain on the previous site."])
-                                        st.session_state.pop("setup_mode", None)
-                                        st.session_state.pop("setup_trap", None)
-                                        st.rerun()
-                                    except Exception as exc:
-                                        st.error(str(exc))
-
-                    with st.expander("Change build"):
-                        available_builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
-                        available_builds["Label"] = available_builds["Product"].astype(str) + " · " + available_builds["Build Version"].astype(str)
-                        current_label = f"{existing['Product']} · {existing['Build Version']}"
-                        build_choices = [x for x in available_builds["Label"].tolist() if x != current_label]
-                        if not build_choices:
-                            st.caption("No other available builds.")
-                        else:
-                            new_label = st.selectbox("New build", build_choices, key=f"change_build_{trap_id}")
-                            build_date = st.date_input("Effective date", value=now().date(), key=f"build_change_date_{trap_id}")
-                            build_time = st.time_input("Effective time", value=now().time(), key=f"build_change_time_{trap_id}")
-                            build_reason = st.text_area("Reason for build change", key=f"build_change_reason_{trap_id}")
-                            confirm_build = st.checkbox(
-                                "Close the current window and start a new one on this build",
-                                key=f"confirm_build_change_{trap_id}",
-                            )
-                            if st.button("Change build", type="primary", key=f"commit_build_change_{trap_id}", disabled=not confirm_build):
-                                if not build_reason.strip():
-                                    st.error("Enter a reason for the build change.")
-                                else:
-                                    selected = available_builds[available_builds["Label"] == new_label].iloc[0]
-                                    effective = datetime.combine(build_date, build_time).replace(microsecond=0)
-                                    try:
-                                        change_trap_build(data, trap_id, str(selected["Product"]), str(selected["Build Version"]), effective, build_reason.strip())
-                                        set_flash("success", f"{trap_id} build changed.", [f"New build: {new_label}.", "Previous windows retain the previous build."])
-                                        st.session_state.pop("setup_mode", None)
-                                        st.session_state.pop("setup_trap", None)
-                                        st.rerun()
-                                    except Exception as exc:
-                                        st.error(str(exc))
-
-                    st.divider()
-                    if trap_can_be_deleted(data, trap_id):
-                        st.caption("This trap has no field history and can be deleted.")
-                        confirm_delete=st.checkbox(f"Delete {trap_id}", key=f"confirm_delete_{trap_id}")
-                        if st.button("Delete unused trap", key=f"delete_unused_{trap_id}", disabled=not confirm_delete):
-                            delete_unused_trap(data,trap_id)
-                            set_flash("success", f"{trap_id} deleted.", ["The unused trap and its untouched test window were removed."])
-                            st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
-                    else:
-                        st.caption("This trap has trial history, so it cannot be deleted. Set its status to Inactive instead.")
-                if st.button("Cancel",key="cancel_trap_panel"): st.session_state.pop("setup_mode",None); st.session_state.pop("setup_trap",None); st.rerun()
-    elif section == "Trap sites":
-        mode = st.session_state.get("site_mode")
-        if mode in ["edit", "add"]:
-            list_col, panel = st.columns([1.65, 1], gap="large")
-        else:
-            list_col, panel = st.container(), None
-        with list_col:
-            spacer, action_col = st.columns([4, 1], vertical_alignment="bottom")
-            if action_col.button("Add site", type="primary"):
-                st.session_state.setup_site=""; st.session_state.site_mode="add"; st.rerun()
-            for _, site_row in data["Sites"].sort_values("Site Name").iterrows():
-                sid = site_row["Site ID"]
-                trap_count = len(data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")])
-                with app_card():
-                    coverage_text = (
-                        "Mobile coverage confirmed"
-                        if site_row.get("Mobile Coverage Confirmed", "") == "Yes"
-                        else "Mobile coverage not confirmed"
-                    )
-                    render_compact_card_content(
-                        title=str(site_row["Site Name"]),
-                        right_label=str(site_row["Status"]),
-                        right_label_kind="success" if site_row["Status"] == "Active" else "none",
-                        main_line=f"{sid} · {trap_count} active trap{'s' if trap_count != 1 else ''}",
-                        meta_line=f"Every {site_row['Visit Interval Days']} days · {coverage_text}",
-                    )
-                    if st.button("Edit", key=f"setup_edit_site_{sid}"):
-                        st.session_state.setup_site=sid; st.session_state.site_mode="edit"; st.rerun()
-        if panel is not None:
-            with panel:
-                scroll_panel_anchor()
-                ex=data["Sites"][data["Sites"]["Site ID"]==st.session_state.get("setup_site","")].iloc[0] if mode=="edit" else None
-                st.subheader("Edit site" if mode=="edit" else "Add site")
-                with st.form("site_setup_panel"):
-                    sid=st.text_input("Site ID",value=ex["Site ID"] if ex is not None else "",disabled=mode=="edit")
-                    name=st.text_input("Site name",value=ex["Site Name"] if ex is not None else "")
-                    interval=3
-                    st.number_input("Visit interval days",min_value=3,max_value=3,step=1,value=3,disabled=True,help="Three days is the planned cadence, not a validity limit. Earlier or later checks remain valid and use their actual timestamps.")
-                    coverage=st.selectbox("Mobile coverage confirmed",["Yes","No"],index=0 if ex is not None and ex.get("Mobile Coverage Confirmed","")=="Yes" else 1,help="Only activate sites with reliable mobile data coverage across the site.")
-                    status=st.selectbox("Status",["Active","Inactive"],index=0 if ex is None or ex["Status"]=="Active" else 1)
-                    notes=st.text_area("Notes",value=ex["Notes"] if ex is not None else "")
-                    save=st.form_submit_button("Save site changes" if mode=="edit" else "Add site",type="primary")
-                if save:
-                    sid=normalise_site_code(sid)
-                    code_error=validate_site_code(sid)
-                    if code_error:
-                        st.error(code_error); st.stop()
-                    if not name.strip():
-                        st.error("Site name is required."); st.stop()
-                    if mode=="add" and sid in data["Sites"]["Site ID"].astype(str).str.upper().tolist():
-                        st.error("That site code already exists."); st.stop()
-                    if status=="Active" and coverage!="Yes":
-                        st.error("Confirm reliable mobile coverage before activating this site."); st.stop()
-                    active_traps_at_site = len(data["Traps"][
-                        (data["Traps"]["Site ID"] == sid)
-                        & (data["Traps"]["Status"] == "Active")
-                    ])
-                    if mode=="edit" and status=="Inactive" and active_traps_at_site:
-                        st.error(f"Move or deactivate the {active_traps_at_site} active trap{'s' if active_traps_at_site != 1 else ''} at this site before making it inactive.")
-                        st.stop()
-                    row=[sid,name.strip(),str(interval),coverage,status,notes]
-                    if mode=="edit":
-                        idx=data["Sites"].index[data["Sites"]["Site ID"]==sid][0]
-                        data["Sites"].loc[idx,SHEETS["Sites"]]=row
-                    else:
-                        data["Sites"]=pd.concat([data["Sites"],pd.DataFrame([row],columns=SHEETS["Sites"])],ignore_index=True)
-                    save_data(data); set_flash("success", f"{name.strip()} saved.", ["Site settings were updated."]); st.session_state.pop("site_mode",None); st.rerun()
-
-                if mode=="edit":
-                    st.divider()
-                    with st.expander("Rename site code"):
-                        st.warning("This changes the site code across all linked records. Trap IDs, bag IDs and existing record IDs will not be renamed.")
-                        st.caption(f"Current site code: {ex['Site ID']}")
-                        affected_counts=site_code_link_counts(data, ex["Site ID"])
-                        st.markdown("**This rename will update**")
-                        preview_cols=st.columns(3)
-                        preview_items=[
-                            ("Traps",affected_counts.get("Traps",0)),
-                            ("Visits",affected_counts.get("Visits",0)),
-                            ("Test windows",affected_counts.get("Windows",0)),
-                            ("Follow-up tasks",affected_counts.get("Followups",0)),
-                            ("Photos",affected_counts.get("Photos",0)),
-                        ]
-                        for position,(label,count) in enumerate(preview_items):
-                            preview_cols[position % 3].metric(label,count)
-
-                        new_site_code=st.text_input(
-                            "New site code",
-                            value="",
-                            placeholder="e.g. MGF",
-                            key=f"rename_site_code_{ex['Site ID']}",
-                        )
-                        rename_reason=st.text_area(
-                            "Reason for rename",
-                            placeholder="Why is the site code changing?",
-                            key=f"rename_site_reason_{ex['Site ID']}",
-                        )
-                        confirm_rename=st.checkbox(
-                            "I understand this updates every linked Site ID reference and moves linked evidence files",
-                            key=f"confirm_site_rename_{ex['Site ID']}",
-                        )
-                        if st.button("Rename site code", type="primary", key=f"rename_site_button_{ex['Site ID']}"):
-                            if not rename_reason.strip():
-                                st.error("Enter a reason for the rename.")
-                            elif not confirm_rename:
-                                st.error("Confirm that you understand the linked records and evidence files will be updated.")
-                            else:
-                                try:
-                                    renamed_data, counts, moved_files=commit_site_code_rename(
-                                        data, ex["Site ID"], new_site_code, rename_reason
-                                    )
-                                    new_code=normalise_site_code(new_site_code)
-                                    if st.session_state.get("site_id")==ex["Site ID"]:
-                                        st.session_state.site_id=new_code
-                                    st.session_state.setup_site=new_code
-                                    total_links=sum(count for name,count in counts.items() if name!="Sites")
-                                    set_flash(
-                                        "success",
-                                        f"Site code changed from {ex['Site ID']} to {new_code}.",
-                                        [
-                                            f"{total_links} linked record{'s' if total_links != 1 else ''} updated.",
-                                            f"{moved_files} evidence file{'s' if moved_files != 1 else ''} moved.",
-                                            "Trap IDs, bag IDs and existing record IDs were left unchanged.",
-                                            "A unique workbook backup and audit-log entry were created.",
-                                        ],
-                                    )
-                                    st.rerun()
-                                except Exception as exc:
-                                    st.error(f"Site code was not changed: {exc}")
-
-                    if ex["Status"] == "Inactive":
-                        with st.expander("Permanently remove this site"):
-                            st.warning("This permanently deletes every record tied to this site - traps, visits, test windows, checks, follow-up tasks and photos. This cannot be undone.")
-                            removal_counts = site_code_link_counts(data, ex["Site ID"])
-                            removal_trap_ids = data["Traps"][
-                                data["Traps"]["Site ID"].astype(str).str.upper() == normalise_site_code(ex["Site ID"])
-                            ]["Trap ID"].astype(str)
-                            removal_counts["Checks"] = (
-                                int(data["Checks"]["Trap ID"].astype(str).isin(removal_trap_ids).sum())
-                                if not data["Checks"].empty else 0
-                            )
-                            st.markdown("**This will permanently remove**")
-                            removal_preview_cols = st.columns(3)
-                            removal_preview_items = [
-                                ("Traps", removal_counts.get("Traps", 0)),
-                                ("Visits", removal_counts.get("Visits", 0)),
-                                ("Test windows", removal_counts.get("Windows", 0)),
-                                ("Checks", removal_counts.get("Checks", 0)),
-                                ("Follow-up tasks", removal_counts.get("Followups", 0)),
-                                ("Photos", removal_counts.get("Photos", 0)),
-                            ]
-                            for position, (label, count) in enumerate(removal_preview_items):
-                                removal_preview_cols[position % 3].metric(label, count)
-
-                            removal_reason = st.text_area(
-                                "Reason for removal",
-                                placeholder="Why is this site being permanently removed?",
-                                key=f"remove_site_reason_{ex['Site ID']}",
-                            )
-                            removal_confirm_name = st.text_input(
-                                f"Type the site name ({ex['Site Name']}) to confirm",
-                                key=f"remove_site_confirm_name_{ex['Site ID']}",
-                            )
-                            confirm_removal = st.checkbox(
-                                "I understand this permanently deletes real trial history and cannot be undone",
-                                key=f"confirm_site_removal_{ex['Site ID']}",
-                            )
-                            removal_ready = confirm_removal and removal_confirm_name.strip() == str(ex["Site Name"]).strip()
-                            if st.button(
-                                "Permanently remove site",
-                                type="primary",
-                                key=f"remove_site_button_{ex['Site ID']}",
-                                disabled=not removal_ready,
-                            ):
-                                if not removal_reason.strip():
-                                    st.error("Enter a reason for removing this site.")
-                                else:
-                                    try:
-                                        removed_counts = permanently_remove_site(data, ex["Site ID"], removal_reason)
-                                        total_removed = sum(removed_counts.values())
-                                        site_name_removed = ex["Site Name"]
-                                        st.session_state.pop("setup_site", None)
-                                        st.session_state.pop("site_mode", None)
-                                        set_flash(
-                                            "success",
-                                            f"{site_name_removed} permanently removed.",
-                                            [
-                                                f"{total_removed} linked record{'s' if total_removed != 1 else ''} deleted.",
-                                                "A workbook backup and audit-log entry were created before removal.",
-                                            ],
-                                        )
-                                        st.rerun()
-                                    except Exception as exc:
-                                        st.error(f"Site was not removed: {exc}")
-
-                if st.button("Cancel",key="cancel_site_panel"): st.session_state.pop("site_mode",None); st.rerun()
-    else:
-        mode = st.session_state.get("build_mode")
-        if mode in ["edit", "add"]:
-            list_col, panel = st.columns([1.65, 1], gap="large")
-        else:
-            list_col, panel = st.container(), None
-        with list_col:
-            spacer, action_col = st.columns([4, 1], vertical_alignment="bottom")
-            if action_col.button("Add build", type="primary"):
-                st.session_state.setup_build=""; st.session_state.build_mode="add"; st.rerun()
-            for _, build_row in data["Builds"].sort_values(["Product", "First Active Date"], ascending=[True, False]).iterrows():
-                product_code = str(build_row["Product"])
-                version = str(build_row["Build Version"])
-                build_identity = f"{product_code}::{version}"
-                active_traps = len(data["Traps"][
-                    (data["Traps"]["Product"].astype(str) == product_code)
-                    & (data["Traps"]["Build Version"].astype(str) == version)
-                    & (data["Traps"]["Status"] == "Active")
-                ])
-                with app_card():
-                    first_active = parse_dt(build_row["First Active Date"])
-                    first_active_text = first_active.strftime("%d %b %Y") if first_active else "—"
-                    notes_raw = str(build_row["Notes"] or "No notes")
-                    source_prefix = "Built from "
-                    source_text = notes_raw[len(source_prefix):].rstrip(".") if notes_raw.startswith(source_prefix) else notes_raw
-                    render_compact_card_content(
-                        title=f"{product_code} Build {version}",
-                        right_label=str(build_row["Build Status"]),
-                        right_label_kind="success" if build_row["Build Status"] == "Current" else "none",
-                        main_line=f"{active_traps} active trap{'s' if active_traps != 1 else ''}",
-                        meta_line=f"First active: {first_active_text} · Source: {source_text}",
-                    )
-                    if st.button("Edit", key=f"setup_edit_build_{product_code}_{version}"):
-                        st.session_state.setup_build=build_identity
-                        st.session_state.build_mode="edit"
-                        st.rerun()
-        if panel is not None:
-            with panel:
-                scroll_panel_anchor()
-                if mode=="edit":
-                    selected_build_identity=st.session_state.get("setup_build","")
-                    selected_product, selected_version = selected_build_identity.split("::", 1)
-                    matching_builds=data["Builds"][
-                        (data["Builds"]["Product"].astype(str)==selected_product)
-                        & (data["Builds"]["Build Version"].astype(str)==selected_version)
-                    ]
-                    ex=matching_builds.iloc[0]
-                else:
-                    ex=None
-                st.subheader("Edit build" if mode=="edit" else "Add build")
-                with st.form(f"build_setup_panel_{mode}_{st.session_state.get('setup_build', 'new')}"):
-                    product=st.selectbox("Trap type",["R1","M1"],index=0 if ex is None or ex["Product"]=="R1" else 1)
-                    version=st.text_input("Build version",value=ex["Build Version"] if ex is not None else "",disabled=mode=="edit")
-                    status=st.selectbox("Build status",["Current","Trial comparison","Superseded","Withdrawn"],index=(["Current","Trial comparison","Superseded","Withdrawn"].index(ex["Build Status"]) if ex is not None and ex["Build Status"] in ["Current","Trial comparison","Superseded","Withdrawn"] else 0))
-                    first=parse_dt(ex["First Active Date"]) if ex is not None else now(); first_date=st.date_input("First active date",value=first.date() if first else now().date())
-                    notes=st.text_area("Notes",value=ex["Notes"] if ex is not None else "")
-                    save=st.form_submit_button("Save build changes" if mode=="edit" else "Add build",type="primary")
-                if save:
-                    version=version.strip()
-                    duplicate=((data["Builds"]["Product"].astype(str)==str(product)) & (data["Builds"]["Build Version"].astype(str).str.casefold()==version.casefold()))
-                    if not version:
-                        st.error("Build version is required.")
-                    elif mode=="add" and duplicate.any():
-                        st.error("That build version already exists for this trap type.")
-                    else:
-                        row=[product,version,status,first_date.strftime("%Y-%m-%d"),notes]
-                        if mode=="edit":
-                            idx=data["Builds"].index[(data["Builds"]["Product"]==ex["Product"]) & (data["Builds"]["Build Version"]==ex["Build Version"])][0]
-                            data["Builds"].loc[idx,SHEETS["Builds"]]=row
-                        else:
-                            data["Builds"]=pd.concat([data["Builds"],pd.DataFrame([row],columns=SHEETS["Builds"])],ignore_index=True)
-                        save_data(data)
-                        set_flash("success", f"{version} saved.", ["It is now available when adding a trap unless marked Withdrawn."])
-                        st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
-                if mode=="edit":
-                    used_by_traps = (
-                        (data["Traps"]["Product"].astype(str) == str(ex["Product"]))
-                        & (data["Traps"]["Build Version"].astype(str) == str(ex["Build Version"]))
-                    ).any()
-                    used_by_windows = (
-                        (data["Windows"]["Product"].astype(str) == str(ex["Product"]))
-                        & (data["Windows"]["Build Version"].astype(str) == str(ex["Build Version"]))
-                    ).any()
-                    if not used_by_traps and not used_by_windows:
-                        st.divider()
-                        st.caption("This build is unused and can be removed.")
-                        build_remove_reason = st.text_area(
-                            "Removal reason",
-                            key=f"remove_build_reason_{selected_product}_{selected_version}",
-                        )
-                        confirm_build_remove = st.checkbox(
-                            f"Remove {selected_product} · {selected_version}",
-                            key=f"confirm_remove_build_{selected_product}_{selected_version}",
-                        )
-                        if st.button(
-                            "Remove unused build",
-                            disabled=not confirm_build_remove,
-                            key=f"remove_unused_build_{selected_product}_{selected_version}",
-                        ):
-                            try:
-                                remove_unused_build(data, selected_product, selected_version, build_remove_reason)
-                                set_flash("success", f"{selected_product} · {selected_version} removed.")
-                                st.session_state.pop("build_mode", None)
-                                st.session_state.pop("setup_build", None)
-                                st.rerun()
-                            except Exception as exc:
-                                st.error(str(exc))
-                if st.button("Cancel",key="cancel_build_panel"): st.session_state.pop("build_mode",None); st.session_state.pop("setup_build",None); st.rerun()
+elif page in SETUP_PAGES_SITE:
+    render_site_action(data, page)
 elif page == "data_management":
     header("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
     active_data_section = st.radio(

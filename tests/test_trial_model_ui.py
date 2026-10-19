@@ -94,7 +94,7 @@ def _open_trap_setup(page: Page, url: str) -> None:
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Administration", exact=False).click()
     page.get_by_role("link", name="Trial setup", exact=True).click()
-    expect(page.get_by_text("What do you need to manage?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("heading", name="Trial setup", exact=True)).to_be_visible(timeout=30_000)
 
 
 # A site with no trial and one trap that was staged but never activated (blank
@@ -122,7 +122,7 @@ def test_add_trap_creates_an_inactive_trap_with_no_deployment_date_and_no_window
         expect(page.get_by_role("heading", name="Add trap")).to_be_visible(timeout=15_000)
 
         # No way to ask for an Active trap or a deployment date when adding.
-        expect(page.get_by_text("New traps start Inactive. Activate the trap when a trial starts.", exact=True)).to_be_visible()
+        expect(page.get_by_text("New traps start Inactive. Activate them when a trial starts.", exact=True)).to_be_visible()
         assert page.get_by_text("Deployment start date", exact=True).count() == 0
         assert page.get_by_text("Deployment start time", exact=True).count() == 0
         assert page.get_by_label("Status", exact=True).count() == 0
@@ -154,8 +154,9 @@ def test_editing_a_never_activated_trap_keeps_its_deployment_start_blank(page: P
 
         for trap_id, new_location in (("TEST-STAGED-1", "Fixed location"), (other["Trap ID"], "Other fixed location")):
             page.locator(f".st-key-setup_edit_trap_{trap_id} button").click()
-            expect(page.get_by_role("heading", name=f"Edit {trap_id}")).to_be_visible(timeout=20_000)
+            expect(page.get_by_role("heading", name=trap_id, exact=True)).to_be_visible(timeout=20_000)
             page.get_by_label("Location description").fill(new_location)
+            page.wait_for_timeout(800)
             page.get_by_role("button", name="Save changes", exact=True).click()
             expect(page.get_by_text(f"{trap_id} updated.", exact=True)).to_be_visible(timeout=20_000)
 
@@ -172,15 +173,12 @@ def test_bulk_activate_at_a_site_with_no_trial_says_so_up_front(page: Page, tmp_
     with _serve(data_dir, _SEED_STAGED) as url:
         _open_trap_setup(page, url)
         site_name = str(_sheet(data_dir, "Sites").iloc[0]["Site Name"])
-        site_box = page.get_by_label("Show traps from")
-        site_box.click()
-        page.get_by_role("option", name=site_name, exact=True).click()
-        expander = page.get_by_text("Bulk activate traps (1 inactive)", exact=True)
-        expect(expander).to_be_visible(timeout=15_000)
-        expander.click()
-        expect(
-            page.get_by_text(f"No trial is running at {site_name}. Start a trial first. Every active trap belongs to a trial.", exact=True)
-        ).to_be_visible(timeout=15_000)
+        page.get_by_role("radio", name=site_name, exact=True).click()
+        page.wait_for_timeout(1_200)
+        page.get_by_role("button", name="Bulk activate", exact=True).click()
+        expect(page.get_by_role("heading", name="Bulk activate traps", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text(f"No trial is running at {site_name}", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("Start a trial first. Every active trap belongs to a trial.", exact=True)).to_be_visible()
         # Nothing to select or preview while the site has no trial.
         assert page.get_by_role("button", name="Preview activation", exact=True).count() == 0
         expect(page.get_by_role("button", name="Start a trial", exact=True)).to_be_visible()
@@ -263,7 +261,7 @@ _SEED_BLOCKED_STATES = """
 def _open_trap_edit(page: Page, url: str, trap_id: str) -> None:
     _open_trap_setup(page, url)
     page.locator(f".st-key-setup_edit_trap_{trap_id} button").click()
-    expect(page.get_by_role("heading", name=f"Edit {trap_id}")).to_be_visible(timeout=20_000)
+    expect(page.get_by_role("heading", name=trap_id, exact=True)).to_be_visible(timeout=20_000)
 
 
 def _tick(page: Page, label: str) -> None:
@@ -274,46 +272,26 @@ def _tick(page: Page, label: str) -> None:
 
 
 def test_blocked_actions_show_the_exact_message_and_change_nothing(page: Page, tmp_path: Path) -> None:
-    """Every refusal reaches the operator as a plain error (ValueError -> st.error)
-    and leaves the workbook as it was."""
+    """Every refusal reaches the operator as an error panel or a line that says why, and leaves the workbook as it was."""
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     with _serve(data_dir, _SEED_BLOCKED_STATES) as url:
         before = {name: _sheet(data_dir, name) for name in ("Traps", "Windows", "Trials")}
 
-        # An Active trap inside the open trial: build cannot change, and it cannot move.
+        # An Active trap inside the open trial: its page says why the build cannot change and why it cannot move, and offers the way on.
         _open_trap_edit(page, url, "R1-MAN-001")
-        page.locator("summary", has_text="Change build").click()
-        page.get_by_label("Reason for build change").fill("try it")
-        _tick(page, "Close the current window and start a new window on this build")
-        page.get_by_role("button", name="Change build", exact=True).click()
-        expect(page.get_by_text("A build can't change inside a trial. Changing a build starts a new trial.", exact=False)).to_be_visible(timeout=20_000)
-        expect(page.get_by_text("End TRIAL-MAN-01, then start a new trial with the builds you want", exact=False)).to_be_visible()
+        expect(page.get_by_text("Builds can't change inside a trial. End the trial at", exact=False)).to_be_visible(timeout=20_000)
+        expect(page.get_by_text("Deactivate the trap first. An Active trap can't move.", exact=False)).to_be_visible()
         expect(page.get_by_role("button", name="Go to trial", exact=True)).to_be_visible()
+        assert page.get_by_role("button", name="Change build", exact=True).count() == 0 and page.get_by_role("button", name="Move", exact=True).count() == 0
 
-        toggle = page.get_by_role("switch", name="Move trap")
-        toggle.focus()
-        page.keyboard.press("Space")
-        expect(toggle).to_be_checked(timeout=10_000)
-        page.get_by_label("Reason for move").fill("try it")
-        _tick(page, "Move this trap to the destination site (a trap that is Inactive has no window, so none is opened)")
-        page.get_by_role("button", name="Move trap", exact=True).click()
-        expect(page.get_by_text("Deactivate this trap before moving it. Leaving a trial ends its part in it.", exact=False)).to_be_visible(timeout=20_000)
-
-        # An Inactive trap at a site with no trial: activation is refused.
+        # An Inactive trap at a site with no trial: activation is refused, in the rule's own words, with a way to start one.
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         _open_trap_edit(page, url, "TEST-STAGED-2")
-        expect(page.get_by_text("Allowed while the trap is Inactive", exact=False)).to_be_hidden()  # only inside the open Change build expander
-        page.locator("summary", has_text="Activate trap").click()
-        page.get_by_label("Reason for activation").fill("try it")
-        _tick(page, "Start a new monitoring window and set this trap to Active")
-        page.get_by_role("button", name="Activate trap", exact=True).click()
-        expect(page.get_by_text("Start a trial first. Every active trap belongs to a trial.", exact=False)).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Activate", exact=True).click()
+        expect(page.get_by_role("heading", name="Activate TEST-STAGED-2", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_text("A trap can only start a test window inside a trial. Start one first.", exact=True)).to_be_visible(timeout=20_000)
         expect(page.get_by_role("button", name="Start a trial", exact=True)).to_be_visible()
-
-        # The staged-build caption shows on an Inactive trap.
-        page.locator("summary", has_text="Change build").click()
-        expect(page.get_by_text("Allowed while the trap is Inactive — this is how builds are staged before a trial. No monitoring window is opened.", exact=True)).to_be_visible(timeout=10_000)
 
     for name, frame in before.items():
         pd.testing.assert_frame_equal(_sheet(data_dir, name), frame, obj=f"{name} after refused actions")

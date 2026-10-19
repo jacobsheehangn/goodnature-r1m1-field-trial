@@ -75,7 +75,7 @@ required = {
     "Traps page title": 'header("Traps",',
     "Follow-ups page title": 'r1_title("Follow-ups",',  # Phase 7b (7/8): the list's title is the 7a title helper, as on the other restyled screens
     "Trial performance page title": 'r1_title("Trial performance",',  # Phase 7b (8/8): the same one-token edit as Follow-ups (owner-approved in advance)
-    "Trial setup page title": 'header("Trial setup",',
+    "Trial setup page title": 'admin_title("Trial setup",',
     "Data and records page title": 'header("Data & records",',
     "Trial periods page title": 'header("Trial periods",',
     "Grouped trap-history day heading": 'class="trap-history-day"',
