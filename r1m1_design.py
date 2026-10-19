@@ -258,6 +258,9 @@ COMPONENT_CSS = f"""
 [class*="st-key-pair_"] [data-testid="stTimeInput"] svg[data-baseweb="icon"]{{display:none}}
 [class*="st-key-pair_"] [data-testid="stDateInput"] input{{font-size:15px;padding-right:38px}}
 [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div{{font-size:15px}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input::placeholder{{color:var(--ink-50);opacity:1}}
+/* The time's "HH:mm" hint sits under the field's own (white) input and lost its first letter; the input is made see-through. */
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] input,[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div:has(>input){{background:transparent!important}}
 /* A date or time the Save refused: the same red ring as every other field (this rule is as specific as the pair's own, and comes after it). */
 [class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],
 [class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
