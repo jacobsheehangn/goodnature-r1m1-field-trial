@@ -4927,9 +4927,10 @@ def r1_short_build(label: str) -> str:
     return version
 
 
-def r1_screen_css(hide_nav: bool = False) -> None:
-    """Journey screens that hide the top navigation also read as one narrow column."""
-    st.markdown(design.SCREEN_CSS + ((design.HIDE_TOP_NAV_CSS + design.NARROW_CSS) if hide_nav else ""), unsafe_allow_html=True)
+def r1_screen_css(hide_nav: bool = False, narrow: bool = False) -> None:
+    """Journey screens that hide the top navigation also read as one narrow column. `narrow` is the 760px single column without hiding the
+    navigation (the Follow-ups list)."""
+    st.markdown(design.SCREEN_CSS + ((design.HIDE_TOP_NAV_CSS + design.NARROW_CSS) if hide_nav else (design.NARROW_CSS if narrow else "")), unsafe_allow_html=True)
 
 
 def r1_stepper(current: int) -> None:
@@ -5336,8 +5337,7 @@ def trap_service_errors(*, ready, notes, restart_error) -> list:
 def task_frame(data, item, title: str, context):
     """The frame of a task page: the back pill (to End trial when the task was opened from there), the title and the context card. The navigation stays
     (a follow-up task is a page, not a flow); the form is one 760px column on desktop."""
-    r1_screen_css()
-    st.markdown(design.NARROW_CSS, unsafe_allow_html=True)
+    r1_screen_css(narrow=True)
     with st.container(key=design.SCREEN_KEY):
         from_end_trial = bool(st.session_state.get("return_to"))
         if st.button("Back to End trial" if from_end_trial else "Back to task list", key="back_followup_list"):
@@ -6952,8 +6952,13 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
    @media (max-width:700px) card-padding rule below — mobile must render
    identically to before this change. */
 @media (min-width: 701px) {
+  /* 14 Oct 2026 (owner): desktop pages use up to 1160px of content, as every approved desktop board does (1280 less 60px of padding each
+     side). The 1020px cap above is gone. Single-column screens keep a 760px cap of their own (NARROW_CSS, left-aligned); the multi-column
+     screens (Trap sites grid, trial hub, Visit complete, Trial performance) use the full width. Phone is unchanged. */
   body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
-    max-width: 1020px !important;
+    max-width: 1280px !important;
+    padding-left: 60px !important;
+    padding-right: 60px !important;
     margin-left: auto !important;
     margin-right: auto !important;
   }
@@ -7394,9 +7399,11 @@ def _admin_menu_items(current: str, suffix: str) -> None:
 def _operator_box(suffix: str) -> None:
     # UX-audit fix (2026-08-13): the only place in the live app that sets the operator name attributed to a visit/check.
     # Reachable from every page that shows the navigation, same as Sign out.
-    st.text_input("Operator", value=st.session_state.field_operator, key=f"top_nav_operator_{suffix}",
-                  help="Attributed to every visit and check you record until changed.",
+    # The heading is the menu's own group heading and the help a visible line (not a "?" tooltip); the field keeps its label for screen readers.
+    st.markdown('<div class="r1-menu-group">Operator</div>', unsafe_allow_html=True)
+    st.text_input("Operator", value=st.session_state.field_operator, key=f"top_nav_operator_{suffix}", label_visibility="collapsed",
                   on_change=_mirror_operator, args=(f"top_nav_operator_{suffix}",))
+    st.markdown('<div class="r1-menu-help">Attributed to every visit and check you record until changed.</div>', unsafe_allow_html=True)
 
 
 def draw_top_navigation(current: str) -> None:
@@ -7499,37 +7506,50 @@ if page == "sites":
                            "stat_value": stat_value, "stat_label": stat_label,
                            "due_now": active is None and (urgency_text.startswith("Overdue") or urgency_text == "Due today") and not no_trial_no_traps})
     due_count = sum(1 for c in site_cards if c["due_now"])
+    untracked_count = sum(1 for c in site_cards if c["untracked"])
     with st.container(key=design.SCREEN_KEY):
-        r1_title("Trap sites", stat_value=due_count or None, stat_label="Due today")
+        # "Due now": due_now counts sites due today or overdue and not started, so "Due today" was wrong when the only site due was weeks late.
+        r1_title("Trap sites", stat_value=due_count or None, stat_label="Due now")
         if not site_cards:
             st.markdown('<div class="r1-meta">No active trap sites are available. Reactivate a site in Administration → Trial setup.</div>', unsafe_allow_html=True)
-        for c in site_cards:
-            sid = c["sid"]
-            with st.container(key=f"card_site_{sid}"):
-                status = f'<div class="r1-status {c["status_class"]}">{html.escape(c["status_text"])}</div>' if c["status_text"] else ""
-                stat = (f'<div><div class="r1-stat">{html.escape(c["stat_value"])}</div><div class="r1-stat-label">{c["stat_label"]}</div></div>' if c["stat_value"] else "")
-                st.markdown(f'<div class="r1-titlerow"><div><div class="r1-card-title">{html.escape(c["name"])}</div>{status}</div>{stat}</div>', unsafe_allow_html=True)
-                if c["untracked"]:
-                    # Field work never waits on a migration: Start checking still works at an untracked site.
-                    st.markdown(design.message_html("warn", "", "Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial."), unsafe_allow_html=True)
-                if c["no_trial_no_traps"]:
-                    st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
-                else:
-                    if c["active"] is not None:
-                        st.button(
-                            "Resume checking", key=f"resume_{sid}", type="primary",
-                            on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": c["active"]["Visit ID"]},
-                        )
-                    else:
-                        # A site already checked today still offers a new visit, but not as the page's loudest button: secondary.
-                        st.button(
-                            "Start checking", key=f"open_{sid}", type="secondary" if c["status_class"] == "done" else "primary",
-                            on_click=start_checking_callback, args=(sid,),
-                        )
-                    if c["site_trial"] is not None:
-                        st.button("Trial overview", key=f"trial_overview_{sid}", type="tertiary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
-                    else:
-                        st.button("Track as a trial", key=f"track_{sid}", type="tertiary", on_click=begin_trial_adopt, args=(sid,))
+        if untracked_count:
+            # Said once for the page (each card carries a "Not tracked" tag), not repeated in every card. Field work never waits on a
+            # migration: Start checking still works at an untracked site. The count is from the flags the cards already hold.
+            if untracked_count == 1:
+                st.markdown(design.message_html("warn", "1 site isn't tracked as a trial yet", "Checks are recorded, but its results aren't tied to a trial. Use Track as a trial on that site."), unsafe_allow_html=True)
+            else:
+                st.markdown(design.message_html("warn", f"{untracked_count} sites aren't tracked as trials yet", "Checks are recorded, but their results aren't tied to a trial. Use Track as a trial on each site."), unsafe_allow_html=True)
+        # Over 700px the cards sit in a two-column grid; on a phone they stack, as before.
+        with st.container(key="grid_sites"):
+            for c in site_cards:
+                sid = c["sid"]
+                with st.container(key=f"card_site_{sid}"):
+                    status = f'<div class="r1-status {c["status_class"]}">{html.escape(c["status_text"])}</div>' if c["status_text"] else ""
+                    tag = '<span class="r1-tag">Not tracked</span>' if c["untracked"] else ""
+                    # Without a tag the status is drawn exactly as before (so a phone card keeps its measured height); with one, the two share a line.
+                    status_row = f'<div class="r1-statusrow">{status}{tag}</div>' if tag else status
+                    stat = (f'<div><div class="r1-stat">{html.escape(c["stat_value"])}</div><div class="r1-stat-label">{c["stat_label"]}</div></div>' if c["stat_value"] else "")
+                    st.markdown(f'<div class="r1-titlerow"><div><div class="r1-card-title">{html.escape(c["name"])}</div>{status_row}</div>{stat}</div>', unsafe_allow_html=True)
+                    # The two actions share a row on desktop (side by side) and stack on a phone, full width and centred, as approved in 7b.
+                    with st.container(key=f"acts_site_{sid}"):
+                        if c["no_trial_no_traps"]:
+                            st.button("Start trial", key=f"start_trial_{sid}", type="primary", on_click=begin_trial_start, args=(sid,))
+                        else:
+                            if c["active"] is not None:
+                                st.button(
+                                    "Resume checking", key=f"resume_{sid}", type="primary",
+                                    on_click=set_page, args=("visit",), kwargs={"site_id": sid, "visit_id": c["active"]["Visit ID"]},
+                                )
+                            else:
+                                # A site already checked today still offers a new visit, but not as the page's loudest button: secondary.
+                                st.button(
+                                    "Start checking", key=f"open_{sid}", type="secondary" if c["status_class"] == "done" else "primary",
+                                    on_click=start_checking_callback, args=(sid,),
+                                )
+                            if c["site_trial"] is not None:
+                                st.button("Trial overview", key=f"trial_overview_{sid}", type="tertiary", on_click=set_page, args=("trial",), kwargs={"site_id": sid})
+                            else:
+                                st.button("Track as a trial", key=f"track_{sid}", type="tertiary", on_click=begin_trial_adopt, args=(sid,))
 
 elif page == "site":
     sid = st.session_state.site_id
@@ -8214,6 +8234,11 @@ elif page == "trial":
                     rows.append(("Last", f"{r1_short_date(hub['last_date'])} · {hub['last_traps_checked']} trap{'s' if hub['last_traps_checked'] != 1 else ''} checked"))
                 rows.append(("Next due", due_html))
                 st.markdown('<div class="r1-card-title">Visits</div>' + r1_kv(rows), unsafe_allow_html=True)
+            in_progress = hub["in_progress_visit"] is not None
+            with st.container(key="hub_end_block"):  # under Visits on desktop; after the Evidence card on a phone (CSS orders it)
+                st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
+                if in_progress:
+                    st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
         with right:
             with st.container(key="card_hub_evidence"):
                 st.markdown(
@@ -8225,11 +8250,6 @@ elif page == "trial":
                     st.session_state["followup_site_filter"] = sid
                     st.session_state.pop("followup_panel", None)
                     st.switch_page(PAGE_FOLLOWUPS)
-            st.divider()
-            in_progress = hub["in_progress_visit"] is not None
-            st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
-            if in_progress:
-                st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
 
 elif page == "trial_start":
     sid = st.session_state.site_id
@@ -8854,7 +8874,7 @@ elif page == "followups":
     if not selected_followup_id:
         # Phase 7b (7/8): a title with the open count, two visible filters (short lists are never dropdowns) and the tasks as list rows.
         # The filters keep their keys (the trial hub sets followup_site_filter before it opens this page); nothing new is read from a sheet.
-        r1_screen_css()
+        r1_screen_css(narrow=True)  # a 760px column on desktop (board FollowupsDesktop)
         site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
         priority_options = ["All priorities", "High", "Normal", "Low"]
         if st.session_state.get("followup_site_filter") not in site_options:

@@ -134,7 +134,12 @@ def test_the_summary_is_shown_once_and_fits_a_phone_and_a_desktop(page: Page, tm
         _finish(page, url, "KAI")
         assert page.evaluate(SUMMARY)["width"] <= 414
         page.set_viewport_size(DESKTOP); page.wait_for_timeout(500)
-        assert page.evaluate(SUMMARY)["width"] <= 560, "capped on a desktop"
+        # 14 Oct 2026 (board VisitCompleteDesktop): on desktop the summary is one compact card across the top of the page (it was a centred 560px
+        # column), the tick and title on the left and the counts on the right. A phone is unchanged (the check above).
+        desktop = page.evaluate(SUMMARY)
+        assert 1100 <= desktop["width"] <= 1162, f"one card across the page on a desktop: {desktop['width']}"
+        title, stats = page.locator(".r1-vc-title").bounding_box(), page.locator(".r1-vc-stats").bounding_box()
+        assert title["x"] < stats["x"] and abs((title["y"] + title["height"] / 2) - (stats["y"] + stats["height"] / 2)) < 40, "the title at the left and the counts at the right, on one row"
         page.reload(wait_until="domcontentloaded")
         expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=30_000)
         page.wait_for_timeout(800)

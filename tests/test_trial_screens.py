@@ -75,8 +75,9 @@ def test_the_trap_sites_card_shows_the_right_state_and_buttons(page: Page, tmp_p
         # no active traps, no trial: "No trial running" and Start trial
         expect(mangaroa.get_by_text("No trial running", exact=False)).to_be_visible()
         expect(mangaroa.get_by_role("button", name="Start trial", exact=True)).to_be_visible()
-        # running with no trial record: the note, checking still available, and Track as a trial
-        expect(kaitoke.get_by_text("Not tracked as a trial yet — checks are recorded, but results aren't tied to a trial.", exact=True)).to_be_visible()
+        # running with no trial record: a "Not tracked" tag on the card (the note is said once, for the page), checking still available, and Track as a trial
+        expect(kaitoke.locator(".r1-tag", has_text="Not tracked")).to_be_visible()
+        expect(page.get_by_text("1 site isn't tracked as a trial yet", exact=True)).to_be_visible()
         expect(kaitoke.get_by_role("button", name="Start checking", exact=True)).to_be_visible()
         expect(kaitoke.get_by_role("button", name="Track as a trial", exact=True)).to_be_visible()
         assert kaitoke.get_by_role("button", name="Trial overview").count() == 0
@@ -89,7 +90,7 @@ def test_a_site_with_an_open_trial_offers_the_hub_and_no_untracked_note(page: Pa
         card = _card(page, "Mangaroa Farm")
         expect(card.get_by_role("button", name="Trial overview", exact=True)).to_be_visible()
         expect(card.get_by_role("button", name="Resume checking", exact=True)).to_be_visible()
-        assert card.get_by_text("Not tracked as a trial yet", exact=False).count() == 0
+        assert card.locator(".r1-tag").count() == 0
         assert card.get_by_role("button", name="Track as a trial").count() == 0
 
 
