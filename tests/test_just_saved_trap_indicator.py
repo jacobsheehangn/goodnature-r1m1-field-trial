@@ -30,6 +30,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,26 +100,10 @@ def _do_a_simple_check(page: Page, trap_index: int) -> str:
     workflow URL param, same as elsewhere in this test suite - simpler and
     less fragile than trying to scrape the trap ID out of the card DOM)."""
     page.get_by_role("button", name="Check", exact=True).nth(trap_index).click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
     query = dict(pair.split("=") for pair in page.url.split("?", 1)[1].split("&") if "=" in pair)
     trap_id = query.get("wf_trap", "")
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
-    expect(page.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=10_000)
-    # Scoped to this specific radiogroup, not a bare "Yes" - some traps also
-    # have a camera-check section with its own "Yes" option.
-    service_group = page.get_by_role("radiogroup", name="Trap relured, reset and ready?")
-    service_yes = service_group.get_by_role("radio", name="Yes", exact=True)
-    service_yes.focus()
-    page.keyboard.press("Space")
-    expect(service_yes).to_be_checked(timeout=10_000)
-
-    camera_group = page.get_by_role("radiogroup", name="Camera working and covering the trap?")
-    if camera_group.count():
-        camera_yes = camera_group.get_by_role("radio", name="Yes", exact=True)
-        camera_yes.focus()
-        page.keyboard.press("Space")
-        expect(camera_yes).to_be_checked(timeout=10_000)
+    cf.answer_still_set(page)
 
     save_button = page.get_by_role("button", name=re.compile(r"^Save check$"), exact=False)
     expect(save_button).to_be_enabled(timeout=10_000)

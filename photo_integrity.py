@@ -670,6 +670,20 @@ def _remove_uncommitted_final_copies(data_root: Path, manifest: dict) -> int:
             )
     return removed
 
+def staged_photo_count(data_root: Path, check_id: str) -> int:
+    """How many photos are staged (uploaded and stored) in a pending transaction: the ones a save would attach.
+
+    Photos the operator removed, and ones that failed to upload, are not counted. One small JSON read, no sheet scan.
+    Returns 0 when there is no pending transaction."""
+    manifest = load_manifest(data_root, check_id)
+    if not manifest:
+        return 0
+    photos = manifest.get("photos", {})
+    removed = {str(x) for x in manifest.get("removed_photo_ids", [])}
+    expected = [str(x) for x in manifest.get("expected_photo_ids", [])]
+    return sum(1 for photo_id in dict.fromkeys(expected) if photo_id in photos and photo_id not in removed)
+
+
 def delete_transaction(data_root: Path, check_id: str) -> None:
     directory = transaction_dir(data_root, check_id)
     if directory.exists():

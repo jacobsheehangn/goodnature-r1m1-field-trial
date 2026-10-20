@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -108,12 +109,12 @@ def test_draft_restores_via_a_plain_reopen_not_just_the_resume_dialog(
     # differ run to run).
     site_name_text = page.get_by_role("heading", level=1).first.inner_text()
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
 
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
+    cf.pick_finding(page, "Trap still set, no animal")
+    expect(page.get_by_text("What you found", exact=True)).to_be_visible(timeout=10_000)
 
-    notes_box = page.locator('textarea[aria-label="Anything else to record?"]')
+    notes_box = cf.notes_box(page)
     notes_box.wait_for(timeout=10_000)
     notes_box.fill("draft restore via normal reopen test")
     notes_box.press("Tab")
@@ -142,7 +143,7 @@ def test_draft_restores_via_a_plain_reopen_not_just_the_resume_dialog(
         heading.locator("xpath=following::button[1]").click()
         expect(page2.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
         page2.get_by_role("button", name="Check", exact=True).first.click()
-        expect(page2.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+        expect(page2.get_by_text("What you found", exact=True)).to_be_visible(timeout=30_000)
 
         # Playwright's role-based to_be_checked() doesn't reliably read this
         # component's state (a visually-hidden native input driven by
@@ -151,12 +152,10 @@ def test_draft_restores_via_a_plain_reopen_not_just_the_resume_dialog(
         # visually selected, when to_be_checked() alone said otherwise). The
         # rest of the form only renders at all once Finding has a value, so
         # that itself is proof the restore worked - assert on it directly.
-        finding_radio = page2.get_by_role("radio", name="Trap still set, no animal", exact=True)
-        expect(finding_radio).to_be_visible(timeout=10_000)
-        assert finding_radio.evaluate("el => el.checked") is True
+        expect(page2.get_by_text("Trap still set, no animal", exact=True)).to_be_visible(timeout=10_000)
 
         expect(page2.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=10_000)
-        restored_notes = page2.locator('textarea[aria-label="Anything else to record?"]')
+        restored_notes = cf.notes_box(page2)
         expect(restored_notes).to_have_value("draft restore via normal reopen test", timeout=10_000)
     finally:
         context2.close()

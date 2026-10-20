@@ -200,7 +200,7 @@ def test_visit_mode_and_the_flows_have_no_navigation_and_every_other_page_has_it
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)
         assert nav() == 0, "the trap list (visit mode)"
         page.get_by_role("button", name="Check", exact=True).first.click()
-        expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=20_000)
         assert nav() == 0, "the check form"
         page.get_by_role("button", name=re.compile("Back to trap")).first.click()
         expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=20_000)

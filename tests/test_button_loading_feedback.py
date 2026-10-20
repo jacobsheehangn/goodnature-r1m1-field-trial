@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 import pytest
+import check_form as cf
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,7 +113,7 @@ def test_check_button_opens_the_check_page_in_one_step(
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
     assert page.get_by_role("button", name="Opening…", exact=True).count() == 0
 
 
@@ -125,25 +126,21 @@ def test_save_check_button_shows_a_disabled_saving_state_before_navigating(
     page.get_by_role("button", name="Start checking", exact=False).first.click()
     expect(page.get_by_role("button", name="Finish site check")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Check", exact=True).first.click()
-    expect(page.get_by_text("What did you find?", exact=True)).to_be_visible(timeout=30_000)
-
-    page.get_by_text("Trap still set, no animal", exact=True).click()
-    expect(page.get_by_role("radio", name="Trap still set, no animal", exact=True)).to_be_checked(timeout=10_000)
-
-    expect(page.get_by_text("Trap relured, reset and ready?", exact=True)).to_be_visible(timeout=10_000)
-    service_yes = page.get_by_role("radio", name="Yes", exact=True)
-    service_yes.focus()
-    page.keyboard.press("Space")
-    expect(service_yes).to_be_checked(timeout=10_000)
+    expect(page.get_by_text("All as expected?", exact=True)).to_be_visible(timeout=30_000)
+    cf.answer_still_set(page)
 
     save_button = page.get_by_role("button", name=re.compile(r"^Save check$"), exact=False)
     expect(save_button).to_be_enabled(timeout=10_000)
+    # As above: the whole point of the fix is that this state now genuinely exists as its own render, not just a same-pass value that gets
+    # overwritten before the browser ever sees it. On a small workbook it lasts under 200 ms, shorter than Playwright's polling, so the browser
+    # itself records it every animation frame from before the tap (Phase 6: the busy label is "Saving check…", the Save board's own words).
+    page.evaluate("""() => { window.__saving = {seen: false, disabled: false}; const tick = () => {
+        for (const b of document.querySelectorAll('button')) { if (b.textContent.includes('Saving check…') && b.getClientRects().length) { window.__saving.seen = true; if (b.disabled) window.__saving.disabled = true; } }
+        requestAnimationFrame(tick); }; requestAnimationFrame(tick); }""")
     save_button.click()
-
-    # As above: the whole point of the fix is that this state now genuinely
-    # exists as its own render, not just a same-pass value that gets
-    # overwritten before the browser ever sees it.
-    expect(page.get_by_role("button", name="Saving…", exact=True)).to_be_visible(timeout=10_000)
-    expect(page.get_by_role("button", name="Saving…", exact=True)).to_be_disabled()
+    expect(page.get_by_text("saved", exact=False).first).to_be_visible(timeout=30_000)
+    state = page.evaluate("window.__saving")
+    assert state["seen"], "the Saving check… state was never drawn"
+    assert state["disabled"], "the Saving check… button was drawn but was not disabled"
 
     expect(page.get_by_text("saved", exact=False).first).to_be_visible(timeout=30_000)

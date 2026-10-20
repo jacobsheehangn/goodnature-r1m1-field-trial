@@ -30,7 +30,7 @@ def test_hot_path_taps_render_in_one_run_and_restore_the_same_pages(page: Page, 
 
     for tap in [
         "start_checking", "check_trap_1", "back_to_selector", "check_another",
-        "back_again", "pause", "resume_checking", "check_before_exit", "exit_to_trap_sites",
+        "back_again", "pause", "resume_checking", "check_before_exit", "back_before_exit", "exit_to_trap_sites",
     ]:
         assert kinds(report[tap]) == ["complete"], f"{tap} ran {kinds(report[tap])}: {report[tap]}"
 
