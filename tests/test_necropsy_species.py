@@ -137,10 +137,10 @@ def test_task_pages_have_one_h1_the_right_copy_and_no_misplaced_caption(page: Pa
         # Camera review: one H1, the footage caption belongs here, Build / Camera / Reason rows are gone.
         card = page.get_by_text("Camera review", exact=True).first.locator("xpath=ancestor::div[.//button][1]")
         card.get_by_role("button", name="Review", exact=True).click()
-        expect(page.get_by_text("Complete this review", exact=True)).to_be_visible(timeout=30_000)
-        assert page.locator("h1").all_inner_texts() == ["Camera review"]
-        expect(page.get_by_text("Record when events occurred in the footage, not when you reviewed it.", exact=True)).to_be_visible()
-        context = page.get_by_text("Task context", exact=True).locator("xpath=following::div[1]").inner_text()
+        expect(page.get_by_role("heading", name="Camera review", exact=True)).to_be_visible(timeout=30_000)
+        assert page.locator('h1,[role="heading"][aria-level="1"]').all_inner_texts() == ["Camera review"]
+        expect(page.get_by_text("Record when things happened in the footage, not when you watched it.", exact=True)).to_be_visible()
+        context = page.locator('[class*="st-key-card_task_context"]').inner_text()
         for kept in ("Trap", "Site", "Bag ID"):
             assert kept in context
         for dropped in ("Build:", "Camera:", "Reason:"):

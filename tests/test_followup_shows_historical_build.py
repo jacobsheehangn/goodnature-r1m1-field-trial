@@ -143,7 +143,7 @@ def test_followup_detail_shows_the_windows_own_build_not_the_traps_current_one(
     expect(page.get_by_text("Follow-ups", exact=True).last).to_be_visible(timeout=30_000)
 
     page.get_by_role("button", name="Review", exact=True).first.click()
-    expect(page.get_by_text("Task context", exact=True)).to_be_visible(timeout=15_000)
+    expect(page.locator('[class*="st-key-card_task_context"]')).to_be_visible(timeout=15_000)
 
     # Phase 4 (the brief's value test): the Task context no longer carries a Build row at all, so the trap's
     # *current* build can never be shown against an old window. The guarantee this test exists for - the

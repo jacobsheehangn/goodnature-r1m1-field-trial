@@ -247,15 +247,43 @@ COMPONENT_CSS = f"""
 [class*="st-key-fielderr_"] [data-testid="stRadioGroup"],[class*="st-key-fielderr_"] [role="radiogroup"],[class*="st-key-fielderr_"] [data-testid="stTextArea"] textarea,
 [class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
 [class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
+[class*="st-key-fielderr_"] [data-baseweb="input"],[class*="st-key-fielderr_"] [data-baseweb="textarea"],[class*="st-key-fielderr_"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+/* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
+  box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after,[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{
+  content:"";position:absolute;z-index:2;right:14px;top:50%;margin-top:-10px;width:20px;height:20px;background:var(--ink);pointer-events:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"]::after{{{_mask("calendar")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div::after{{{_mask("clock")}}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] svg[data-baseweb="icon"]{{display:none}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input{{font-size:15px;padding-right:38px}}
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div{{font-size:15px}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] input::placeholder{{color:var(--ink-50);opacity:1}}
+/* The time's "HH:mm" hint sits under the field's own (white) input and lost its first letter; the input is made see-through. */
+[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] input,[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"] div:has(>input){{background:transparent!important}}
+/* A date or time the Save refused: the same red ring as every other field (this rule is as specific as the pair's own, and comes after it). */
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],
+[class*="st-key-fielderr_"] [class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="base-input"]{{background:transparent;border-radius:var(--r-input)}}
+.r1-msg.info.ok svg{{color:var(--green)}}
+/* The task forms' option rows: regular weight until chosen, as the boards draw them. */
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"] p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"] p{{font-weight:400}}
+[class*="st-key-rows_cam_"] [data-testid="stRadioOption"]:has(input:checked) p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
 .r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
 .r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
 /* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
 [class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
-/* A tick that is a whole row: "Bag labelled", "Camera adjusted". */
+/* A tick that is a whole row: "Bag labelled", "Camera adjusted". The box is the board's: 24px, rounded, inside the row with 14px of padding (the
+   legacy sheet draws an 18px square hanging on the row's left edge; it is moved into the row's flow and redrawn). */
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:56px;width:100%;box-sizing:border-box;
-  border-radius:var(--r-panel);background:var(--ink-05);padding:0 16px;cursor:pointer}}
+  border-radius:var(--r-panel);background:var(--ink-05);padding:0 14px;cursor:pointer;position:relative}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::before{{content:"";position:static;left:auto;top:auto;transform:none;flex:0 0 24px;width:24px;height:24px;
+  box-sizing:border-box;margin:0;border-radius:8px;border:2px solid var(--ink-50);background:transparent}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label::after{{display:none!important}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{display:none}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-tick_"] [data-testid="stCheckbox"] label:has(input:checked)::before{{border-color:var(--orange);background:var(--orange) {_CHECK_DATA_URI} center/14px no-repeat}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px}}
 /* The found-outcome card: its row keeps the text and the Change button side by side, with no rule under it. */
 [class*="st-key-card_check_found"] [class*="st-key-listrow_"]{{border-bottom:0;padding:0}}
@@ -341,7 +369,7 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_site_"] div.stButton:has(:is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"])){{width:100%}}
   .stApp [class*="st-key-card_site_"] :is(button[kind="primary"],button[kind="secondary"],button[kind="tertiary"]){{width:100%;justify-content:center}}
   /* The hub's two columns stack on a phone; st.columns(gap="large") would leave 64px between the cards. */
-  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]){{row-gap:16px}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"]),.stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-nec_left"]){{row-gap:16px}}
   /* End trial… sits under the Visits card on desktop. On a phone it stays where it always was, after the Evidence card: the left column's
      children join the stacked row so the block can be ordered after the right column, and a rule above it stands in for the old divider. */
   .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-card_hub_visits"])>[data-testid="stColumn"]:first-child,
@@ -606,10 +634,7 @@ SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 # single column (a form is not stretched across a desktop).
 HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
-# The same 760px single column for a page not drawn inside the screen container (the camera review and camera issue task forms, until batch 1
-# redraws them): everything under the page's top level except the navigation, left-aligned, desktop only.
-NARROW_FORM_CSS = ("<style>@media (min-width:701px){[data-testid=\"stMainBlockContainer\"]>[data-testid=\"stVerticalBlock\"]>*:not(.st-key-app_nav)"
-                   "{max-width:760px}}</style>")
+
 
 
 def stepper_html(current: int, done_through: int = 0) -> str:

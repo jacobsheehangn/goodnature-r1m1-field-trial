@@ -83,11 +83,12 @@ def test_a_task_form_is_a_760_column(tmp_path, page: Page):
         open_home(page, url, 1280)
         page.get_by_role("link", name="Follow-ups").first.click()
         page.locator(".r1-title", has_text="Follow-ups").first.wait_for(timeout=30000)
-        page.get_by_role("button", name="Review", exact=True).nth(1).click()  # the Camera issue task (legacy form)
-        page.wait_for_timeout(2500)
-        widths = page.evaluate("""() => [...document.querySelectorAll('[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] > *')]
-            .filter(e => !e.className.includes('st-key-app_nav') && e.getBoundingClientRect().width > 0).map(e => Math.round(e.getBoundingClientRect().width))""")
-        assert widths and max(widths) <= 761, widths
+        page.get_by_role("button", name="Review", exact=True).nth(1).click()  # the Camera issue task
+        page.get_by_role("heading", name="Camera issue", exact=True).wait_for(timeout=30000)
+        page.wait_for_timeout(1500)
+        screen, nav = page.locator(".st-key-r1_screen").bounding_box(), page.locator(".st-key-app_nav").bounding_box()
+        assert screen["width"] <= 761, f"the task form is one 760px column: {screen}"
+        assert abs(screen["x"] - nav["x"]) <= 1, f"left-aligned with the page, not centred: {screen} / {nav}"
 
 
 def test_the_hub_puts_end_trial_under_the_visits_card_in_the_left_column(tmp_path, page: Page):

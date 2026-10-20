@@ -18,6 +18,7 @@ import pytest
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
+import task_form as tf  # noqa: E402
 from journey_seed import END_SEED, JOURNEY_SEED  # noqa: E402
 from test_trial_model_ui import _serve, _sheet  # noqa: E402
 
@@ -293,17 +294,17 @@ def test_end_trial_reaches_the_follow_up_form_and_returns_to_end_trial(page: Pag
         page.get_by_role("button", name="Decide").first.click()
         expect(page.get_by_text("Reviewing 1 of 2", exact=False)).to_be_visible(timeout=20_000)
         page.get_by_role("button", name="Review now", exact=True).click()
-        expect(page.get_by_text("Complete this review", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Camera review", exact=True)).to_be_visible(timeout=20_000)
         # Opened from End trial, the way back names End trial, not the task list.
-        expect(page.get_by_role("button", name="← Back to End trial")).to_be_visible()
-        page.get_by_role("button", name="← Back to End trial").click()
+        expect(page.get_by_role("button", name="Back to End trial")).to_be_visible()
+        page.get_by_role("button", name="Back to End trial").click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=30_000)
         # Resolve the camera review for real: it saves, and we land back in End trial with that task gone.
         page.get_by_role("button", name="Decide").first.click()
         page.get_by_role("button", name="Review now", exact=True).click()
-        expect(page.get_by_text("Complete this review", exact=True)).to_be_visible(timeout=20_000)
+        expect(page.get_by_role("heading", name="Camera review", exact=True)).to_be_visible(timeout=20_000)
         page.wait_for_timeout(1500)
-        _choose(page, "Camera evidence usable", "No")
+        tf.choose(page, "Camera evidence usable?", "No")
         page.get_by_role("button", name="Save camera review").click()
         expect(page.get_by_text("Needs your decision", exact=True)).to_be_visible(timeout=60_000)
         expect(page.get_by_text("Camera review", exact=True)).to_have_count(0)
