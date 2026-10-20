@@ -4744,9 +4744,10 @@ def r1_short_build(label: str) -> str:
     return version
 
 
-def r1_screen_css(hide_nav: bool = False) -> None:
-    """Journey screens that hide the top navigation also read as one narrow column."""
-    st.markdown(design.SCREEN_CSS + ((design.HIDE_TOP_NAV_CSS + design.NARROW_CSS) if hide_nav else ""), unsafe_allow_html=True)
+def r1_screen_css(hide_nav: bool = False, narrow: bool = False) -> None:
+    """Journey screens that hide the top navigation also read as one narrow column. `narrow` is the 760px single column without hiding the
+    navigation (the Follow-ups list)."""
+    st.markdown(design.SCREEN_CSS + ((design.HIDE_TOP_NAV_CSS + design.NARROW_CSS) if hide_nav else (design.NARROW_CSS if narrow else "")), unsafe_allow_html=True)
 
 
 def r1_stepper(current: int) -> None:
@@ -6222,8 +6223,13 @@ body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
    @media (max-width:700px) card-padding rule below — mobile must render
    identically to before this change. */
 @media (min-width: 701px) {
+  /* 14 Oct 2026 (owner): desktop pages use up to 1160px of content, as every approved desktop board does (1280 less 60px of padding each
+     side). The 1020px cap above is gone. Single-column screens keep a 760px cap of their own (NARROW_CSS, left-aligned); the multi-column
+     screens (Trap sites grid, trial hub, Visit complete, Trial performance) use the full width. Phone is unchanged. */
   body:not(:has(.login-page-marker)) [data-testid="stMainBlockContainer"] {
-    max-width: 1020px !important;
+    max-width: 1280px !important;
+    padding-left: 60px !important;
+    padding-right: 60px !important;
     margin-left: auto !important;
     margin-right: auto !important;
   }
@@ -7476,6 +7482,11 @@ elif page == "trial":
                     rows.append(("Last", f"{r1_short_date(hub['last_date'])} · {hub['last_traps_checked']} trap{'s' if hub['last_traps_checked'] != 1 else ''} checked"))
                 rows.append(("Next due", due_html))
                 st.markdown('<div class="r1-card-title">Visits</div>' + r1_kv(rows), unsafe_allow_html=True)
+            in_progress = hub["in_progress_visit"] is not None
+            with st.container(key="hub_end_block"):  # under Visits on desktop; after the Evidence card on a phone (CSS orders it)
+                st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
+                if in_progress:
+                    st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
         with right:
             with st.container(key="card_hub_evidence"):
                 st.markdown(
@@ -7487,11 +7498,6 @@ elif page == "trial":
                     st.session_state["followup_site_filter"] = sid
                     st.session_state.pop("followup_panel", None)
                     st.switch_page(PAGE_FOLLOWUPS)
-            st.divider()
-            in_progress = hub["in_progress_visit"] is not None
-            st.button("End trial…", key="hub_end_trial", disabled=in_progress, on_click=begin_trial_end, args=(sid,))
-            if in_progress:
-                st.markdown('<div class="r1-meta">A visit is in progress. Use Finish visit and end trial… on the visit page, or finish the visit first.</div>', unsafe_allow_html=True)
 
 elif page == "trial_start":
     sid = st.session_state.site_id
@@ -8116,7 +8122,7 @@ elif page == "followups":
     if not selected_followup_id:
         # Phase 7b (7/8): a title with the open count, two visible filters (short lists are never dropdowns) and the tasks as list rows.
         # The filters keep their keys (the trial hub sets followup_site_filter before it opens this page); nothing new is read from a sheet.
-        r1_screen_css()
+        r1_screen_css(narrow=True)  # a 760px column on desktop (board FollowupsDesktop)
         site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
         priority_options = ["All priorities", "High", "Normal", "Low"]
         if st.session_state.get("followup_site_filter") not in site_options:
@@ -8183,6 +8189,7 @@ elif page == "followups":
             if item["Follow-up Type"]=="Necropsy review":
                 render_necropsy_task(data, item)
             else:
+                st.markdown(design.NARROW_FORM_CSS, unsafe_allow_html=True)  # a task form is a single column: 760px on desktop
                 opened_from_end_trial = bool(st.session_state.get("return_to"))
                 if st.button("← Back to End trial" if opened_from_end_trial else "← Back to task list", key="back_followup_list"):
                     if not return_from_followup_task():
