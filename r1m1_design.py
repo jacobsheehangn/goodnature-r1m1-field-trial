@@ -141,6 +141,19 @@ def _outcome_icon_rules() -> str:
     )
 
 
+# The message panel and the line under a field are drawn in two places: inside a journey screen (scoped with the rest of COMPONENT_CSS) and outside one
+# (the demo banner above every page, the sign-in page), where MESSAGE_CSS carries them unscoped. One copy of the rules, written with single braces.
+_MESSAGE_RULES = """
+.r1-fielderr{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}
+.r1-fielderr svg{flex:0 0 auto;color:var(--red)}
+.r1-msg{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}
+.r1-msg .t{font-size:17px;line-height:22px;font-weight:700}
+.r1-msg .d{font-size:15px;line-height:20px}
+.r1-msg.warn{background:var(--orange-10)} .r1-msg.error{background:var(--red-10)}
+.r1-msg.success{background:var(--green-10)} .r1-msg.info{background:var(--ink-05)}
+.r1-msg svg{flex:0 0 auto;margin-top:2px} .r1-msg.warn svg{color:var(--orange)} .r1-msg.error svg{color:var(--red)} .r1-msg.success svg{color:var(--green)}
+"""
+
 COMPONENT_CSS = f"""
 /* ---- Card: white, radius 20, shadow-panel, padding 15, 10px between cards ---- */
 .stApp [class*="st-key-card_"],.stApp [class*="st-key-cardlist_"]{{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:15px;gap:15px}}
@@ -248,6 +261,98 @@ COMPONENT_CSS = f"""
 [class*="st-key-fielderr_"] [data-testid="stCheckbox"] label{{box-shadow:0 0 0 2px var(--red)}}
 [class*="st-key-fielderr_"] [class*="st-key-species"] [data-testid="stRadioGroup"]{{padding:6px;border-radius:var(--r-card)}}
 [class*="st-key-fielderr_"] [data-baseweb="input"],[class*="st-key-fielderr_"] [data-baseweb="textarea"],[class*="st-key-fielderr_"] [data-baseweb="select"]>div{{box-shadow:0 0 0 2px var(--red)}}
+/* ---- Administration (Part B batch 2a): the trap page and its actions ---- */
+.r1-status.strong{{color:var(--ink);font-weight:700}}
+.r1-happen{{display:flex;gap:10px;align-items:flex-start;font-size:16px;line-height:22px;padding:6px 0;color:var(--ink)}}
+.r1-happen svg{{flex:0 0 auto;margin-top:1px;color:var(--ink-70)}}
+.r1-blocker{{display:flex;gap:8px;align-items:flex-start;font-size:15px;line-height:20px;color:var(--ink);margin-top:6px}}
+.r1-blocker svg{{flex:0 0 auto;margin-top:1px}}
+.r1-row-title.blocked{{color:var(--ink-70)}}
+[class*="st-key-actrow_"]{{border-bottom:1px solid var(--ink-05);padding:14px 0}}
+[class*="st-key-actrow_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px}}
+[class*="st-key-actrow_"] [data-testid="stColumn"]{{min-width:0!important}}
+[class*="st-key-actrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important;width:auto!important}}
+[class*="st-key-actrow_trap_delete"] button p{{color:var(--red)}}
+.st-key-danger_button button[kind="primary"]{{background:var(--red)!important}}
+.st-key-danger_button button[kind="primary"]:hover:not(:disabled){{background:#c4002f!important}}
+.st-key-danger_button button[kind="primary"]:disabled{{background:#f4a3b5!important}}
+@media (min-width:701px){{
+  .st-key-actions_row{{flex-direction:row!important;align-items:center;gap:12px}}
+  .st-key-actions_row>div{{width:auto!important}}
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-trap_side"])>[data-testid="stColumn"]:first-child{{order:2}}
+}}
+@media (max-width:700px){{
+  .stApp [data-testid="stHorizontalBlock"]:has([class*="st-key-trap_side"]){{row-gap:16px}}
+}}
+[class*="st-key-rows_build"] [data-testid="stRadioOption"] p{{white-space:pre-line;line-height:20px}}
+/* ---- Trial setup (Part B batch 2a) ---- */
+.stApp [class*="st-key-listrow_trap_"],.stApp [class*="st-key-listrow_site_"],.stApp [class*="st-key-listrow_build_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+.stApp [class*="st-key-listrow_"][class*="_sel_"]{{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+/* A pill button on a grey row, in the card of the trap page's actions and in the panels is white with a hairline, as the boards draw it. */
+.stApp :is([class*="st-key-listrow_trap_"],[class*="st-key-listrow_site_"],[class*="st-key-listrow_build_"],[class*="st-key-listrow_net_"],[class*="st-key-listrow_win_"],[class*="st-key-actrow_"],[class*="st-key-card_setup_bulk"]) button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10)}}
+.r1-readonly{{background:var(--ink-05);border-radius:var(--r-input);padding:12px 14px;font-size:16px;line-height:22px;color:var(--ink-70);margin:6px 0 10px}}
+.st-key-setup_trap_rows,.st-key-setup_trap_rows_review,.st-key-setup_trap_rows_corrections{{gap:12px}}
+[class*="st-key-card_setup_bulk"]{{padding:14px 16px}}
+[class*="st-key-card_setup_bulk"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px;align-items:center}}
+[class*="st-key-card_setup_bulk"] [data-testid="stColumn"]{{min-width:0!important;flex:1 1 0!important}}
+[class*="st-key-card_setup_bulk"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important;width:auto!important}}
+[class*="st-key-tickcard_bulk_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;gap:8px;box-sizing:border-box}}
+[class*="st-key-tickcard_bulk_"]:has([class*="st-key-bsel_"] input:checked){{background:var(--orange-10);box-shadow:inset 0 0 0 2px var(--orange)}}
+[class*="st-key-bsel_"]{{width:100%!important}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label{{display:flex;align-items:center;gap:12px;min-height:32px;cursor:pointer;position:relative}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label::before{{content:"";position:static;left:auto;top:auto;transform:none;flex:0 0 24px;width:24px;height:24px;
+  box-sizing:border-box;margin:0;border-radius:8px;border:2px solid var(--ink-50);background:transparent}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label::after{{display:none!important}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label>div:nth-of-type(1){{display:none}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label:has(input:checked)::before{{border-color:var(--orange);background:var(--orange) {_CHECK_DATA_URI} center/14px no-repeat}}
+[class*="st-key-bsel_"] [data-testid="stCheckbox"] label p{{font-size:16px;line-height:22px;font-weight:700}}
+[class*="st-key-close_trap_setup_panel_top"] button,[class*="st-key-close_site_panel"] button,[class*="st-key-close_build_panel"] button,[class*="st-key-close_window_panel"] button{{min-height:40px;height:40px;width:40px;padding:0;border-radius:50%;background:var(--ink-05)}}
+@media (min-width:701px){{[class*="st-key-back_setup_panel_phone"],[class*="st-key-back_close_"],[class*="st-key-back_window_panel_phone"]{{display:none}}}}
+@media (max-width:700px){{
+  [class*="st-key-close_trap_setup_panel_top"],[class*="st-key-close_site_panel"],[class*="st-key-close_build_panel"],[class*="st-key-close_window_panel"]{{display:none}}
+  [class*="st-key-setup_view_panel"] [data-testid="stColumn"]:has([class*="st-key-setup_list"]){{display:none}}
+  [class*="st-key-setup_view_panel"] [data-testid="stHorizontalBlock"]{{row-gap:0}}
+}}
+/* A date field inside a card on a 390px phone is about 125px wide: a day/month/year at 15px with the calendar at its right would clip its last digit. */
+@media (max-width:700px){{[class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"] input{{font-size:14px;padding-left:11px;padding-right:32px}}}}
+/* ---- Traps list and trap history (Part B batch 2b) ---- */
+.stApp [class*="st-key-listrow_net_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+[class*="st-key-chips_traps_filter"] [role="radiogroup"],[class*="st-key-chips_setup_filter"] [role="radiogroup"],[class*="st-key-chips_perf_by"] [role="radiogroup"],[class*="st-key-chips_export_filter"] [role="radiogroup"],[class*="st-key-chips_audit_filter"] [role="radiogroup"]{{display:flex;flex-wrap:wrap;gap:8px}}
+/* ---- Trial performance, lower part (Part B batch 2b, AdmPerfMore) ---- */
+.r1-subhead{{font-size:19px;line-height:26px;font-weight:700;margin:20px 0 8px}}
+.r1-diag{{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}}
+.r1-diag.cols4{{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:701px){{.r1-diag.cols4{{grid-template-columns:repeat(4,1fr)}}}}
+.r1-diagcard{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 18px;display:flex;flex-direction:column;gap:2px;min-width:0}}
+.r1-diagcard b{{font-size:34px;line-height:40px;font-weight:700}}
+.r1-diagcard span{{font-size:15px;line-height:21px;color:var(--ink-70)}}
+@media (max-width:700px){{.r1-diag.cols2{{grid-template-columns:1fr}}}}
+[class*="st-key-card_perf_table_"]{{padding:8px;gap:0}}
+[class*="st-key-card_perf_calc"]{{gap:6px}}
+[class*="st-key-card_perf_calc"] p{{margin:0}}
+.stApp [data-testid="stExpander"]{{background:transparent!important;border:0!important;box-shadow:none!important}}
+.stApp [data-testid="stExpander"] details{{background:transparent;border:0;border-radius:var(--r-panel)}}
+.stApp [data-testid="stExpander"] summary{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 20px;font-size:17px;line-height:22px}}
+.stApp [data-testid="stExpander"] [data-testid="stExpanderDetails"]{{padding:8px 0 4px}}
+.r1-stats3{{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}}
+.r1-statcard{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;display:flex;flex-direction:column;gap:2px}}
+.r1-statcard b{{font-size:30px;line-height:36px;font-weight:700;color:var(--ink)}}
+.r1-statcard span{{font-size:15px;line-height:20px;color:var(--ink-70)}}
+.r1-hist-day{{font-size:15px;line-height:20px;font-weight:700;color:var(--ink-70);padding:18px 0 8px}}
+.r1-hist-row{{display:flex;gap:16px;padding:12px 0;border-bottom:1px solid var(--ink-05)}}
+.r1-hist-row .t{{flex:0 0 52px;font-size:16px;line-height:22px;color:var(--ink-70)}}
+.r1-hist-row .h{{font-size:17px;line-height:22px;font-weight:700;color:var(--ink)}}
+.r1-hist-row .d{{font-size:15px;line-height:20px;color:var(--ink-70)}}
+.stApp [class*="st-key-listrow_win_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:14px 16px;border-bottom:0}}
+.r1-tag.bad{{background:#ffe1e7;color:var(--red)}}
+/* ---- Data & records landing: a row is one tap, with a chevron at its right ---- */
+.stApp [class*="st-key-listrow_data_"]{{background:var(--ink-05);border-radius:var(--r-panel);padding:16px 18px;border-bottom:0}}
+[class*="st-key-listrow_data_"] [data-testid="stColumn"]:last-child{{flex:0 0 44px!important;width:44px!important}}
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"]{{width:44px;min-width:44px;height:44px;min-height:44px;padding:0!important;background:transparent!important;box-shadow:none!important}}
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"] [data-testid="stMarkdownContainer"] p{{font-size:0!important;line-height:0!important;color:transparent!important;margin:0}}  /* the name stays for screen readers and tests; the chevron is drawn */
+.stApp [class*="st-key-listrow_data_"] button[kind="secondary"]::after{{content:"";width:22px;height:22px;background:var(--ink);{_mask("chevron-down")};transform:rotate(-90deg)}}
+.stApp [class*="st-key-card_followup_"],.stApp [class*="st-key-card_recovery"]{{gap:12px}}
+[class*="st-key-card_audit_table"]{{padding:8px}}
 /* A date and a time side by side (the task forms): one field look at 48px, with a calendar and a clock at the right, as the boards draw them. */
 [class*="st-key-pair_"] [data-testid="stDateInput"] [data-baseweb="input"],[class*="st-key-pair_"] [data-testid="stTimeInput"] [data-baseweb="select"]>div{{
   box-sizing:border-box;min-height:48px;height:48px;border:1px solid var(--ink-10);border-radius:var(--r-input);background:#fff;box-shadow:none;position:relative}}
@@ -269,9 +374,7 @@ COMPONENT_CSS = f"""
 /* The task forms' option rows: regular weight until chosen, as the boards draw them. */
 [class*="st-key-rows_cam_"] [data-testid="stRadioOption"] p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"] p{{font-weight:400}}
 [class*="st-key-rows_cam_"] [data-testid="stRadioOption"]:has(input:checked) p,[class*="st-key-rows_issue_"] [data-testid="stRadioOption"]:has(input:checked) p{{font-weight:700}}
-.r1-fielderr{{display:flex;gap:8px;align-items:center;font-size:14px;line-height:20px;font-weight:700;color:var(--ink);margin-top:6px}}
-.r1-fielderr svg{{flex:0 0 auto;color:var(--red)}}
-/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
+{_MESSAGE_RULES}/* Ticks and switches fill their row (Streamlit sizes their wrapper to fit-content). */
 [class*="st-key-tick_"],[class*="st-key-sw_"]{{width:100%!important}}
 [class*="st-key-tick_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stCheckbox"],[class*="st-key-sw_"] [data-testid="stElementContainer"]{{width:100%!important}}
 /* A tick that is a whole row: "Bag labelled", "Camera adjusted". The box is the board's: 24px, rounded, inside the row with 14px of padding (the
@@ -419,13 +522,48 @@ COMPONENT_CSS = f"""
 .r1-bar span{{display:block;height:100%;background:var(--orange);border-radius:4px}}
 
 /* ---- Message panel: radius 14, padding 14; warn / error / success / info ---- */
-.r1-msg{{border-radius:var(--r-panel);padding:14px;display:flex;gap:12px;align-items:flex-start;color:var(--ink)}}
-.r1-msg .t{{font-size:17px;line-height:22px;font-weight:700}}
-.r1-msg .d{{font-size:15px;line-height:20px}}
-.r1-msg.warn{{background:var(--orange-10)}} .r1-msg.error{{background:var(--red-10)}}
-.r1-msg.success{{background:var(--green-10)}} .r1-msg.info{{background:var(--ink-05)}}
-.r1-msg svg{{flex:0 0 auto;margin-top:2px}} .r1-msg.warn svg{{color:var(--orange)}} .r1-msg.error svg{{color:var(--red)}} .r1-msg.success svg{{color:var(--green)}}
 
+/* ---- Desktop tables (the width rule, 20 Oct): over 700px a list is one card, a header row, then 56px rows of columns with the action at the row's end. The same
+   markdown holds the phone's stacked text (.r1-mb) and the grid of cells (.r1-dk); each shows at its own width, so the phone is unchanged. ---- */
+.r1-dk{{display:none}}
+.stApp [class*="st-key-tablewrap_"]:not([class*="st-key-cardlist_"]){{gap:12px}}
+@media (min-width:701px){{
+  .r1-mb{{display:none}}
+  .r1-dk{{display:grid;grid-template-columns:var(--cols);column-gap:16px;align-items:center}}
+  .r1-dk .c{{min-width:0;font-size:16px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+  .r1-dk .c.b{{font-weight:700}} .r1-dk .c.dim{{color:var(--ink-70)}}
+  .r1-dk .c.task{{display:flex;align-items:center;gap:12px;font-weight:700}}
+  .r1-dk .c.task .r1-rowicon{{flex:0 0 40px;width:40px;height:40px}}
+  .r1-thead{{padding:14px 16px 12px 16px;padding-right:144px;border-bottom:1px solid var(--ink-10);font-size:15px;line-height:20px;font-weight:700;color:var(--ink-70)}}
+  .stApp [class*="st-key-tablewrap_"]{{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:4px 12px 6px;gap:0}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"]{{background:transparent;border-radius:0;box-shadow:none;border-bottom:1px solid var(--ink-05);padding:0 16px;min-height:56px;margin:0;width:100%!important}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"]:last-child{{border-bottom:0}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_next_"]{{background:var(--orange-10);border-radius:var(--r-panel);border-bottom:0}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stHorizontalBlock"]{{gap:16px}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stColumn"]:first-child{{flex:1 1 0!important}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 112px!important;width:112px!important}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] button{{width:112px}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10)}}
+  /* Trial setup: the section control is not the width of the page; the site chips, Bulk activate (n) and Add trap are one line; Add site / Add build sit at the right. */
+  [class*="st-key-seg_setup_section"]{{max-width:700px}}
+  [class*="st-key-setup_filter_row"] [data-testid="stHorizontalBlock"]{{gap:16px;flex-wrap:nowrap}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]{{flex:0 0 auto!important;width:auto!important}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:first-child{{flex:1 1 0!important}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:nth-child(2){{order:3}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:nth-child(3){{order:2}}
+  .stApp [class*="st-key-card_setup_bulk"]{{background:transparent;box-shadow:none;padding:0}}
+  [class*="st-key-card_setup_bulk"] [data-testid="stColumn"]:first-child{{display:none}}
+  .stApp [class*="st-key-card_setup_bulk"] button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10);width:auto;white-space:nowrap}}
+  [class*="st-key-setup_add_site"],[class*="st-key-setup_add_build"]{{display:flex;justify-content:flex-end}}
+  /* Data & records: the corrections are two columns of rows, beside the group of review pages. */
+  [class*="st-key-setup_trap_rows_corrections"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
+  /* Traps: the search beside the site chips, the Status control under them. */
+  [class*="st-key-filters_traps"] [data-testid="stHorizontalBlock"]{{gap:24px}}
+  [class*="st-key-seg_traps_status_wrap"]{{max-width:420px}}
+  /* Follow-ups: the site chips, the priority control and Review next task on one line. */
+  [class*="st-key-filters_followups"] [data-testid="stHorizontalBlock"]{{gap:24px}}
+  [class*="st-key-actions_followups_next"]{{display:flex;justify-content:flex-end}}
+}}
 /* ---- Stepper: 26px discs, 2px joins ---- */
 .r1-stepper{{display:flex;align-items:center;gap:8px;font-size:14px;line-height:20px}}
 .r1-stepper .s{{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;color:var(--ink-70)}}
@@ -634,6 +772,38 @@ SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 # single column (a form is not stretched across a desktop).
 HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
 NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
+
+# Drawn outside a journey screen's own container: the demo banner above every page, and the sign-in page. The tokens, the message rules unscoped.
+MESSAGE_CSS = "<style>" + TOKENS_CSS + _MESSAGE_RULES + ".r1-msg,.r1-fielderr{font-family:var(--font)}</style>"
+
+# The sign-in page (Part B batch 3): the page's own single column (420px on a desktop), the logo and the sentence as they were, Lato, a password field with a
+# lock, a full-width pill, no form card. The field is ringed red under .st-key-login_wrong. Every rule starts at the marker the page draws, so nothing else moves.
+_LOGIN = "body:has(.login-page-marker)"
+LOGIN_CSS = "<style>" + FONT_FACE_CSS + TOKENS_CSS + _MESSAGE_RULES + f"""
+.login-page-marker{{display:none!important}}
+{_LOGIN} .stApp{{background:var(--page)}}
+{_LOGIN} [data-testid="stMainBlockContainer"]{{max-width:calc(420px + 2.5rem)!important;margin:0 auto!important;padding:clamp(2rem,10vh,7rem) 1.25rem 2rem!important}}
+{_LOGIN} [data-testid="stImage"]{{margin:0 0 1.4rem 0!important}}
+{_LOGIN} [data-testid="stImage"] img{{display:block!important;width:13.75rem!important;max-width:70vw!important;height:auto!important}}
+{_LOGIN} .login-title{{font-family:var(--font)!important;font-size:34px!important;line-height:40px!important;font-weight:700!important;letter-spacing:0!important;color:var(--ink)!important;margin:0 0 8px!important;padding:0!important}}
+{_LOGIN} .login-intro,{_LOGIN} .login-security{{font-family:var(--font)!important;margin:0!important;color:var(--ink-70)!important;font-size:16px!important;line-height:22px!important}}
+{_LOGIN} .login-intro{{margin-bottom:24px!important}}
+{_LOGIN} .login-security{{margin-top:16px!important;font-size:15px!important;line-height:20px!important}}
+{_LOGIN} [data-testid="stForm"]{{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important}}
+{_LOGIN} [data-testid="stWidgetLabel"] p{{font-family:var(--font)!important;font-size:16px!important;line-height:22px!important;font-weight:700!important;color:var(--ink)!important}}
+{_LOGIN} [data-testid="stTextInputRootElement"]{{box-sizing:border-box;min-height:48px;background:#fff!important;border:1px solid var(--ink-10)!important;border-radius:var(--r-panel)!important;box-shadow:none!important;position:relative}}
+{_LOGIN} [data-testid="stTextInputRootElement"]:focus-within{{border-color:var(--orange)!important;box-shadow:0 0 0 1px var(--orange)!important}}
+{_LOGIN} [data-testid="stTextInput"] input,{_LOGIN} [data-testid="stTextInput"] button{{background:transparent!important;color:var(--ink)!important;border:0!important;box-shadow:none!important}}
+{_LOGIN} [data-testid="stTextInput"] input{{font-family:var(--font)!important;font-size:16px!important;padding-left:46px!important}}
+{_LOGIN} [data-testid="stTextInput"] input::placeholder{{color:var(--ink-50)!important;-webkit-text-fill-color:var(--ink-50)!important;opacity:1}}
+{_LOGIN} [data-testid="stTextInputRootElement"]::before{{content:"";position:absolute;z-index:2;left:14px;top:50%;margin-top:-10px;width:20px;height:20px;background:var(--ink-70);pointer-events:none;{_mask("lock")}}}
+{_LOGIN} .st-key-login_wrong [data-testid="stTextInputRootElement"]{{border-color:var(--red)!important;box-shadow:0 0 0 1px var(--red)!important}}
+{_LOGIN} .r1-fielderr{{margin-top:0}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button{{width:100%!important;min-height:48px;border-radius:var(--r-pill)!important;background:var(--orange)!important;border:0!important;box-shadow:none!important;color:#fff!important}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button:hover{{background:#d95b15!important}}
+{_LOGIN} [data-testid="stFormSubmitButton"] button p{{font-family:var(--font)!important;font-size:16px!important;font-weight:700!important;color:#fff!important}}
+@media (max-width:700px){{{_LOGIN} [data-testid="stMainBlockContainer"]{{max-width:none!important;padding:4rem 1rem 1.5rem!important}}}}
+</style>"""
 
 
 

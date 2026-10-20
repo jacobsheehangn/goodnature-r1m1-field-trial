@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import subprocess
+import re
 import sys
 import textwrap
 import time
@@ -139,36 +140,30 @@ def test_preview_locks_selection_and_commits_exactly_what_it_showed(
 
     page.get_by_role("button", name="Administration", exact=False).click()
     page.get_by_role("link", name="Trial setup", exact=True).click()
-    expect(page.get_by_text("Trial setup", exact=True).last).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("heading", name="Trial setup", exact=True)).to_be_visible(timeout=30_000)
 
-    expander = page.get_by_text("Bulk activate traps (2 inactive)", exact=True)
-    expect(expander).to_be_visible(timeout=15_000)
-    expander.click()
+    page.get_by_role("button", name=re.compile(r"^Bulk activate \(\d+\)$")).click()
+    expect(page.get_by_role("heading", name="Bulk activate traps", exact=True)).to_be_visible(timeout=15_000)
 
-    reason_box = page.get_by_placeholder("e.g. New traps deployed for tomorrow's field pass.")
+    reason_box = page.get_by_placeholder("Why these traps are being activated")
     expect(reason_box).to_be_visible(timeout=10_000)
     reason_box.fill("Regression test: bulk-activate preview lock")
+    page.wait_for_timeout(1_500)
 
-    # The bulk-activate list is sorted by Site ID then Trap ID (same order as
-    # the seeded trap_ids), so the first "Select" checkbox is trap_a's and the
-    # second is trap_b's - select only trap A. This checkbox is a react-aria
-    # Pressable component (visually-hidden <input>, custom press handling on
-    # its parent <label>) that doesn't reliably respond to a plain click, even
-    # in real Playwright/Chromium - genuine keyboard focus + Space does.
-    select_checkboxes = page.get_by_role("checkbox", name="Select")
-    expect(select_checkboxes).to_have_count(2, timeout=10_000)
-    select_checkboxes.nth(0).focus()
+    # Each trap has its own tick (a react-aria Pressable: genuine keyboard focus + Space is the reliable way to press it). Select only trap A.
+    select_a, select_b = page.get_by_role("checkbox", name=trap_a, exact=True), page.get_by_role("checkbox", name=trap_b, exact=True)
+    expect(select_a).to_be_visible(timeout=10_000)
+    select_a.focus()
     page.keyboard.press("Space")
-    expect(select_checkboxes.nth(0)).to_be_checked(timeout=10_000)
+    expect(select_a).to_be_checked(timeout=10_000)
 
     page.get_by_role("button", name="Preview activation", exact=True).click()
-    expect(page.get_by_text("Confirm bulk activation", exact=True)).to_be_visible(timeout=15_000)
+    expect(page.get_by_text("Confirm 1 trap", exact=True)).to_be_visible(timeout=15_000)
 
-    # Trap B's Select checkbox must now be disabled - proving the selection is
-    # locked once a preview is pending, not silently changeable underneath it.
-    expect(select_checkboxes.nth(1)).to_be_disabled(timeout=10_000)
+    # Trap B's tick must now be disabled - proving the selection is locked once a preview is pending, not silently changeable underneath it.
+    expect(select_b).to_be_disabled(timeout=10_000)
 
-    page.get_by_role("button", name="Confirm bulk activate", exact=True).click()
+    page.get_by_role("button", name="Activate 1 trap", exact=True).click()
     expect(page.get_by_text("Bulk activation applied.", exact=True)).to_be_visible(timeout=15_000)
 
     workbook_path = data_dir / "field_trial_data_v8_6_5.xlsx"

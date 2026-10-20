@@ -17,6 +17,7 @@ from pathlib import Path
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
 from test_trial_model_ui import _serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -236,11 +237,8 @@ bump(2)
     with _serve(data_dir, seed, extra_env={"R1M1_ENABLE_RECOVERY_TOOLS": "1"}) as url:
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
         expect(page.get_by_role("heading", name="Trap sites", exact=True)).to_be_visible(timeout=40_000)
-        page.get_by_role("button", name="Administration", exact=False).click()
-        page.get_by_role("link", name="Data & records", exact=True).click()
-        expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
-        page.get_by_text("Export and backup", exact=True).click()
-        page.get_by_text("Emergency recovery tools", exact=True).click()
+        ap.open_data_page(page, "Export and backup")
+        expect(page.get_by_text("Emergency recovery", exact=True)).to_be_visible(timeout=20_000)
         # The selected entry of the Backup list is the first one, and the first is the pin, named for what it was kept for.
         backup = page.get_by_role("combobox", name="Backup")
         expect(backup).to_have_value(re.compile(r"^PINNED, never rotated out: the workbook just before the first save that adds sheet Trials"), timeout=20_000)

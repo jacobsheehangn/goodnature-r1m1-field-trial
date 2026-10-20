@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -30,6 +31,8 @@ import pytest
 from playwright.sync_api import Page, expect
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
 
 
 def _select_streamlit_option(page: Page, combobox, filter_text: str, exact: bool = True) -> None:
@@ -137,12 +140,8 @@ def test_necropsy_correction_save_shows_a_disabled_saving_state_before_navigatin
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
 
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
-
-    _select_streamlit_option(page, page.get_by_role("combobox", name="Record type"), "Necropsy evidence")
-    window_picker = page.get_by_role("combobox", name="Select closed test window")
+    ap.open_data_page(page, "Necropsy evidence")
+    window_picker = page.get_by_role("combobox", name="Closed test window")
     expect(window_picker).to_be_visible(timeout=15_000)
     _select_streamlit_option(page, window_picker, seeded["window_id"], exact=False)
 
@@ -150,9 +149,10 @@ def test_necropsy_correction_save_shows_a_disabled_saving_state_before_navigatin
     # seeded) so this exercises the actual commit_staged_records_with_photos
     # path the persistent-lock treatment exists for, not the early-return
     # "no values changed" branch.
-    species_picker = page.get_by_role("combobox", name="Species", exact=True)
-    expect(species_picker).to_be_visible(timeout=15_000)
-    _select_streamlit_option(page, species_picker, "Mouse")
+    tiles = page.locator('[class*="st-key-species_corr_"]')
+    expect(tiles).to_be_visible(timeout=15_000)
+    tiles.get_by_text("Mouse", exact=True).click()
+    expect(tiles.get_by_role("radio", name="Mouse", exact=True)).to_be_checked(timeout=10_000)
 
     reason_box = page.locator('textarea[aria-label="Correction reason"]')
     reason_box.fill("Regression test: two-phase save feedback")
@@ -223,10 +223,7 @@ def suspect_r1_window_app(tmp_path: Path):
 def _open_window_start_corrections(page: Page, base_url: str) -> None:
     page.goto(base_url, wait_until="domcontentloaded", timeout=60_000)
     expect(page.get_by_text("Trap sites", exact=True).last).to_be_visible(timeout=30_000)
-    page.get_by_role("button", name="Administration", exact=False).click()
-    page.get_by_role("link", name="Data & records", exact=True).click()
-    expect(page.get_by_text("Data & records", exact=True).last).to_be_visible(timeout=30_000)
-    page.get_by_text("Window start corrections", exact=True).click()
+    ap.open_data_page(page, "Window start corrections")
     expect(page.get_by_text("Flagged traps", exact=True)).to_be_visible(timeout=15_000)
 
 
@@ -276,7 +273,7 @@ def test_apply_this_trap_shows_a_disabled_applying_state_before_navigating(
     base_url, data_dir, seeded = suspect_r1_window_app
     _open_window_start_corrections(page, base_url)
 
-    page.get_by_label("Reason for these corrections").fill("Regression test: single-apply feedback")
+    page.get_by_role("textbox", name="Reason", exact=True).fill("Regression test: single-apply feedback")
     # Pre-existing Streamlit/BaseWeb quirk, unrelated to two_phase_button:
     # a click issued immediately after committing the reason text_area's
     # edit can be swallowed with no server response at all (confirmed by
@@ -293,7 +290,7 @@ def test_apply_this_trap_shows_a_disabled_applying_state_before_navigating(
     # this button's work (a workbook write via correct_window_start +
     # save_data) happened in the same pass as the click, so there was no
     # observable intermediate state.
-    saw_busy = _click_until_busy_or_done(page, apply_button, "Applying", "No change")
+    saw_busy = _click_until_busy_or_done(page, apply_button, "Applying", "corrected.")
     assert saw_busy, "the busy 'Applying…' state was never observed"
 
 
@@ -303,18 +300,18 @@ def test_confirm_bulk_apply_shows_a_disabled_applying_state_before_navigating(
     base_url, data_dir, seeded = suspect_r1_window_app
     _open_window_start_corrections(page, base_url)
 
-    page.get_by_label("Reason for these corrections").fill("Regression test: bulk-apply feedback")
+    page.get_by_role("textbox", name="Reason", exact=True).fill("Regression test: bulk-apply feedback")
 
     # This checkbox is a react-aria Pressable, which doesn't reliably respond
     # to a plain click/.check() anywhere in this repo's test suite - genuine
     # keyboard focus + Space is the established, reliable workaround.
-    select_checkbox = page.get_by_role("checkbox", name="Select", exact=True)
+    select_checkbox = page.locator('[class*="st-key-bsel_winfix_"]').first.get_by_role("checkbox")
     select_checkbox.focus()
     page.keyboard.press("Space")
     expect(select_checkbox).to_be_checked(timeout=10_000)
 
-    page.get_by_role("button", name="Preview bulk apply", exact=True).click()
-    expect(page.get_by_text("Confirm bulk correction", exact=True)).to_be_visible(timeout=15_000)
+    page.get_by_role("button", name="Preview", exact=True).click()
+    expect(page.get_by_text(re.compile(r"^Confirm \d+ traps?$"))).to_be_visible(timeout=15_000)
 
     confirm_button = page.get_by_role("button", name="Confirm bulk apply", exact=True)
     saw_busy = _click_until_busy_or_done(page, confirm_button, "Applying", "Bulk correction applied.")

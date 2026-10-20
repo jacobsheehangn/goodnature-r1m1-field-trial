@@ -12,6 +12,7 @@ import check_form as cf
 from playwright.sync_api import Page, expect
 
 sys.path.insert(0, str(Path(__file__).parent))
+import admin_page as ap  # noqa: E402
 from necropsy_seed import NECROPSY_SEED  # noqa: E402
 from test_trial_model_ui import _serve, _sheet  # noqa: E402
 from test_trial_screens import _choose, _home  # noqa: E402
@@ -184,9 +185,9 @@ def test_trial_performance_shows_confirmed_coverage_on_rat_type_and_rodent_weigh
         caption = "4 of 7 windows have necropsy-confirmed species. Remaining 3 rest on unconfirmed field guesses."
         # Rodent weight is the default breakdown; Rat type carries the same figure; Build does not.
         expect(page.get_by_text(caption, exact=True)).to_be_visible(timeout=30_000)
-        _choose(page, "Break down performance by", "Rat type")
+        page.get_by_role("radio", name="Rat type", exact=True).click()
         expect(page.get_by_text(caption, exact=True)).to_be_visible(timeout=30_000)
-        _choose(page, "Break down performance by", "Build")
+        page.get_by_role("radio", name="Build", exact=True).click()
         expect(page.get_by_text("have necropsy-confirmed species", exact=False)).to_have_count(0, timeout=15_000)
 
 
@@ -200,13 +201,8 @@ def test_the_correction_form_shows_the_preserved_field_guess_beside_the_confirme
     """
     with _serve(data_dir, seed) as url:
         _home(page, url)
-        page.get_by_role("button", name="Administration").click()
-        page.get_by_role("link", name="Data & records", exact=True).click()
-        expect(page.get_by_text("Record type", exact=True)).to_be_visible(timeout=30_000)
-        page.wait_for_timeout(800)
-        _choose(page, "Record type", "Necropsy evidence")
-        page.wait_for_timeout(800)
-        combo = page.get_by_role("combobox", name=re.compile("Select closed test window"))
+        ap.open_data_page(page, "Necropsy evidence")
+        combo = page.get_by_role("combobox", name=re.compile("Closed test window"))
         target = page.get_by_role("option").filter(has_text="W-K1").first
         for _ in range(4):
             combo.click()
@@ -217,7 +213,7 @@ def test_the_correction_form_shows_the_preserved_field_guess_beside_the_confirme
                 page.keyboard.press("Escape")
                 page.wait_for_timeout(500)
         target.click()
-        expect(page.get_by_text("Field-recorded: Mouse · confirmed at necropsy", exact=True)).to_be_visible(timeout=30_000)
+        expect(page.get_by_text("Field-recorded: Mouse · confirmed at necropsy: Rat", exact=True)).to_be_visible(timeout=30_000)
 
 
 def test_the_check_forms_uploader_keeps_its_original_sizing(page: Page, tmp_path: Path) -> None:

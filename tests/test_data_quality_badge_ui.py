@@ -114,9 +114,9 @@ def test_badge_shows_the_count_and_updates_after_a_save(page: Page, two_flagged_
     assert _badge_text(page) == "2", "two isolated checks should show a badge of 2"
 
     page.locator('a[data-testid="stPageLink-NavLink"][href*="data-quality"]').first.click()
-    expect(page.get_by_text("2 checks flagged for review", exact=False)).to_be_visible(timeout=30_000)
+    expect(page.get_by_role("button", name="Review", exact=True)).to_have_count(2, timeout=30_000)
     page.get_by_role("button", name="Review", exact=True).first.click()
-    expect(page.get_by_text("Reviewing candidate 1 of 2", exact=False)).to_be_visible(timeout=30_000)
+    expect(page.get_by_text("reviewing 1 of 2", exact=False)).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Confirm as real", exact=True).click()
     expect(page.get_by_text("Confirmed as real.", exact=True)).to_be_visible(timeout=30_000)
 

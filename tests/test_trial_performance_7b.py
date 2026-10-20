@@ -113,8 +113,8 @@ def test_the_headings_and_messages_below_the_cards_are_in_the_same_language_and_
         assert v["funnelRows"] == 5, "the camera funnel keeps its five stages, drawn as before"
         assert v["navigation"] >= 1, "the navigation stays on this page"
         # the breakdown control still works and the figures it reads are unchanged
-        _choose(page, "Break down performance by", "Rat type")
-        expect(page.get_by_role("combobox", name="Break down performance by")).to_have_value("Rat type", timeout=15_000)
+        page.get_by_role("radio", name="Rat type", exact=True).click()
+        expect(page.get_by_role("radio", name="Rat type", exact=True)).to_be_checked(timeout=15_000)
         expect(page.get_by_text("0 of 17 windows have necropsy-confirmed species.", exact=False)).to_be_visible(timeout=15_000)
 
 
@@ -135,8 +135,38 @@ def test_the_two_plain_language_terms_and_the_calculation_definitions_are_under_
         _open(page, url, phone=False)
         expect(page.get_by_text("Necropsy: physical examination of the collected animal.", exact=True)).to_be_hidden()  # not on the cards, and the expander is closed
         page.get_by_text("More detail", exact=True).click()
-        expect(page.get_by_text("Calculation definitions", exact=True)).to_be_visible(timeout=15_000)
+        expect(page.get_by_text("How these are calculated", exact=True)).to_be_visible(timeout=15_000)
         expect(page.get_by_text("Necropsy: physical examination of the collected animal.", exact=True)).to_be_visible()
         expect(page.get_by_text("Camera review: watching footage of the event.", exact=True)).to_be_visible()
         expect(page.get_by_text("Humane rate: good kills divided by good plus bad kills with a completed final assessment.", exact=True)).to_be_visible()
 
+
+
+def test_the_lower_part_is_chips_stat_cards_and_cards(page: Page, tmp_path: Path) -> None:
+    """Part B batch 2b (AdmPerfMore): the breakdown is five chips (one on, Rodent weight to begin with), the tables sit in cards, the diagnostics are six stat
+    cards (four, then two) and the definitions are a card under "How these are calculated". The figures and the funnel are today's."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    page.set_viewport_size(DESKTOP)
+    with _serve(data_dir, SEED) as url:
+        _open(page, url, phone=False)
+        chips = page.locator('[class*="st-key-chips_perf_by"]').get_by_role("radio")
+        assert chips.all_inner_texts() == ["Rodent weight", "Rat type", "Build", "Site", "Trap"]
+        expect(page.get_by_role("radio", name="Rodent weight", exact=True)).to_be_checked()
+        page.get_by_role("radio", name="Build", exact=True).click()
+        expect(page.get_by_role("radio", name="Build", exact=True)).to_be_checked(timeout=15_000)
+        expect(page.locator('[class*="st-key-card_perf_table_breakdown"]')).to_be_visible(timeout=15_000)
+        expect(page.locator('[class*="st-key-card_perf_table_breakdown"] [data-testid="stDataFrame"]')).to_be_visible()
+        page.wait_for_timeout(2_000)  # the chip's rerun settles before More detail is opened (a late rerun would close it again)
+
+        expect(page.locator(".r1-diagcard").first).to_be_hidden()  # under More detail until it is opened
+        page.get_by_text("More detail", exact=True).click()
+        expect(page.locator(".r1-diagcard").first).to_be_visible(timeout=15_000)
+        assert page.locator(".r1-diag.cols4 .r1-diagcard").count() == 4 and page.locator(".r1-diag.cols2 .r1-diagcard").count() == 2
+        assert page.locator(".r1-diagcard").filter(has_text="Repeated interaction, no kill").count() == 1
+        expect(page.locator('[class*="st-key-card_perf_table_records"]')).to_be_visible()
+        expect(page.locator('[class*="st-key-card_perf_calc"]').get_by_text("Humane rate: good kills divided by good plus bad kills with a completed final assessment.", exact=True)).to_be_visible()
+        tops = page.evaluate("() => [...document.querySelectorAll('.r1-diag.cols4 .r1-diagcard')].map(e => Math.round(e.getBoundingClientRect().top))")
+        assert len(set(tops)) == 1, f"four across on desktop: {tops}"
+        page.set_viewport_size(PHONE); page.wait_for_timeout(1_000)
+        tops = page.evaluate("() => [...document.querySelectorAll('.r1-diag.cols4 .r1-diagcard')].map(e => Math.round(e.getBoundingClientRect().top))")
+        assert len(set(tops)) == 2, f"two across on a phone: {tops}"

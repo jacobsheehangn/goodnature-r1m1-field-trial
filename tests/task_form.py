@@ -30,17 +30,17 @@ def choose(page: Page, question: str, option: str) -> None:
     cf.pick(page, question, option)
 
 
-def set_when(page: Page, pair: str, moment: datetime) -> None:
+def set_when(page: Page, pair: str, moment: datetime, fmt: str = "%d/%m/%Y") -> None:
     """Fill a date and time pair. Tab leaves the date field (Escape would discard it) so the calendar is closed before the time is typed; left open it covers the time field."""
     day = page.locator(f'[class*="st-key-pair_{pair}_"] [data-testid="stDateInput"] input')
-    day.fill(moment.strftime("%d/%m/%Y"))
-    day.press("Enter")
-    page.wait_for_timeout(400)
-    day.press("Tab")
-    page.wait_for_timeout(500)
+    day.fill(moment.strftime(fmt))
+    page.wait_for_timeout(900)  # typing a date commits it and redraws the page; wait for that before touching anything else
+    page.locator('[role="heading"][aria-level="1"]').first.click()  # leaves the date field (its calendar would cover the time field) without a key that could press a button
+    page.wait_for_timeout(600)
     clock = page.locator(f'[class*="st-key-pair_{pair}_"] [data-testid="stTimeInput"] input')
     clock.click()
     clock.fill(moment.strftime("%H:%M"))
+    page.wait_for_timeout(300)
     clock.press("Enter")
     page.wait_for_timeout(700)
 

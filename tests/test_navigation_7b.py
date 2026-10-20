@@ -252,10 +252,8 @@ def test_the_trial_periods_back_pill_uses_the_pages_current_name(page: Page, tmp
         page.get_by_role("button", name="Administration", exact=True).click()
         page.get_by_role("dialog", name="Administration").get_by_role("link", name="Data & records", exact=True).click()
         expect(page).to_have_url(re.compile(r"/data-records$"), timeout=20_000)
-        page.get_by_role("radio", name="Trial history").check(force=True)
-        expect(page.get_by_role("button", name="Open trial history")).to_be_visible(timeout=20_000)
-        page.get_by_role("button", name="Open trial history").click()
-        expect(page.get_by_role("button", name="← Back to Data & records")).to_be_visible(timeout=20_000)
+        page.get_by_role("button", name="Trial periods", exact=True).click()
+        expect(page.get_by_role("button", name="Back to Data & records", exact=True)).to_be_visible(timeout=20_000)
         assert page.get_by_role("button", name=re.compile("Data Management")).count() == 0
 
 
