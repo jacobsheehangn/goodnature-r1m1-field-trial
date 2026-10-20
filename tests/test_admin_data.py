@@ -263,3 +263,46 @@ def test_a_window_start_is_corrected_one_trap_at_a_time_and_needs_a_reason(page:
     assert windows[windows["Window ID"] == seeded["window_id"]].iloc[0]["Start Time"].startswith("2026-08-01 00:00")
     audit = _sheet(data_dir, "Audit Log")
     assert ((audit["Record ID"] == seeded["window_id"]) & (audit["Reason"] == "Starts were stamped at sign-up, not deployment.")).any()
+
+
+def test_the_menus_data_and_records_goes_to_the_list_from_any_of_its_pages(page: Page, tmp_path: Path) -> None:
+    """The menu item is "here" only on the list itself; inside a correction, Trial periods, the audit log or export it is a way back to the list, on a desktop and on a phone."""
+    with _serve(tmp_path / "d", ADMIN_SEED) as url:
+        for viewport in (DESKTOP, PHONE):
+            page.set_viewport_size(viewport)
+            _open(page, url, "Data & records")
+            for title in ("Field check", "Trial periods", "Audit log", "Export and backup"):
+                page.get_by_role("button", name=title, exact=True).click()
+                expect(page.get_by_role("heading", name=title, exact=True)).to_be_visible(timeout=30_000)
+                ap.go_to(page, "Data & records")
+                expect(page.get_by_role("heading", name="Data & records", exact=True)).to_be_visible(timeout=30_000)
+                assert page.get_by_role("button", name=title, exact=True).count() == 1, "the list, with every page on it again"
+
+
+def test_a_build_is_labelled_with_its_product_once_everywhere_it_is_named(page: Page, tmp_path: Path) -> None:
+    """Reviewer, 20 Oct: the trap page said "R1 · R1 Build 4.3". The label is the product, a dot, then the build ("R1 · Build 4.3"), wherever a build is named."""
+    page.set_viewport_size(DESKTOP)
+    with _serve(tmp_path / "d", ADMIN_SEED) as url:
+        def no_doubled(where: str) -> None:
+            text = page.locator(".st-key-r1_screen").first.inner_text()
+            assert "R1 · R1 " not in text and "M1 · M1 " not in text, f"{where}: a doubled product in {text!r}"
+
+        ap.open_trap(page, url, "R1-MAN-001")
+        expect(page.locator(".r1-kv").filter(has_text="Build").first).to_contain_text("R1 · Build 4.3")
+        no_doubled("trap page")
+        ap.open_trap(page, url, "R1-MAN-NEW1")
+        ap.action(page, "Change build", "Change build of R1-MAN-NEW1")
+        expect(page.get_by_text("R1 · Build 4.3", exact=True).first).to_be_visible()
+        no_doubled("Change build")
+        ap.go_to(page, "Traps")
+        page.locator('[class*="st-key-listrow_net_R1-MAN-001"] button').click()
+        expect(page.locator(".r1-stats3")).to_be_visible(timeout=30_000)
+        no_doubled("trap history")
+        ap.go_to(page, "Trial setup")
+        page.get_by_role("radio", name="Builds", exact=True).click()
+        page.wait_for_timeout(1_500)
+        no_doubled("Builds")
+        ap.open_data_page(page, "Trial periods")
+        page.get_by_role("radio", name="All", exact=True).click()
+        page.wait_for_timeout(1_200)
+        no_doubled("Trial periods")

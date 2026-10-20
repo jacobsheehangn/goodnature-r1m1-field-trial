@@ -5865,7 +5865,7 @@ def render_trap_page(data, trap_id: str) -> None:
             window = open_window(data, trap_id)
             with st.container(key="card_trap_facts"):
                 st.markdown(r1_kv([
-                    ("Build", f"<b>{html.escape(trial_build_label(trap['Product'], trap['Build Version']))}</b>"),
+                    ("Build", f"<b>{html.escape(build_short_label(trap['Product'], trap['Build Version']))}</b>"),
                     ("Trial", f"<b>{html.escape('Running since ' + r1_short_date(parse_dt(trial['Start Time'])) if trial is not None else 'None running at ' + site)}</b>"),
                     ("Open test window", f"<b>{html.escape('since ' + task_when(window['Start Time']) if window is not None else 'None')}</b>"),
                 ]), unsafe_allow_html=True)
@@ -6086,12 +6086,13 @@ def render_trap_action(data, trap_id: str, page: str) -> None:
                 return
             builds = data["Builds"][data["Builds"]["Build Status"] != "Withdrawn"].copy()
             builds["Label"] = builds["Product"].astype(str) + " · " + builds["Build Version"].astype(str)
+            shown_as = {row["Label"]: build_short_label(row["Product"], row["Build Version"]) for _, row in builds.iterrows()}  # "R1 · Build 4.3", not "R1 · R1 Build 4.3"
             current_label = f"{trap['Product']} · {trap['Build Version']}"
             options = [x for x in builds["Label"].tolist() if x != current_label]
             if not options:
                 stop_with("info", "No other available builds", "Add a build in Trial setup first.")
                 return
-            st.markdown(r1_kv([("Current build", f"<b>{html.escape(current_label)}</b>")]), unsafe_allow_html=True)
+            st.markdown(r1_kv([("Current build", f"<b>{html.escape(build_short_label(trap['Product'], trap['Build Version']))}</b>")]), unsafe_allow_html=True)
             status_of = dict(zip(builds["Label"], builds["Build Status"]))
             errors = []
             reason_key = f"build_reason_{trap_id}"
@@ -6101,7 +6102,7 @@ def render_trap_action(data, trap_id: str, page: str) -> None:
                 errors.append(("reason", "Say why the build is changing."))
             field, field_line = _task_field_helpers(f"{page}_{trap_id}", errors, show_errors)
             with field("build"):
-                new_label = st.radio("New build", options, index=None, format_func=lambda x: f"{x}\n{status_of.get(x, '')}", key=f"rows_build_new_{trap_id}")
+                new_label = st.radio("New build", options, index=None, format_func=lambda x: f"{shown_as.get(x, x)}\n{status_of.get(x, '')}", key=f"rows_build_new_{trap_id}")
             field_line("build")
             if not active:
                 st.markdown(design.message_html("info", "", f"The trap is Inactive, so this stages the build before a trial. No window is opened."), unsafe_allow_html=True)
@@ -6121,7 +6122,7 @@ def render_trap_action(data, trap_id: str, page: str) -> None:
                     change_trap_build(data, trap_id, str(selected["Product"]), str(selected["Build Version"]), when, reason.strip())
                 except Exception as exc:
                     fail(exc)
-                finish(f"{trap_id} build changed.", [f"New build: {new_label}."])
+                finish(f"{trap_id} build changed.", [f"New build: {shown_as.get(new_label, new_label)}."])
 
         # ---- Delete ----------------------------------------------------------------------------------------------------------
         elif page == "trap_delete":
@@ -6771,7 +6772,7 @@ def render_setup_builds(data) -> None:
                             except Exception as exc:
                                 st.markdown(design.message_html("error", "The build was not removed", html.escape(str(exc))), unsafe_allow_html=True)
                             else:
-                                set_flash("success", f"{ex['Product']} · {ex['Build Version']} removed.")
+                                set_flash("success", f"{build_short_label(ex['Product'], ex['Build Version'])} removed.")
                                 for x in ("build_mode", "setup_build", "build_remove_open"):
                                     ss.pop(x, None)
                                 st.rerun()
@@ -6866,7 +6867,7 @@ def render_trap_history(data, trap_id: str) -> None:
         tr = trap.iloc[0]
         summary = trap_check_summary(data, trap_id)
         r1_back("Back to traps", "network", "to_traps")
-        admin_title(trap_id, f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)} · {tr['Build Version']}")
+        admin_title(trap_id, f"{site_name(data, tr['Site ID'])} · {trap_location_label(tr)} · {build_short_label(tr['Product'], tr['Build Version'])}")
         stats = [(len(summary["kills"]), "Kills"), (len(summary["checks"]), "Checks"), (r1_short_date(summary["last_kill"]) if summary["last_kill"] else "—", "Last kill")]
         st.markdown('<div class="r1-stats3">' + "".join(f'<div class="r1-statcard"><b>{html.escape(str(v))}</b><span>{label}</span></div>' for v, label in stats) + "</div>", unsafe_allow_html=True)
         window = open_window(data, trap_id)
@@ -6966,7 +6967,7 @@ def render_trial_periods(data) -> None:
                                 text_col, button_col = st.columns([3, 1], vertical_alignment="center")
                                 text_col.markdown(
                                     f'<div class="r1-row-title">{html.escape(row_id)} {excluded}</div>'
-                                    f'<div class="r1-meta">{html.escape(str(row["Trap ID"]))} · {html.escape(str(row["Build Version"] or "—"))} · {html.escape(site_name(data, row["Site ID"]))}</div>'
+                                    f'<div class="r1-meta">{html.escape(str(row["Trap ID"]))} · {html.escape(build_short_label(row["Product"], row["Build Version"]) if str(row["Build Version"]).strip() else "—")} · {html.escape(site_name(data, row["Site ID"]))}</div>'
                                     f'<div class="r1-meta">Started {html.escape(task_when(row["Start Time"]))} · {html.escape(str(outcome))} · {html.escape(str(state))}</div>', unsafe_allow_html=True)
                                 button_col.button("Review", key=f"window_review_{row_id}", on_click=lambda row_id=row_id: ss.update(window_panel=row_id))
             if panel is not None:
@@ -6978,7 +6979,7 @@ def render_trial_periods(data) -> None:
                         st.rerun()
                     wr = found.iloc[0]
                     title_col, close_col = st.columns([1, 0.12], vertical_alignment="center")
-                    title_col.markdown(f'<div class="r1-card-title" role="heading" aria-level="2" style="font-size:24px;line-height:30px">{html.escape(str(wid))}</div><div class="r1-meta">{html.escape(str(wr["Trap ID"]))} · {html.escape(str(wr["Build Version"]))}</div>', unsafe_allow_html=True)
+                    title_col.markdown(f'<div class="r1-card-title" role="heading" aria-level="2" style="font-size:24px;line-height:30px">{html.escape(str(wid))}</div><div class="r1-meta">{html.escape(str(wr["Trap ID"]))} · {html.escape(build_short_label(wr["Product"], wr["Build Version"]))}</div>', unsafe_allow_html=True)
                     if close_col.button("×", key="close_window_panel", help="Close"):
                         ss.pop("window_panel", None)
                         st.rerun()
@@ -7553,7 +7554,7 @@ def render_correct_stray(data) -> None:
                                 format_func=lambda wid: (lambda r: f"{r['Trap ID']} · {site_name(data, r['Site ID'])} · open since {task_when(r['Start Time'])} · {wid}")(
                                     candidates[candidates["Window ID"] == wid].iloc[0]))
         stray = candidates[candidates["Window ID"] == selected].iloc[0]
-        _ctx_card([("Trap", stray["Trap ID"]), ("Site", site_name(data, stray["Site ID"])), ("Build", stray["Build Version"]), ("Window open since", task_when(stray["Start Time"]))])
+        _ctx_card([("Trap", stray["Trap ID"]), ("Site", site_name(data, stray["Site ID"])), ("Build", build_short_label(stray["Product"], stray["Build Version"])), ("Window open since", task_when(stray["Start Time"]))])
         with st.container(key=f"tick_stray_{selected}"):
             confirm = st.checkbox("This window is a leftover. The trap was not being monitored", key=f"confirm_stray_window_{selected}")
         if two_phase_button("Close this stray window", f"close_stray_window_{selected}", "Closing…", type="primary", disabled=not confirm):
@@ -9230,7 +9231,16 @@ def top_nav_trial_setup() -> None:
     select_top_navigation("setup", ADMIN_SETUP_PAGES)
 
 
+RECORDS_LIST_QUERY = {"nav": "records_list"}
+
+
 def top_nav_data_records() -> None:
+    # The menu's "Data & records" item, tapped while you are inside one of its pages, comes back with this parameter: go to the list.
+    if st.query_params.get("nav") == RECORDS_LIST_QUERY["nav"]:
+        st.query_params.pop("nav", None)
+        st.session_state.page = "data_management"
+        st.session_state.scroll_to_top_once = True
+        st.session_state.navigation_sequence = int(st.session_state.get("navigation_sequence", 0)) + 1
     select_top_navigation("data_management", {"data_management", "windows", *DATA_SUB_PAGES})
 
 
@@ -9315,7 +9325,10 @@ NAV_LABEL_BY_KEY = {"sites": "Trap sites", "followups": "Follow-ups", "performan
 
 
 def _nav_link(key: str, current: str, width: str = "content") -> None:
-    st.page_link(NAV_PAGE_BY_KEY[key], label=NAV_LABEL_BY_KEY[key], disabled=(key == current), width=width)
+    # Inside one of Data & records' pages the item is a live link back to the list (the list itself is "here", so it stays disabled there).
+    inside_a_sub_page = key == "records" and current == key and st.session_state.get("page") in {*DATA_SUB_PAGES, "windows"}
+    st.page_link(NAV_PAGE_BY_KEY[key], label=NAV_LABEL_BY_KEY[key], disabled=(key == current and not inside_a_sub_page), width=width,
+                 query_params=RECORDS_LIST_QUERY if inside_a_sub_page else None)
 
 
 def _admin_menu_items(current: str, suffix: str) -> None:

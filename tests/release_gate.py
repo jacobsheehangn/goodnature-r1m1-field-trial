@@ -81,6 +81,7 @@ required = {
     "Grouped trap-history day heading": 'class="r1-hist-day"',
     "Fixed history time column": "grid-template-columns: 5.25rem minmax(0, 1fr);",
     "Trap editor close control": 'key="close_trap_setup_panel_top"',
+    "Emergency restore button": 'key="emergency_restore"',  # Part B 2b (reviewer, 20 Oct): proves the recovery tool's Restore button survives a later refactor
 }
 for name, token in required.items():
     check(name, token in combined_source, f"Required token: {token}")

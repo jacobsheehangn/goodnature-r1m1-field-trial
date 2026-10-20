@@ -251,7 +251,10 @@ def test_change_build_stages_a_build_on_an_inactive_trap_and_opens_no_window(pag
         options = page.locator('[class*="st-key-rows_build_new"] [data-testid="stRadioOption"]')
         assert options.count() >= 1, "there is another build to choose"
         options.first.click()
-        chosen = options.first.inner_text().split("\n")[0].split(" · ")[-1].strip()
+        shown = options.first.inner_text().split("\n")[0].strip()  # "R1 · Build 4.1": the product once, not "R1 · R1 Build 4.1"
+        product, short = shown.split(" · ", 1)
+        assert not short.startswith(product), f"the product is not repeated in the build: {shown!r}"
+        chosen = f"{product} {short}"
         ap.fill(page, "Reason", "Upgraded on the bench.")
         change.click()
         expect(page.get_by_text(f"{INACTIVE_UNUSED} build changed.", exact=True)).to_be_visible(timeout=60_000)
