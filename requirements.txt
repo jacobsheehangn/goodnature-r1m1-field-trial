@@ -1,4 +1,8 @@
 streamlit==1.60.0
+# Streamlit 1.60.0 serves through Starlette but only requires starlette>=0.40,<2, so a fresh build installs the newest one. Starlette 1.9.0
+# breaks Streamlit 1.60.0's gzip middleware for binary responses (fonts, images): the sign-in logo and the Lato fonts came back 500 on Render
+# (20 Oct 2026). Pinned to the version the tests run on; move it only together with Streamlit, after the suite has run on the new pair.
+starlette==1.4.1
 pandas>=2.0
 openpyxl>=3.1
 
