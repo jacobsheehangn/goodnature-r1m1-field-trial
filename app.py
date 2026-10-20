@@ -4894,7 +4894,8 @@ def show_flash():
             st.markdown(design.VISIT_COMPLETE_CSS, unsafe_allow_html=True)  # its own block: Streamlit hides a markdown block that holds a <style>
             st.markdown(design.visit_complete_html(summary["site"], summary["stats"], summary["needs"], summary["next_due"]), unsafe_allow_html=True)
         else:
-            message_panel(flash["kind"], flash["title"], flash.get("lines", []))
+            with st.container(key="flash_message"):  # the page's width and a gap under it (r1m1_design.NARROW_CSS)
+                message_panel(flash["kind"], flash["title"], flash.get("lines", []))
 
 
 def visit_complete_summary(data, sid: str, vid: str) -> dict:
@@ -6849,13 +6850,13 @@ def render_traps_list(data) -> None:
         if ss.get("chips_traps_site") not in sites:
             ss["chips_traps_site"] = ss.get("traps_site_filter_value") if ss.get("traps_site_filter_value") in sites else "All sites"
         with st.container(key="filters_traps"):
-            search_col, site_col = st.columns([1, 1.7], vertical_alignment="top")
+            search_col, site_col, status_col = st.columns([1.1, 2.1, 1.3], vertical_alignment="bottom")
             search = search_col.text_input("Find a trap", value=ss.get("traps_search_value", ""), placeholder="Find a trap by ID or location", key="traps_search_widget", label_visibility="collapsed")
             ss["traps_search_value"] = search
             with site_col, st.container(key="chips_traps_filter"):
                 site_filter = st.pills("Site", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_traps_site") or "All sites"
             ss["traps_site_filter_value"] = site_filter
-            with st.container(key="seg_traps_status_wrap"):
+            with status_col, st.container(key="seg_traps_status_wrap"):
                 status_filter = st.segmented_control("Status", ["All", "Active", "Inactive"], default="All", key="seg_traps_status", selection_mode="single") or "All"
         traps = data["Traps"].copy()
         if site_filter != "All sites":
