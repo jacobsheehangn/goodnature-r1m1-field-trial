@@ -291,7 +291,7 @@ COMPONENT_CSS = f"""
 /* A pill button on a grey row, in the card of the trap page's actions and in the panels is white with a hairline, as the boards draw it. */
 .stApp :is([class*="st-key-listrow_trap_"],[class*="st-key-listrow_site_"],[class*="st-key-listrow_build_"],[class*="st-key-listrow_net_"],[class*="st-key-listrow_win_"],[class*="st-key-actrow_"],[class*="st-key-card_setup_bulk"]) button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10)}}
 .r1-readonly{{background:var(--ink-05);border-radius:var(--r-input);padding:12px 14px;font-size:16px;line-height:22px;color:var(--ink-70);margin:6px 0 10px}}
-.st-key-setup_trap_rows,.st-key-setup_trap_rows_review{{gap:12px}}
+.st-key-setup_trap_rows,.st-key-setup_trap_rows_review,.st-key-setup_trap_rows_corrections{{gap:12px}}
 [class*="st-key-card_setup_bulk"]{{padding:14px 16px}}
 [class*="st-key-card_setup_bulk"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;gap:12px;align-items:center}}
 [class*="st-key-card_setup_bulk"] [data-testid="stColumn"]{{min-width:0!important;flex:1 1 0!important}}
@@ -523,6 +523,47 @@ COMPONENT_CSS = f"""
 
 /* ---- Message panel: radius 14, padding 14; warn / error / success / info ---- */
 
+/* ---- Desktop tables (the width rule, 20 Oct): over 700px a list is one card, a header row, then 56px rows of columns with the action at the row's end. The same
+   markdown holds the phone's stacked text (.r1-mb) and the grid of cells (.r1-dk); each shows at its own width, so the phone is unchanged. ---- */
+.r1-dk{{display:none}}
+.stApp [class*="st-key-tablewrap_"]:not([class*="st-key-cardlist_"]){{gap:12px}}
+@media (min-width:701px){{
+  .r1-mb{{display:none}}
+  .r1-dk{{display:grid;grid-template-columns:var(--cols);column-gap:16px;align-items:center}}
+  .r1-dk .c{{min-width:0;font-size:16px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+  .r1-dk .c.b{{font-weight:700}} .r1-dk .c.dim{{color:var(--ink-70)}}
+  .r1-dk .c.task{{display:flex;align-items:center;gap:12px;font-weight:700}}
+  .r1-dk .c.task .r1-rowicon{{flex:0 0 40px;width:40px;height:40px}}
+  .r1-thead{{padding:14px 16px 12px 16px;padding-right:144px;border-bottom:1px solid var(--ink-10);font-size:15px;line-height:20px;font-weight:700;color:var(--ink-70)}}
+  .stApp [class*="st-key-tablewrap_"]{{background:#fff;border-radius:var(--r-card);box-shadow:var(--shadow-panel);padding:4px 12px 6px;gap:0}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"]{{background:transparent;border-radius:0;box-shadow:none;border-bottom:1px solid var(--ink-05);padding:0 16px;min-height:56px;margin:0;width:100%!important}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"]:last-child{{border-bottom:0}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_next_"]{{background:var(--orange-10);border-radius:var(--r-panel);border-bottom:0}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stHorizontalBlock"]{{gap:16px}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stColumn"]:first-child{{flex:1 1 0!important}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 112px!important;width:112px!important}}
+  [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] button{{width:112px}}
+  .stApp [class*="st-key-tablewrap_"] [class*="st-key-listrow_"] button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10)}}
+  /* Trial setup: the section control is not the width of the page; the site chips, Bulk activate (n) and Add trap are one line; Add site / Add build sit at the right. */
+  [class*="st-key-seg_setup_section"]{{max-width:700px}}
+  [class*="st-key-setup_filter_row"] [data-testid="stHorizontalBlock"]{{gap:16px;flex-wrap:nowrap}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]{{flex:0 0 auto!important;width:auto!important}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:first-child{{flex:1 1 0!important}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:nth-child(2){{order:3}}
+  [class*="st-key-setup_filter_row"] [data-testid="stColumn"]:nth-child(3){{order:2}}
+  .stApp [class*="st-key-card_setup_bulk"]{{background:transparent;box-shadow:none;padding:0}}
+  [class*="st-key-card_setup_bulk"] [data-testid="stColumn"]:first-child{{display:none}}
+  .stApp [class*="st-key-card_setup_bulk"] button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10);width:auto;white-space:nowrap}}
+  [class*="st-key-setup_add_site"],[class*="st-key-setup_add_build"]{{display:flex;justify-content:flex-end}}
+  /* Data & records: the corrections are two columns of rows, beside the group of review pages. */
+  [class*="st-key-setup_trap_rows_corrections"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
+  /* Traps: the search beside the site chips, the Status control under them. */
+  [class*="st-key-filters_traps"] [data-testid="stHorizontalBlock"]{{gap:24px}}
+  [class*="st-key-seg_traps_status_wrap"]{{max-width:420px}}
+  /* Follow-ups: the site chips, the priority control and Review next task on one line. */
+  [class*="st-key-filters_followups"] [data-testid="stHorizontalBlock"]{{gap:24px}}
+  [class*="st-key-actions_followups_next"]{{display:flex;justify-content:flex-end}}
+}}
 /* ---- Stepper: 26px discs, 2px joins ---- */
 .r1-stepper{{display:flex;align-items:center;gap:8px;font-size:14px;line-height:20px}}
 .r1-stepper .s{{display:inline-flex;align-items:center;gap:8px;white-space:nowrap;color:var(--ink-70)}}

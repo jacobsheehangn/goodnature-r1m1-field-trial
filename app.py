@@ -4956,6 +4956,21 @@ def r1_stepper(current: int) -> None:
     st.markdown(design.stepper_html(current), unsafe_allow_html=True)
 
 
+FOLLOWUP_COLS = "2.4fr 1.5fr 1.8fr 2.4fr 1fr 1fr"
+
+
+def r1_row_html(phone_html: str, cells: list, cols: str) -> str:
+    """One row of a list: today's stacked text for a phone (.r1-mb) and, for a desktop, the grid of cells (.r1-dk), with the same column widths as r1_head_html().
+    `cells` is [(extra css classes, html), ...]; the CSS shows one of the two by width."""
+    grid = "".join(f'<div class="c{(" " + extra) if extra else ""}">{inner}</div>' for extra, inner in cells)
+    return f'<div class="r1-mb">{phone_html}</div><div class="r1-dk" style="--cols:{cols}">{grid}</div>'
+
+
+def r1_head_html(labels: list, cols: str) -> str:
+    """The header row of a desktop table (hidden on a phone)."""
+    return f'<div class="r1-thead r1-dk" style="--cols:{cols}">' + "".join(f"<div>{html.escape(label)}</div>" for label in labels) + "</div>"
+
+
 def r1_title(title: str, subtitle: str = "", stat_value=None, stat_label: str = "") -> None:
     SCREEN_TITLES.append(str(title))
     stat = (
@@ -6172,17 +6187,26 @@ def render_setup_header(data) -> str:
     return chosen or "Traps"
 
 
-def _setup_trap_row(data, tr) -> None:
+SETUP_TRAP_COLS = "2.4fr 1.8fr 1.7fr 1fr 1.7fr 0.9fr"
+SETUP_SITE_COLS = "2.6fr 1fr 1.2fr 1.6fr 1.6fr"
+SETUP_BUILD_COLS = "2.8fr 1.2fr 1.6fr 1.8fr"
+
+
+def _setup_trap_row(data, tr, table: bool = False) -> None:
     trap_id = str(tr["Trap ID"])
     active = str(tr["Status"]) == "Active"
     camera = str(tr["Camera ID"]).strip() or "No camera"
     meta = f"{r1_short_build(trial_build_label(tr['Product'], tr['Build Version']))} · {('Camera ' + camera) if camera != 'No camera' else camera} · Route {str(tr['Route Order']).strip() or '—'}"
+    status = f'<span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span>'
+    phone = (f'<div class="r1-row-title">{html.escape(trap_id)} {status}</div>'
+             f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
+             f'<div class="r1-meta">{html.escape(meta)}</div>')
+    cells = [("b", f"{html.escape(trap_id)} {status}"), ("", html.escape(site_name(data, tr["Site ID"]))), ("", html.escape(trap_location_label(tr))),
+             ("", html.escape(short_build_number(tr["Product"], tr["Build Version"]))), ("", html.escape(str(tr["Camera ID"]).strip() or "—")),
+             ("", html.escape(str(tr["Route Order"]).strip() or "—"))]
     with st.container(key=f"listrow_trap_{trap_id}"):
         text_col, button_col = st.columns([3, 1], vertical_alignment="center")
-        text_col.markdown(
-            f'<div class="r1-row-title">{html.escape(trap_id)} <span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span></div>'
-            f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div>'
-            f'<div class="r1-meta">{html.escape(meta)}</div>', unsafe_allow_html=True)
+        text_col.markdown(r1_row_html(phone, cells, SETUP_TRAP_COLS) if table else phone, unsafe_allow_html=True)
         button_col.button("Edit", key=f"setup_edit_trap_{trap_id}", on_click=set_page, args=("trap_edit",), kwargs={"trap_id": trap_id})
 
 
@@ -6263,23 +6287,25 @@ def render_setup_traps(data) -> None:
         else:
             list_col, panel = st.container(), None
         with list_col, st.container(key="setup_list"):
-            chips_col, add_col = st.columns([4, 1], vertical_alignment="bottom")
-            with chips_col, st.container(key="chips_setup_filter"):
-                site_filter = st.pills("Show traps from", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_setup_site") or "All sites"
-            if add_col.button("Add trap", type="primary", key="setup_add_trap"):
-                ss["setup_mode"] = "add"
-                st.rerun()
             inactive = data["Traps"][data["Traps"]["Status"] == "Inactive"]
+            site_filter = ss.get("chips_setup_site") or "All sites"
             if site_filter != "All sites":
                 inactive = inactive[inactive["Site ID"] == site_filter]
-            with st.container(key="card_setup_bulk"):
-                text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
-                count = len(inactive)
-                text_col.markdown(
-                    '<div class="r1-row-title">Bulk activate traps</div>'
-                    f'<div class="r1-meta">{count} inactive trap{"s" if count != 1 else ""} can be activated together inside a running trial.</div>', unsafe_allow_html=True)
-                if button_col.button("Bulk activate", key="setup_bulk_activate", on_click=set_page, args=("bulk_activate",), kwargs={"bulk_site": site_filter}, disabled=count == 0):
-                    pass
+            count = len(inactive)
+            # One line on a desktop: the site chips, Bulk activate (n) and Add trap (the CSS sets the order); on a phone, in this order, the chips, Add trap, then the bulk card.
+            with st.container(key="setup_filter_row"):
+                chips_col, add_col, bulk_col = st.columns([4, 1, 1.6], vertical_alignment="bottom")
+                with chips_col, st.container(key="chips_setup_filter"):
+                    site_filter = st.pills("Show traps from", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_setup_site") or "All sites"
+                if add_col.button("Add trap", type="primary", key="setup_add_trap"):
+                    ss["setup_mode"] = "add"
+                    st.rerun()
+                with bulk_col, st.container(key="card_setup_bulk"):
+                    text_col, button_col = st.columns([3, 1.2], vertical_alignment="center")
+                    text_col.markdown(
+                        '<div class="r1-row-title">Bulk activate traps</div>'
+                        f'<div class="r1-meta">{count} inactive trap{"s" if count != 1 else ""} can be activated together inside a running trial.</div>', unsafe_allow_html=True)
+                    button_col.button(f"Bulk activate ({count})", key="setup_bulk_activate", on_click=set_page, args=("bulk_activate",), kwargs={"bulk_site": site_filter}, disabled=count == 0)
             view = data["Traps"].copy()
             if site_filter != "All sites":
                 view = view[view["Site ID"] == site_filter]
@@ -6287,9 +6313,12 @@ def render_setup_traps(data) -> None:
                 st.markdown(design.message_html("info", "No traps match this filter", "Change the site or status to see more."), unsafe_allow_html=True)
             else:
                 view = view.assign(_route_num=pd.to_numeric(view["Route Order"], errors="coerce"))
-                with st.container(key="setup_trap_rows"):
+                table = panel is None  # no panel open: the full-width table (WideSetupTraps); beside a panel, the compact rows
+                with st.container(key="tablewrap_setup_traps" if table else "setup_trap_rows"):
+                    if table:
+                        st.markdown(r1_head_html(["Trap", "Site", "Location", "Build", "Camera", "Route"], SETUP_TRAP_COLS), unsafe_allow_html=True)
                     for _, tr in view.sort_values(["Site ID", "_route_num"]).iterrows():
-                        _setup_trap_row(data, tr)
+                        _setup_trap_row(data, tr, table=table)
         if panel is not None:
             with panel, st.container(key="card_setup_panel"):
                 render_add_trap_panel(data)
@@ -6418,13 +6447,18 @@ def _panel_header(title: str, close_key: str, state_keys: tuple) -> None:
     st.button("Back to Trial setup", key=f"back_{close_key}", on_click=lambda: [ss.pop(k, None) for k in state_keys])
 
 
-def _setup_row(kind: str, ident: str, selected: bool, title: str, status: str, status_kind: str, lines: list, edit_key: str, on_edit) -> None:
+def _setup_row(kind: str, ident: str, selected: bool, title: str, status: str, status_kind: str, lines: list, edit_key: str, on_edit, cells=None, cols: str = "") -> None:
+    """A row of Trial setup. `cells` (the columns after the first) make it a row of the desktop table; without them it is the compact two-line row (a phone, or a list
+    beside an open panel)."""
     dot = {"success": " done", "warn": " progress", "none": ""}[status_kind]
+    badge = f'<span class="r1-status strong{dot}">{html.escape(status)}</span>'
     with st.container(key=f"listrow_{kind}_{'sel_' if selected else ''}{ident}"):
         text_col, button_col = st.columns([3, 1], vertical_alignment="center")
-        text_col.markdown(
-            f'<div class="r1-row-title">{html.escape(title)} <span class="r1-status strong{dot}">{html.escape(status)}</span></div>'
-            + "".join(f'<div class="r1-meta">{html.escape(line)}</div>' for line in lines), unsafe_allow_html=True)
+        phone = f'<div class="r1-row-title">{html.escape(title)} {badge}</div>' + "".join(f'<div class="r1-meta">{html.escape(line)}</div>' for line in lines)
+        if cells is None:
+            text_col.markdown(phone, unsafe_allow_html=True)
+        else:
+            text_col.markdown(r1_row_html(phone, [("b", f"{html.escape(title)} {badge}")] + [("", html.escape(cell)) for cell in cells], cols), unsafe_allow_html=True)
         button_col.button("Edit", key=edit_key, on_click=on_edit)
 
 
@@ -6466,15 +6500,20 @@ def render_setup_sites(data) -> None:
         if st.button("Add site", type="primary", key="setup_add_site"):
             ss["setup_site"], ss["site_mode"] = "", "add"
             st.rerun()
-        with st.container(key="setup_trap_rows"):
+        table = panel is None  # no panel open: the full-width table (WideSetupSites); beside a panel, the compact rows
+        with st.container(key="tablewrap_setup_sites" if table else "setup_trap_rows"):
+            if table:
+                st.markdown(r1_head_html(["Site", "Code", "Active traps", "Visit interval", "Mobile coverage"], SETUP_SITE_COLS), unsafe_allow_html=True)
             for _, site_row in data["Sites"].sort_values("Site Name").iterrows():
                 sid = str(site_row["Site ID"])
                 count = len(data["Traps"][(data["Traps"]["Site ID"] == sid) & (data["Traps"]["Status"] == "Active")])
-                covered = "Mobile coverage confirmed" if site_row.get("Mobile Coverage Confirmed", "") == "Yes" else "Mobile coverage not confirmed"
+                confirmed = site_row.get("Mobile Coverage Confirmed", "") == "Yes"
+                covered = "Mobile coverage confirmed" if confirmed else "Mobile coverage not confirmed"
                 _setup_row("site", sid, mode == "edit" and ss.get("setup_site") == sid, str(site_row["Site Name"]), str(site_row["Status"]),
                            "success" if site_row["Status"] == "Active" else "none",
                            [f"{sid} · {count} active trap{'s' if count != 1 else ''}", f"Every {site_row['Visit Interval Days']} days · {covered}"],
-                           f"setup_edit_site_{sid}", lambda sid=sid: ss.update(setup_site=sid, site_mode="edit"))
+                           f"setup_edit_site_{sid}", lambda sid=sid: ss.update(setup_site=sid, site_mode="edit"),
+                           cells=[sid, str(count), f"Every {site_row['Visit Interval Days']} days", "Confirmed" if confirmed else "Not confirmed"] if table else None, cols=SETUP_SITE_COLS)
     if panel is None:
         return
     with panel, st.container(key="card_setup_panel"):
@@ -6686,7 +6725,10 @@ def render_setup_builds(data) -> None:
         if st.button("Add build", type="primary", key="setup_add_build"):
             ss["setup_build"], ss["build_mode"] = "", "add"
             st.rerun()
-        with st.container(key="setup_trap_rows"):
+        table = panel is None  # no panel open: the full-width table (WideSetupBuilds); beside a panel, the compact rows
+        with st.container(key="tablewrap_setup_builds" if table else "setup_trap_rows"):
+            if table:
+                st.markdown(r1_head_html(["Build", "Active traps", "First active", "Source"], SETUP_BUILD_COLS), unsafe_allow_html=True)
             for _, build_row in data["Builds"].sort_values(["Product", "First Active Date"], ascending=[True, False]).iterrows():
                 product_code, version = str(build_row["Product"]), str(build_row["Build Version"])
                 identity = f"{product_code}::{version}"
@@ -6698,7 +6740,8 @@ def render_setup_builds(data) -> None:
                 _setup_row("build", re.sub(r"[^A-Za-z0-9_-]", "_", identity), mode == "edit" and ss.get("setup_build") == identity, build_short_label(product_code, version), state,
                            "success" if state == "Current" else ("warn" if state == "Trial comparison" else "none"),
                            [f"{count} active trap{'s' if count != 1 else ''}", f"First active: {first.strftime('%d %b %Y').lstrip('0') if first else '—'} · Source: {source}"],
-                           f"setup_edit_build_{product_code}_{version}", lambda identity=identity: ss.update(setup_build=identity, build_mode="edit"))
+                           f"setup_edit_build_{product_code}_{version}", lambda identity=identity: ss.update(setup_build=identity, build_mode="edit"),
+                           cells=[str(count), first.strftime('%d %b %Y').lstrip('0') if first else "Not set", source or "—"] if table else None, cols=SETUP_BUILD_COLS)
     if panel is None:
         return
     with panel, st.container(key="card_setup_panel"):
@@ -6788,22 +6831,32 @@ def trap_check_summary(data, trap_id) -> dict:
     return {"checks": checks, "kills": kills, "last_kill": last_kill}
 
 
+TRAPS_COLS = "2.3fr 1.7fr 1.5fr 0.9fr 1.6fr 0.7fr 0.8fr 1fr"
+
+
+def short_build_number(product, version) -> str:
+    """"R1 · R1 Build 4.3" -> "4.3" (a column headed Build); "R1 · 19" -> "19"."""
+    short = r1_short_build(trial_build_label(product, version))
+    return short[len("Build "):] if short.startswith("Build ") else short
+
+
 def render_traps_list(data) -> None:
     ss = st.session_state
-    r1_screen_css(narrow=True)
+    r1_screen_css()  # full width on a desktop: a list with columns (board WideTrapsList); a phone keeps its stacked rows
     with st.container(key=design.SCREEN_KEY):
         admin_title("Traps", "Every trap, with its record so far. Open one to see its full history.")
         sites = ["All sites"] + data["Sites"]["Site ID"].tolist()
         if ss.get("chips_traps_site") not in sites:
             ss["chips_traps_site"] = ss.get("traps_site_filter_value") if ss.get("traps_site_filter_value") in sites else "All sites"
-        search = st.text_input("Find a trap", value=ss.get("traps_search_value", ""), placeholder="Find a trap by ID or location", key="traps_search_widget", label_visibility="collapsed")
-        ss["traps_search_value"] = search
-        site_col, status_col = st.columns([2.2, 1.3], vertical_alignment="top")
-        with site_col, st.container(key="chips_traps_filter"):
-            site_filter = st.pills("Site", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_traps_site") or "All sites"
-        ss["traps_site_filter_value"] = site_filter
-        with status_col, st.container(key="seg_traps_status_wrap"):
-            status_filter = st.segmented_control("Status", ["All", "Active", "Inactive"], default="All", key="seg_traps_status", selection_mode="single") or "All"
+        with st.container(key="filters_traps"):
+            search_col, site_col = st.columns([1, 1.7], vertical_alignment="top")
+            search = search_col.text_input("Find a trap", value=ss.get("traps_search_value", ""), placeholder="Find a trap by ID or location", key="traps_search_widget", label_visibility="collapsed")
+            ss["traps_search_value"] = search
+            with site_col, st.container(key="chips_traps_filter"):
+                site_filter = st.pills("Site", sites, selection_mode="single", format_func=lambda x: x if x == "All sites" else site_name(data, x), key="chips_traps_site") or "All sites"
+            ss["traps_site_filter_value"] = site_filter
+            with st.container(key="seg_traps_status_wrap"):
+                status_filter = st.segmented_control("Status", ["All", "Active", "Inactive"], default="All", key="seg_traps_status", selection_mode="single") or "All"
         traps = data["Traps"].copy()
         if site_filter != "All sites":
             traps = traps[traps["Site ID"] == site_filter]
@@ -6816,7 +6869,8 @@ def render_traps_list(data) -> None:
             st.markdown(design.message_html("info", "No traps match this filter", "Change the site or status to see more."), unsafe_allow_html=True)
             return
         traps = traps.assign(_route_num=pd.to_numeric(traps["Route Order"], errors="coerce"))
-        with st.container(key="setup_trap_rows"):
+        with st.container(key="tablewrap_traps"):
+            st.markdown(r1_head_html(["Trap", "Site", "Location", "Build", "Camera", "Kills", "Checks", "Last kill"], TRAPS_COLS), unsafe_allow_html=True)
             for _, tr in traps.sort_values(["Site ID", "_route_num"]).iterrows():
                 trap_id = str(tr["Trap ID"])
                 summary = trap_check_summary(data, trap_id)
@@ -6824,12 +6878,15 @@ def render_traps_list(data) -> None:
                 kills, checks = len(summary["kills"]), len(summary["checks"])
                 last = f"Last kill {r1_short_date(summary['last_kill'])}" if summary["last_kill"] else "No kills recorded"
                 meta = f"{r1_short_build(trial_build_label(tr['Product'], tr['Build Version']))} · {kills} kill{'s' if kills != 1 else ''} · {checks} check{'s' if checks != 1 else ''} · {last}"
+                status = f'<span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span>'
+                phone = (f'<div class="r1-row-title">{html.escape(trap_id)} {status}</div>'
+                         f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div><div class="r1-meta">{html.escape(meta)}</div>')
+                cells = [("b", f"{html.escape(trap_id)} {status}"), ("", html.escape(site_name(data, tr["Site ID"]))), ("", html.escape(trap_location_label(tr))),
+                         ("", html.escape(short_build_number(tr["Product"], tr["Build Version"]))), ("", html.escape(str(tr["Camera ID"]).strip() or "—")),
+                         ("", str(kills)), ("", str(checks)), ("", html.escape(r1_short_date(summary["last_kill"])) if summary["last_kill"] else "—")]
                 with st.container(key=f"listrow_net_{trap_id}"):
                     text_col, button_col = st.columns([3, 1], vertical_alignment="center")
-                    text_col.markdown(
-                        f'<div class="r1-row-title">{html.escape(trap_id)} <span class="r1-status strong{" done" if active else ""}">{"Active" if active else "Inactive"}</span></div>'
-                        f'<div class="r1-meta">{html.escape(trap_location_label(tr))} · {html.escape(site_name(data, tr["Site ID"]))}</div><div class="r1-meta">{html.escape(meta)}</div>',
-                        unsafe_allow_html=True)
+                    text_col.markdown(r1_row_html(phone, cells, TRAPS_COLS), unsafe_allow_html=True)
                     button_col.button("View", key=f"network_view_{trap_id}", on_click=set_page, args=("trap_detail",), kwargs={"trap_id": trap_id})
 
 
@@ -6997,11 +7054,14 @@ def render_trial_periods(data) -> None:
                         st.markdown('<div class="r1-meta">This window is still active. Evidence and final assessment are added only after the next field check closes it.</div>', unsafe_allow_html=True)
 
 
+DQ_COLS = "1.8fr 1.8fr 1.5fr 3.6fr"
+
+
 def render_data_quality(data) -> None:
     ss = st.session_state
-    r1_screen_css(narrow=True)
     candidates = find_data_quality_candidates(data)
     reviewing = ss.get("data_quality_review")
+    r1_screen_css(narrow=bool(reviewing) or not candidates)  # the list of flagged checks is full width on a desktop; one check under review (or nothing flagged) is one column
     with st.container(key=design.SCREEN_KEY):
         if not candidates:
             ss.pop("data_quality_review", None)
@@ -7013,13 +7073,16 @@ def render_data_quality(data) -> None:
             st.rerun()
         if not reviewing:
             admin_title("Data quality review", "Checks that look like test data because nothing else was checked nearby. Confirm or void each one.")
-            with st.container(key="setup_trap_rows"):
+            with st.container(key="tablewrap_dq"):
+                st.markdown(r1_head_html(["Trap", "Site", "Checked", "Why it is flagged"], DQ_COLS), unsafe_allow_html=True)
                 for c in candidates:
                     with st.container(key=f"listrow_net_dq_{c['Check ID']}"):
                         text_col, button_col = st.columns([3, 1], vertical_alignment="center")
-                        text_col.markdown(f'<div class="r1-row-title">{html.escape(str(c["Trap ID"]))} · {html.escape(site_name(data, c["Site ID"]))}</div>'
-                                          f'<div class="r1-meta">Checked {html.escape(task_when(c["Check Time"]))}</div>'
-                                          f'<div class="r1-meta">No other traps at this site checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes</div>', unsafe_allow_html=True)
+                        flagged = f"No other traps at this site checked within {DATA_QUALITY_ISOLATION_WINDOW_MINUTES} minutes"
+                        phone = (f'<div class="r1-row-title">{html.escape(str(c["Trap ID"]))} · {html.escape(site_name(data, c["Site ID"]))}</div>'
+                                 f'<div class="r1-meta">Checked {html.escape(task_when(c["Check Time"]))}</div><div class="r1-meta">{flagged}</div>')
+                        cells = [("b", html.escape(str(c["Trap ID"]))), ("", html.escape(site_name(data, c["Site ID"]))), ("dim", html.escape(task_when(c["Check Time"]))), ("", flagged)]
+                        text_col.markdown(r1_row_html(phone, cells, DQ_COLS), unsafe_allow_html=True)
                         button_col.button("Review", key=f"data_quality_open_{c['Check ID']}", type="primary", on_click=lambda cid=c["Check ID"]: ss.update(data_quality_review=cid))
             return
         candidate = next(c for c in candidates if c["Check ID"] == reviewing)
@@ -7103,9 +7166,10 @@ DATA_SUB_PAGES = set(DATA_PAGES) | {"data_audit", "data_export"}
 
 
 @contextmanager
-def data_page_frame(title: str, subtitle: str, *, notice: bool = True):
-    """The frame of a Data & records page: the back pill, the title, what it is for, and (for a correction) the standing notice."""
-    r1_screen_css(narrow=True)
+def data_page_frame(title: str, subtitle: str, *, notice: bool = True, wide: bool = False):
+    """The frame of a Data & records page: the back pill, the title, what it is for, and (for a correction) the standing notice. A form or an action is one 760px
+    column on a desktop; a list (the audit log) uses the full width."""
+    r1_screen_css(narrow=not wide)
     with st.container(key=design.SCREEN_KEY):
         r1_back("Back to Data & records", "data_management", "data_sub")
         admin_title(title, subtitle)
@@ -7115,17 +7179,19 @@ def data_page_frame(title: str, subtitle: str, *, notice: bool = True):
 
 
 def render_data_landing(data) -> None:
-    r1_screen_css(narrow=True)
+    r1_screen_css()  # full width on a desktop: the two groups side by side (board WideDataRecords); a phone stacks them as before
     with st.container(key=design.SCREEN_KEY):
         admin_title("Data & records", "Correct records, review trial periods and changes, or export the workbook.")
-        for group, (heading, pages) in enumerate((("Correct a record", DATA_PAGES), ("Review and export", DATA_REVIEW_PAGES))):
-            st.markdown(f'<div class="r1-label">{heading}</div>', unsafe_allow_html=True)
-            with st.container(key="setup_trap_rows" if group == 0 else "setup_trap_rows_review"):
-                for page_id, (title, text) in pages.items():
-                    with st.container(key=f"listrow_data_{page_id}"):
-                        text_col, button_col = st.columns([6, 1], vertical_alignment="center")
-                        text_col.markdown(f'<div class="r1-row-title">{html.escape(title)}</div><div class="r1-meta">{html.escape(text)}</div>', unsafe_allow_html=True)
-                        button_col.button(title, key=f"data_open_{page_id}", on_click=set_page, args=(page_id,))
+        correct_col, review_col = st.columns([1.6, 1], gap="large")
+        for group, (column, heading, pages) in enumerate(((correct_col, "Correct a record", DATA_PAGES), (review_col, "Review and export", DATA_REVIEW_PAGES))):
+            with column:
+                st.markdown(f'<div class="r1-label">{heading}</div>', unsafe_allow_html=True)
+                with st.container(key="setup_trap_rows_corrections" if group == 0 else "setup_trap_rows_review"):
+                    for page_id, (title, text) in pages.items():
+                        with st.container(key=f"listrow_data_{page_id}"):
+                            text_col, button_col = st.columns([6, 1], vertical_alignment="center")
+                            text_col.markdown(f'<div class="r1-row-title">{html.escape(title)}</div><div class="r1-meta">{html.escape(text)}</div>', unsafe_allow_html=True)
+                            button_col.button(title, key=f"data_open_{page_id}", on_click=set_page, args=(page_id,))
 
 
 def correction_search(label: str, key: str) -> str:
@@ -7684,7 +7750,7 @@ def render_window_starts(data) -> None:
 # ---- Audit log and Export and backup ----------------------------------------------------------------------------------------
 
 def render_audit_log(data) -> None:
-    with data_page_frame("Audit log", "Every correction and change, newest first.", notice=False):
+    with data_page_frame("Audit log", "Every correction and change, newest first.", notice=False, wide=True):
         log = data["Audit Log"]
         if log.empty:
             st.markdown(design.message_html("info", "No corrections have been recorded yet"), unsafe_allow_html=True)
@@ -10614,7 +10680,7 @@ elif page == "followups":
     if not selected_followup_id:
         # Phase 7b (7/8): a title with the open count, two visible filters (short lists are never dropdowns) and the tasks as list rows.
         # The filters keep their keys (the trial hub sets followup_site_filter before it opens this page); nothing new is read from a sheet.
-        r1_screen_css(narrow=True)  # a 760px column on desktop (board FollowupsDesktop)
+        r1_screen_css()  # full width on a desktop: a list with columns (board WideFollowups); a phone keeps its stacked rows
         site_options = ["All sites"] + data["Sites"]["Site ID"].tolist()
         priority_options = ["All priorities", "High", "Normal", "Low"]
         if st.session_state.get("followup_site_filter") not in site_options:
@@ -10633,21 +10699,26 @@ elif page == "followups":
             r1_title("Follow-ups", stat_value=(len(fu) or None), stat_label="Open")
             # With nothing open at all there is nothing to filter. A filter that matches nothing keeps its controls, so it can be changed.
             if total_open:
-                with st.container(key="chips_followup_site"):
-                    st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
-                with st.container(key="seg_followup_priority"):
-                    st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
+                # One line on a desktop (the site chips, the priority control, Review next task at the end); stacked in that order on a phone.
+                with st.container(key="filters_followups"):
+                    site_col, priority_col, next_col = st.columns([2.3, 1.7, 1.0], vertical_alignment="bottom")
+                    with site_col, st.container(key="chips_followup_site"):
+                        st.pills("Site", site_options, selection_mode="single", format_func=lambda x: x if x=="All sites" else site_name(data,x), key="followup_site_filter")
+                    with priority_col, st.container(key="seg_followup_priority"):
+                        st.segmented_control("Priority", priority_options, selection_mode="single", format_func=lambda x: "All" if x=="All priorities" else x, key="followup_priority_filter")
+                    with next_col, st.container(key="actions_followups_next"):
+                        if not fu.empty and st.button("Review next task",type="primary",key="review_next_followup"):
+                            st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
             if fu.empty:
                 if total_open:
                     st.markdown(design.message_html("info", "No open follow-ups match these filters."), unsafe_allow_html=True)
                 else:
                     st.markdown(design.message_html("success", "All follow-up work is complete.", "There is nothing waiting for review."), unsafe_allow_html=True)
             else:
-                if st.button("Review next task",type="primary",key="review_next_followup"):
-                    st.session_state.followup_panel=fu.iloc[0]["Follow-up ID"]; st.rerun()
                 several_sites = fu["Site ID"].nunique() > 1
                 task_icon = {"Necropsy review": "bag", "Camera review": "camera", "Camera issue": "camera"}
-                with st.container(key="cardlist_followups"):
+                with st.container(key="cardlist_tablewrap_followups"):
+                    st.markdown(r1_head_html(["Task", "Trap", "Site", "Why", "Priority", "Created"], FOLLOWUP_COLS), unsafe_allow_html=True)
                     for position, (_, item_row) in enumerate(fu.iterrows()):
                         row_fid=item_row["Follow-up ID"]
                         task_type=str(item_row["Follow-up Type"])
@@ -10656,18 +10727,22 @@ elif page == "followups":
                         bits=[html.escape(str(item_row["Trap ID"]))]
                         if several_sites: bits.append(html.escape(site_name(data,item_row["Site ID"])))
                         reason = str(item_row["Reason"]).strip()
+                        why = ""
                         if reason and task_type != "Necropsy review" and reason.lower() != task_type.lower():  # not when it only repeats the task's own name
-                            bits.append(html.escape(reason))
-                        if task_type=="Necropsy review" and str(item_row.get("Bag ID", "")).strip(): bits.append("Bag " + html.escape(str(item_row["Bag ID"]).strip()))
+                            bits.append(html.escape(reason)); why = reason
+                        if task_type=="Necropsy review" and str(item_row.get("Bag ID", "")).strip():
+                            bits.append("Bag " + html.escape(str(item_row["Bag ID"]).strip())); why = "Bag " + str(item_row["Bag ID"]).strip()
                         if str(item_row["Priority"]) in ("High", "Low"): bits.append(f"{html.escape(str(item_row['Priority']))} priority")
                         row_key = f"listrow_{'next_' if position == 0 else ''}{'end_' if position == len(fu) - 1 else ''}followup_{row_fid}"
+                        phone = (f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(task_icon.get(task_type, "warn-circle"), 22)}</div>'
+                                 f'<div><div class="r1-row-title">{html.escape(task_type)}</div><div class="r1-meta">{" · ".join(bits)}</div></div></div>')
+                        priority = str(item_row["Priority"])
+                        cells = [("task", f'<span class="r1-rowicon">{design.icon(task_icon.get(task_type, "warn-circle"), 22)}</span>{html.escape(task_type)}'),
+                                 ("b", html.escape(str(item_row["Trap ID"]))), ("", html.escape(site_name(data, item_row["Site ID"]))), ("", html.escape(why or "—")),
+                                 ("b" if priority == "High" else "dim", html.escape(priority)), ("dim", html.escape(r1_short_date(parse_dt(item_row["Created Time"]))))]
                         with st.container(key=row_key):
                             text_col, button_col = st.columns([3, 1], vertical_alignment="center")
-                            text_col.markdown(
-                                f'<div style="display:flex;gap:12px;align-items:center"><div class="r1-rowicon">{design.icon(task_icon.get(task_type, "warn-circle"), 22)}</div>'
-                                f'<div><div class="r1-row-title">{html.escape(task_type)}</div><div class="r1-meta">{" · ".join(bits)}</div></div></div>',
-                                unsafe_allow_html=True,
-                            )
+                            text_col.markdown(r1_row_html(phone, cells, FOLLOWUP_COLS), unsafe_allow_html=True)
                             if button_col.button("Review",key=f"followup_review_{row_fid}"):
                                 st.session_state.followup_panel=row_fid; st.rerun()
     else:

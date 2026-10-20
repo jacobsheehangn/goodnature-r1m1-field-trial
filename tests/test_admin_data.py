@@ -134,34 +134,114 @@ def test_data_and_records_lists_every_page_and_each_one_opens_with_a_way_back(pa
             expect(page.get_by_role("heading", name="Data & records", exact=True)).to_be_visible(timeout=30_000)
 
 
-def test_every_single_column_admin_page_is_a_760_column_left_aligned_with_the_page(page: Page, tmp_path: Path) -> None:
+def test_lists_use_the_full_width_and_forms_stay_a_760_column_left_aligned_with_the_page(page: Page, tmp_path: Path) -> None:
+    """The width rule (20 Oct): lists are the full 1160; a form, an action and a detail page are one 760px column."""
     page.set_viewport_size(DESKTOP)
-    with _serve(tmp_path / "d", ADMIN_SEED) as url:
+    with _serve(tmp_path / "d", DQ_SEED) as url:
         seen = {}
 
-        def measure(label: str) -> None:
+        def measure(label: str, full: bool) -> None:
             page.wait_for_timeout(900)
             screen, nav = page.locator(".st-key-r1_screen").first.bounding_box(), page.locator(".st-key-app_nav").first.bounding_box()
             seen[label] = screen["width"]
-            assert screen["width"] <= 761, f"{label}: one 760px column, not {screen['width']}"
+            if full:
+                assert abs(screen["width"] - 1160) <= 2, f"{label}: the full content width, not {screen['width']}"
+            else:
+                assert screen["width"] <= 761, f"{label}: one 760px column, not {screen['width']}"
             assert abs(screen["x"] - nav["x"]) <= 1, f"{label}: left-aligned with the page, not centred"
 
         _open(page, url, "Traps")
-        measure("Traps list")
+        measure("Traps list", True)
         page.locator('[class*="st-key-listrow_net_"] button').first.click()
         expect(page.locator(".r1-stats3")).to_be_visible(timeout=30_000)
-        measure("Trap history")
+        measure("Trap history", False)
         ap.go_to(page, "Data & records")
-        measure("Data & records")
+        measure("Data & records", True)
         page.get_by_role("button", name="Field check", exact=True).click()
         expect(page.get_by_role("heading", name="Field check", exact=True)).to_be_visible(timeout=30_000)
-        measure("A correction page")
+        measure("A correction page", False)
+        ap.go_to(page, "Data & records")
+        page.get_by_role("button", name="Audit log", exact=True).click()
+        expect(page.get_by_role("heading", name="Audit log", exact=True)).to_be_visible(timeout=30_000)
+        measure("Audit log", True)
         ap.go_to(page, "Data quality")
-        measure("Data quality")
+        expect(page.get_by_role("heading", name="Data quality review", exact=True)).to_be_visible(timeout=30_000)
+        measure("Data quality list", True)
+        page.locator('[class*="st-key-listrow_net_dq_"] button').first.click()
+        page.wait_for_timeout(1_500)
+        measure("Data quality review of one check", False)
+        ap.go_to(page, "Trial setup")
+        measure("Trial setup traps (no panel open)", True)
+        page.get_by_role("radio", name="Trap sites", exact=True).click()
+        page.wait_for_timeout(1_200)
+        measure("Trial setup sites", True)
+        page.get_by_role("radio", name="Builds", exact=True).click()
+        page.wait_for_timeout(1_200)
+        measure("Trial setup builds", True)
         ap.open_trap(page, url, "R1-MAN-NEW1")
         ap.action(page, "Activate", "Activate R1-MAN-NEW1")
-        measure("A trap action page")
-        assert len(seen) == 6
+        measure("A trap action page", False)
+        assert len(seen) == 11
+
+
+def test_a_list_is_a_table_on_a_desktop_and_stacked_rows_on_a_phone(page: Page, tmp_path: Path) -> None:
+    """Traps, the Trial setup lists and the Data quality list: a header and a column per fact over 700px; the approved stacked rows on a phone; the compact rows beside a panel."""
+    with _serve(tmp_path / "d", DQ_SEED) as url:
+        page.set_viewport_size(DESKTOP)
+        _open(page, url, "Traps")
+        assert [h for h in page.locator(".r1-thead:visible").first.inner_text().split("\n") if h.strip()] == ["Trap", "Site", "Location", "Build", "Camera", "Kills", "Checks", "Last kill"]
+        cells = page.locator('[class*="st-key-listrow_net_R1-MAN-001"] .r1-dk:visible .c').all_inner_texts()
+        assert cells[0].startswith("R1-MAN-001") and cells[1] == "Mangaroa Farm" and cells[3] == "4.3" and cells[4] == "CAM-001", cells
+        page.set_viewport_size(PHONE)
+        page.wait_for_timeout(1_200)
+        assert page.locator(".r1-thead:visible").count() == 0
+        assert "Mangaroa Farm" in page.locator('[class*="st-key-listrow_net_R1-MAN-001"] .r1-mb:visible').first.inner_text()
+
+        page.set_viewport_size(DESKTOP)
+        ap.go_to(page, "Trial setup")
+        assert [h for h in page.locator(".r1-thead:visible").first.inner_text().split("\n") if h.strip()] == ["Trap", "Site", "Location", "Build", "Camera", "Route"]
+        # beside an open panel the list is the compact two-line rows
+        page.get_by_role("button", name="Add trap", exact=True).first.click()
+        expect(page.get_by_text("The permanent physical ID, without a site code.", exact=True)).to_be_visible(timeout=15_000)
+        assert page.locator(".r1-thead:visible").count() == 0
+        compact = page.locator('[class*="st-key-listrow_trap_R1-MAN-001"]').first
+        assert compact.locator(".r1-row-title").is_visible() and compact.locator(".r1-dk:visible").count() == 0 and "Build 4.3" in compact.inner_text(), compact.inner_text()
+
+
+def test_data_and_records_shows_its_two_groups_side_by_side_on_a_desktop_and_stacked_on_a_phone(page: Page, tmp_path: Path) -> None:
+    """The width rule (20 Oct): "Correct a record" (two columns of rows) and "Review and export" sit side by side over 700px; a phone stacks them as before."""
+    with _serve(tmp_path / "d", DQ_SEED) as url:
+        page.set_viewport_size(DESKTOP)
+        _open(page, url, "Data & records")
+        correct, review = page.get_by_text("Correct a record", exact=True).bounding_box(), page.get_by_text("Review and export", exact=True).bounding_box()
+        assert abs(correct["y"] - review["y"]) < 4 and review["x"] > correct["x"] + 400, (correct, review)
+        rows = page.locator('[class*="st-key-setup_trap_rows_corrections"] [class*="st-key-listrow_data_"]')
+        first, second = rows.nth(0).bounding_box(), rows.nth(1).bounding_box()
+        assert abs(first["y"] - second["y"]) < 4 and second["x"] > first["x"] + 200, "the corrections are two columns of rows"
+        for row in (rows.nth(0), page.locator('[class*="st-key-setup_trap_rows_review"] [class*="st-key-listrow_data_"]').first):
+            assert row.locator("button").is_visible()
+        page.set_viewport_size(PHONE)
+        page.wait_for_timeout(1_200)
+        correct, review = page.get_by_text("Correct a record", exact=True).bounding_box(), page.get_by_text("Review and export", exact=True).bounding_box()
+        assert review["y"] > correct["y"] + 200 and abs(review["x"] - correct["x"]) < 4, "a phone stacks the groups"
+        first, second = rows.nth(0).bounding_box(), rows.nth(1).bounding_box()
+        assert second["y"] > first["y"] + 20 and abs(first["x"] - second["x"]) < 4, "and the rows are one column"
+
+
+def test_the_data_quality_list_is_a_table_on_a_desktop_with_review_at_the_row_end(page: Page, tmp_path: Path) -> None:
+    with _serve(tmp_path / "d", DQ_SEED) as url:
+        page.set_viewport_size(DESKTOP)
+        _open(page, url, "Data quality")
+        expect(page.get_by_role("heading", name="Data quality review", exact=True)).to_be_visible(timeout=30_000)
+        header = [h for h in page.locator(".r1-thead:visible").first.inner_text().split("\n") if h.strip()]
+        assert header == ["Trap", "Site", "Checked", "Why it is flagged"], header
+        buttons = page.locator('[class*="st-key-listrow_net_dq_"] button')
+        assert buttons.count() == 2
+        rights = {round(b.bounding_box()["x"] + b.bounding_box()["width"]) for b in buttons.all()}
+        assert len(rights) == 1, f"the Review buttons end at the same x: {rights}"
+        page.set_viewport_size(PHONE)
+        page.wait_for_timeout(1_200)
+        assert page.locator(".r1-thead:visible").count() == 0
 
 
 # ---------------------------------------------------------------- Data quality (AdmDQList, AdmDQReview, AdmDQEmpty)

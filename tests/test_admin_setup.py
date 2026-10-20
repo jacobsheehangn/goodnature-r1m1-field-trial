@@ -3,6 +3,7 @@ AdmSiteRemove): a segmented control (Traps / Trap sites / Builds), site chips, r
 a phone), Bulk activate as its own page, Rename site code and Permanently remove as their own pages. What each writes is today's. Local test data only."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -51,9 +52,9 @@ def test_the_traps_section_lists_every_trap_with_its_status_and_filters_by_site(
         assert page.locator('[role="heading"][aria-level="1"]').all_inner_texts() == ["Trial setup"]
         expect(page.get_by_role("radio", name="Traps", exact=True)).to_be_checked()
         row = _row(page, "listrow_trap_R1-MAN-001").inner_text()
-        assert "R1-MAN-001" in row and "Active" in row and "Mangaroa Farm" in row and "Route 1" in row, row
+        assert "R1-MAN-001" in row and "Active" in row and "Mangaroa Farm" in row and "CAM-001" in row and "4.3" in row, row
         assert "Inactive" in _row(page, "listrow_trap_R1-MAN-NEW1").inner_text()
-        expect(page.get_by_text("traps can be activated together inside a running trial.", exact=False)).to_be_visible()
+        expect(page.get_by_role("button", name=re.compile(r"^Bulk activate \(\d+\)$"))).to_be_visible()
         page.get_by_role("radio", name="Kaitoke Shed", exact=True).click()
         page.wait_for_timeout(1200)
         assert page.locator('[class*="st-key-listrow_trap_R1-MAN-001"]').count() == 0 and page.locator('[class*="st-key-listrow_trap_R1-KAI-001"]').count() == 1
@@ -104,7 +105,7 @@ def test_bulk_activate_is_its_own_page_locks_its_preview_and_names_a_trap_it_had
     page.set_viewport_size({"width": 390, "height": 1000})
     with _serve(data_dir, SEED) as url:
         ap.open_trial_setup(page, url)
-        page.get_by_role("button", name="Bulk activate", exact=True).click()
+        page.get_by_role("button", name=re.compile(r"^Bulk activate \(\d+\)$")).click()
         expect(page.get_by_role("heading", name="Bulk activate traps", exact=True)).to_be_visible(timeout=15_000)
         preview = page.get_by_role("button", name="Preview activation", exact=True)
         preview.click()
@@ -213,8 +214,8 @@ def test_builds_are_listed_with_their_status_and_a_new_one_is_refused_when_it_al
     with _serve(data_dir, SEED) as url:
         ap.open_trial_setup(page, url)
         _section(page, "Builds")
-        text = page.locator('[class*="st-key-setup_trap_rows"]').inner_text()
-        assert "R1 · Build 4.3" in text and "active trap" in text and "First active" in text, text
+        text = page.locator('[class*="st-key-tablewrap_setup_builds"]').inner_text()
+        assert "R1 · Build 4.3" in text and "Active traps" in text and "First active" in text and "Source" in text, text
         page.get_by_role("button", name="Add build", exact=True).click()
         expect(page.get_by_role("radiogroup", name="Build status")).to_be_visible(timeout=15_000)
         ap.fill(page, "Build version", "R1 Build 4.3")

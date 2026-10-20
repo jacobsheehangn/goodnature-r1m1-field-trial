@@ -60,7 +60,8 @@ def test_the_phone_is_unchanged(tmp_path, page: Page):
         assert screen["x"] <= 16 and screen["width"] >= 390 - 32, screen
 
 
-def test_follow_ups_is_a_760_column_left_aligned_and_the_next_row_lines_up(tmp_path, page: Page):
+def test_follow_ups_is_a_full_width_list_with_columns_and_the_next_row_lines_up(tmp_path, page: Page):
+    """The width rule (20 Oct): a list uses the full 1160 on a desktop, with a header row and a column for each fact; Review opens the task as before."""
     with serve(tmp_path / "d", END_SEED) as url:
         open_home(page, url, 1280)
         page.get_by_role("link", name="Follow-ups").first.click()
@@ -68,14 +69,31 @@ def test_follow_ups_is_a_760_column_left_aligned_and_the_next_row_lines_up(tmp_p
         page.wait_for_timeout(1500)
         screen = box(page, ".st-key-r1_screen")
         nav = box(page, ".st-key-app_nav")
-        assert screen["width"] <= 761 and abs(screen["x"] - nav["x"]) <= 1, f"a 760 column at the page's left edge: {screen} {nav}"
-        icons = page.locator('[class*="st-key-listrow_"] .r1-rowicon').all()
+        assert abs(screen["width"] - 1160) <= 2 and abs(screen["x"] - nav["x"]) <= 1, f"the full content width, at the page's left edge: {screen} {nav}"
+        header = page.locator(".r1-thead:visible").first.inner_text().split("\n")
+        assert [h for h in header if h.strip()] == ["Task", "Trap", "Site", "Why", "Priority", "Created"], header
+        rows = page.locator('[class*="st-key-listrow_"][class*="followup_"]')
+        assert rows.count() >= 3
+        cells = rows.first.locator(".r1-dk:visible .c").all_inner_texts()
+        assert len(cells) == 6 and cells[1].startswith("R1-"), cells
+        # every row's columns line up: the same x for each cell position, the highlighted next row's included
+        first_cells = [[round(c.bounding_box()["x"]) for c in rows.nth(i).locator(".r1-dk:visible .c").all()] for i in range(rows.count())]
+        assert all(x == first_cells[0] for x in first_cells), first_cells
+        icons = page.locator('[class*="st-key-listrow_"] .r1-dk:visible .r1-rowicon').all()
         buttons = page.locator('[class*="st-key-listrow_"] button').all()
         assert len(icons) >= 3 and len(buttons) >= 3
         lefts = {round(i.bounding_box()["x"]) for i in icons}
-        rights = {round(b.bounding_box()["x"] + b.bounding_box()["width"]) for b in buttons if b.inner_text().strip() == "Review"}
+        rights = {round(b.bounding_box()["x"] + b.bounding_box()["width"]) for b in buttons if b.inner_text().strip() == "Review" and b.is_visible()}
         assert len(lefts) == 1, f"every row's icon sits at the same x, the highlighted next row's included: {lefts}"
         assert len(rights) == 1, f"every Review button ends at the same x: {rights}"
+        # one line of filters: the site chips, the priority control and Review next task
+        chips, seg, nxt = box(page, '[class*="st-key-chips_followup_site"]'), box(page, '[class*="st-key-seg_followup_priority"]'), page.get_by_role("button", name="Review next task").bounding_box()
+        assert abs(chips["y"] - seg["y"]) < 40 and abs(seg["y"] - nxt["y"]) < 60 and nxt["x"] > seg["x"], (chips, seg, nxt)
+        # a phone is unchanged: the stacked rows, no header
+        page.set_viewport_size({"width": 390, "height": 900})
+        page.wait_for_timeout(1500)
+        assert page.locator(".r1-thead:visible").count() == 0
+        assert page.locator('[class*="st-key-listrow_"][class*="followup_"] .r1-mb:visible').count() >= 3
 
 
 def test_a_task_form_is_a_760_column(tmp_path, page: Page):

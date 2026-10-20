@@ -21,6 +21,7 @@ import json
 import os
 import socket
 import subprocess
+import re
 import sys
 import textwrap
 import time
@@ -141,7 +142,7 @@ def test_preview_locks_selection_and_commits_exactly_what_it_showed(
     page.get_by_role("link", name="Trial setup", exact=True).click()
     expect(page.get_by_role("heading", name="Trial setup", exact=True)).to_be_visible(timeout=30_000)
 
-    page.get_by_role("button", name="Bulk activate", exact=True).click()
+    page.get_by_role("button", name=re.compile(r"^Bulk activate \(\d+\)$")).click()
     expect(page.get_by_role("heading", name="Bulk activate traps", exact=True)).to_be_visible(timeout=15_000)
 
     reason_box = page.get_by_placeholder("Why these traps are being activated")

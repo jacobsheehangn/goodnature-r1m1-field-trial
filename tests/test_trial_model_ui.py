@@ -175,7 +175,7 @@ def test_bulk_activate_at_a_site_with_no_trial_says_so_up_front(page: Page, tmp_
         site_name = str(_sheet(data_dir, "Sites").iloc[0]["Site Name"])
         page.get_by_role("radio", name=site_name, exact=True).click()
         page.wait_for_timeout(1_200)
-        page.get_by_role("button", name="Bulk activate", exact=True).click()
+        page.get_by_role("button", name=re.compile(r"^Bulk activate \(\d+\)$")).click()
         expect(page.get_by_role("heading", name="Bulk activate traps", exact=True)).to_be_visible(timeout=15_000)
         expect(page.get_by_text(f"No trial is running at {site_name}", exact=True)).to_be_visible(timeout=15_000)
         expect(page.get_by_text("Start a trial first. Every active trap belongs to a trial.", exact=True)).to_be_visible()
