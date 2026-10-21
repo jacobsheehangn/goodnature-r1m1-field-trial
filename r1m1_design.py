@@ -495,6 +495,10 @@ COMPONENT_CSS = f"""
 
 /* ---- List row: text left, action right, one line even on a phone ---- */
 .stApp [class*="st-key-listrow_"]{{border-bottom:1px solid var(--ink-05);padding:12px 0;gap:0}}
+/* The grey row cards keep their own padding and no bottom rule: the generic row rule above comes later in the cascade than each card's own and had zeroed the
+   padding (the text and the button touched the card's edges, found 20 Oct). Desktop tables (tablewrap_) override this below, with a more specific rule. */
+.stApp :is([class*="st-key-listrow_trap_"],[class*="st-key-listrow_site_"],[class*="st-key-listrow_build_"],[class*="st-key-listrow_net_"],[class*="st-key-listrow_win_"]){{padding:14px 16px;border-bottom:0}}
+.stApp [class*="st-key-listrow_data_"]{{padding:16px 18px;border-bottom:0}}
 [class*="st-key-listrow_"] [data-testid="stHorizontalBlock"]{{flex-wrap:nowrap!important;align-items:center;gap:12px}}
 [class*="st-key-listrow_"] [data-testid="stColumn"]{{min-width:0!important;width:auto!important;flex:1 1 0!important}}
 [class*="st-key-listrow_"] [data-testid="stColumn"]:last-child{{flex:0 0 auto!important}}
@@ -530,7 +534,7 @@ COMPONENT_CSS = f"""
 @media (min-width:701px){{
   .r1-mb{{display:none}}
   .r1-dk{{display:grid;grid-template-columns:var(--cols);column-gap:16px;align-items:center}}
-  .r1-dk .c{{min-width:0;font-size:16px;line-height:22px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}}
+  .r1-dk .c{{font-size:16px;line-height:22px;overflow-wrap:break-word}}  /* a cell wraps at its words in a narrow window; it never cuts its text short with an ellipsis, and a column is never narrower than its longest word */
   .r1-dk .c.b{{font-weight:700}} .r1-dk .c.dim{{color:var(--ink-70)}}
   .r1-dk .c.task{{display:flex;align-items:center;gap:12px;font-weight:700}}
   .r1-dk .c.task .r1-rowicon{{flex:0 0 40px;width:40px;height:40px}}
@@ -556,9 +560,13 @@ COMPONENT_CSS = f"""
   .stApp [class*="st-key-card_setup_bulk"] button[kind="secondary"]{{background:#fff;box-shadow:inset 0 0 0 1px var(--ink-10);width:auto;white-space:nowrap}}
   [class*="st-key-setup_add_site"],[class*="st-key-setup_add_build"]{{display:flex;justify-content:flex-end}}
   /* Data & records: the corrections are two columns of rows, beside the group of review pages. */
-  [class*="st-key-setup_trap_rows_corrections"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
-  /* Traps: the search beside the site chips, the Status control under them. */
-  [class*="st-key-filters_traps"] [data-testid="stHorizontalBlock"]{{gap:24px}}
+  [class*="st-key-setup_trap_rows_corrections"]{{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));grid-auto-rows:1fr;gap:12px}}
+  [class*="st-key-setup_trap_rows_review"]{{display:grid!important;grid-template-columns:minmax(0,1fr);grid-auto-rows:1fr;gap:12px}}
+  :is([class*="st-key-setup_trap_rows_corrections"],[class*="st-key-setup_trap_rows_review"]) > [data-testid="stLayoutWrapper"]{{height:100%}}
+  :is([class*="st-key-setup_trap_rows_corrections"],[class*="st-key-setup_trap_rows_review"]) > [data-testid="stLayoutWrapper"] > [data-testid="stVerticalBlock"]{{height:100%;box-sizing:border-box;justify-content:center}}
+  /* Traps: the search, the site chips and the Status control on one line, their bottoms level; a narrow window wraps them. */
+  [class*="st-key-filters_traps"] [data-testid="stHorizontalBlock"]{{gap:16px 24px;flex-wrap:wrap!important;align-items:flex-end}}
+  [class*="st-key-filters_traps"] [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]{{min-width:240px!important}}
   [class*="st-key-seg_traps_status_wrap"]{{max-width:420px}}
   /* Follow-ups: the site chips, the priority control and Review next task on one line. */
   [class*="st-key-filters_followups"] [data-testid="stHorizontalBlock"]{{gap:24px}}
@@ -771,10 +779,10 @@ SCREEN_CSS = "<style>" + _component_css_only() + "</style>"
 # The journey screens that follow the Set up / End trial pattern show no top navigation, and read as a
 # single column (a form is not stretched across a desktop).
 HIDE_TOP_NAV_CSS = "<style>.st-key-app_top_navigation,.st-key-app_nav{display:none!important}</style>"
-NARROW_CSS = f"<style>{SCREEN_SCOPE}{{max-width:760px}}</style>"
+NARROW_CSS = f"<style>{SCREEN_SCOPE},.st-key-flash_message{{max-width:760px}}</style>"  # the saved-message panel above the page is as wide as the page
 
 # Drawn outside a journey screen's own container: the demo banner above every page, and the sign-in page. The tokens, the message rules unscoped.
-MESSAGE_CSS = "<style>" + TOKENS_CSS + _MESSAGE_RULES + ".r1-msg,.r1-fielderr{font-family:var(--font)}</style>"
+MESSAGE_CSS = "<style>" + TOKENS_CSS + _MESSAGE_RULES + ".r1-msg,.r1-fielderr{font-family:var(--font)}.st-key-flash_message{margin-bottom:16px}</style>"
 
 # The sign-in page (Part B batch 3): the page's own single column (420px on a desktop), the logo and the sentence as they were, Lato, a password field with a
 # lock, a full-width pill, no form card. The field is ringed red under .st-key-login_wrong. Every rule starts at the marker the page draws, so nothing else moves.
