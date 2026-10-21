@@ -56,6 +56,28 @@ def test_the_desktop_navigation_has_four_items_and_switches_at_700_px(page: Page
         assert _visible(page, "nav_desktop") and not _visible(page, "nav_phone"), "701px is desktop"
 
 
+def test_the_phone_menu_lists_the_same_rows_as_the_desktop_administration_menu(page: Page, tmp_path: Path) -> None:
+    """The owner (20 Oct): the phone's More menu had a small grey "Administration" heading the desktop menu does not; its rows are the desktop's, in order."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    with _serve(data_dir, END_SEED) as url:
+        page.set_viewport_size(DESKTOP)
+        _home(page, url)
+        page.get_by_role("button", name="Administration", exact=True).click()
+        desktop = page.get_by_role("dialog", name="Administration")
+        expect(desktop).to_be_visible(timeout=10_000)
+        desktop_rows = [t.strip() for t in desktop.get_by_role("link").all_inner_texts()] + ["Operator" if desktop.get_by_role("textbox", name="Operator").count() else "", "Sign out" if desktop.get_by_role("button", name="Sign out").count() else ""]
+        page.set_viewport_size(PHONE)
+        _home(page, url)
+        page.get_by_role("button", name="More", exact=True).click()
+        phone = page.get_by_role("dialog", name="More")
+        expect(phone).to_be_visible(timeout=10_000)
+        phone_links = [t.strip() for t in phone.get_by_role("link").all_inner_texts()]
+        assert phone_links[0] == "Trial performance", phone_links
+        phone_rows = phone_links[1:] + ["Operator" if phone.get_by_role("textbox", name="Operator").count() else "", "Sign out" if phone.get_by_role("button", name="Sign out").count() else ""]
+        assert phone_rows == desktop_rows and "" not in phone_rows and len(phone_rows) == 6, f"phone {phone_rows} vs desktop {desktop_rows}"
+        assert "Administration" not in phone.inner_text()
+
+
 def test_every_administration_item_stays_reachable_on_a_phone(page: Page, tmp_path: Path) -> None:
     data_dir = tmp_path / "d"; data_dir.mkdir()
     page.set_viewport_size(PHONE)
@@ -65,9 +87,10 @@ def test_every_administration_item_stays_reachable_on_a_phone(page: Page, tmp_pa
         menu = page.get_by_role("dialog", name="More")
         expect(menu).to_be_visible(timeout=10_000)
         text = menu.inner_text()
-        for needed in ("Trial performance", "Administration", "Traps", "Trial setup", "Data & records", "Data quality", "Operator", "Sign out"):
+        for needed in ("Trial performance", "Traps", "Trial setup", "Data & records", "Data quality", "Operator", "Sign out"):
             assert needed in text, f"{needed!r} is in the More menu: {text!r}"
-        assert text.index("Trial performance") < text.index("Administration") < text.index("Traps") < text.index("Data quality") < text.index("Sign out")
+        assert "Administration" not in text, f"no small \"Administration\" group heading in the phone menu (the desktop has none either): {text!r}"
+        assert text.index("Trial performance") < text.index("Traps") < text.index("Data quality") < text.index("Sign out")
         for link, path in (("Traps", "/traps"), ("Data & records", "/data-records")):
             menu.get_by_role("link", name=link, exact=True).click()
             expect(page).to_have_url(re.compile(re.escape(path) + r"$"), timeout=20_000)
