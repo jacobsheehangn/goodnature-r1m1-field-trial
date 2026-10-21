@@ -164,6 +164,11 @@ for ws in wb.worksheets:
         break
 check("Workbook formula errors", not formula_errors, json.dumps(formula_errors[:20]))
 
+# Dependencies (20 Oct 2026): a fresh build must install the versions the suite ran on, never a newer untested one.
+requirements_text = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+check("Dependency constraints are included", re.search(r"^-c constraints\.txt\s*$", requirements_text, re.M) is not None and (ROOT / "constraints.txt").exists(),
+      "requirements.txt must include -c constraints.txt and constraints.txt must exist")
+
 failed = [item for item in results if not item["passed"]]
 print(json.dumps({
     "passed": not failed,

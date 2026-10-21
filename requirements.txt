@@ -1,3 +1,5 @@
+# Every runtime package is pinned in constraints.txt (the versions the tests run on); pip honours it from here, so any build that installs this file gets exactly those.
+-c constraints.txt
 streamlit==1.60.0
 # Streamlit 1.60.0 serves through Starlette but only requires starlette>=0.40,<2, so a fresh build installs the newest one. Starlette 1.9.0
 # breaks Streamlit 1.60.0's gzip middleware for binary responses (fonts, images): the sign-in logo and the Lato fonts came back 500 on Render
