@@ -159,6 +159,7 @@ def test_a_trap_with_history_can_reopen_its_window_inline_with_a_real_effective_
     start_button = page.get_by_role("button", name="Start window and continue", exact=True)
     start_button.click()
     expect(page.get_by_text("Enter a reason before starting the window.", exact=True)).to_be_visible(timeout=10_000)
+    expect(start_button).to_be_enabled(timeout=10_000)  # back to "Start window and continue" at once, not stuck on "Starting…" until something is typed
 
     reason_box.fill("Trap confirmed still in place during line check - recording retroactively.")
     page.keyboard.press("Tab")

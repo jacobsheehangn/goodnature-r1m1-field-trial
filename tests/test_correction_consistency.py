@@ -68,6 +68,8 @@ def _run(tmp_path: Path, script: str) -> dict:
 
 
 def test_necropsy_consistency_errors_covers_all_four_rules(tmp_path: Path) -> None:
+    """The fourth rule changed on 11 Nov 2026 (owner): with no completed necropsy a NOT-humane final result (No) is allowed, since a kill whose body was not recovered can
+    still be recorded as not humane from what was seen; a humane result (Yes) still needs a completed necropsy."""
     out = _run(
         tmp_path,
         """
@@ -78,6 +80,8 @@ def test_necropsy_consistency_errors_covers_all_four_rules(tmp_path: Path) -> No
             "does_not_support_but_final_yes": app.necropsy_consistency_errors("Complete", "Does not support humane kill", "Yes"),
             "not_completed_but_final_yes": app.necropsy_consistency_errors("Not completed", "Pending", "Yes"),
             "unable_to_assess_but_final_no": app.necropsy_consistency_errors("Unable to assess", "Pending", "No"),
+            "unable_to_assess_but_final_yes": app.necropsy_consistency_errors("Unable to assess", "Not assessable", "Yes"),
+            "not_completed_but_final_no": app.necropsy_consistency_errors("Not completed", "Does not support humane kill", "No"),
             "fully_consistent_support": app.necropsy_consistency_errors("Complete", "Supports humane kill", "Yes"),
             "fully_consistent_non_support": app.necropsy_consistency_errors("Complete", "Does not support humane kill", "No"),
         }
@@ -88,7 +92,9 @@ def test_necropsy_consistency_errors_covers_all_four_rules(tmp_path: Path) -> No
     assert out["supports_but_final_no"] == 1
     assert out["does_not_support_but_final_yes"] == 1
     assert out["not_completed_but_final_yes"] == 1
-    assert out["unable_to_assess_but_final_no"] == 1
+    assert out["unable_to_assess_but_final_no"] == 0, "a not-humane result is allowed without a completed necropsy"
+    assert out["not_completed_but_final_no"] == 0
+    assert out["unable_to_assess_but_final_yes"] == 1, "a humane result still needs a completed necropsy"
     assert out["fully_consistent_support"] == 0
     assert out["fully_consistent_non_support"] == 0
 

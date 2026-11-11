@@ -2789,10 +2789,13 @@ def two_phase_button(label: str, key: str, busy_label: str, **button_kwargs) -> 
     reruns immediately (no work done yet), so the SECOND rerun genuinely
     renders with the button already disabled/relabelled - that's the render
     where this returns True and the caller should do its real work. The
-    lock is cleared automatically the moment this returns True, so a
-    validation failure (or anything else that doesn't navigate away)
-    naturally shows the button back in its normal state on the very next
-    render, with no cleanup required from the caller.
+    lock is cleared the moment this returns True, but THIS run has already
+    drawn the button busy and disabled. A caller that refuses or fails must
+    therefore end the run with a redraw that keeps the reason: refuse(...),
+    or the reason kept in session state and st.rerun(). Showing it in place
+    and carrying on, or st.stop(), leaves the busy button on the screen until
+    something else reruns the page (the earlier version of this note said it
+    came back by itself; it does not, and inside a form nothing reruns).
 
     Not a fit for st.form_submit_button - forms only report `submitted` on
     the exact rerun the form was submitted, so the same "check armed on the
@@ -3493,6 +3496,8 @@ def commit_staged_records_with_photos(
     files_restored = False
     rollback_checksum = ""
     try:
+        if os.environ.get("R1M1_TEST_FAIL_COMMIT") == "1":  # test only: lets a browser test prove a failed save gives the Save button back
+            raise RuntimeError("forced commit failure (test only)")
         if expected_photo_count:
             # Verify again at the final commit boundary using the durable pending manifest.
             photo_gate = {
@@ -3596,10 +3601,9 @@ def commit_staged_records_with_photos(
         for key in (session_state_keys_to_clear_on_failure or []):
             st.session_state.pop(key, None)
         if rollback_errors or not (workbook_restored and files_restored):
-            message_panel("error", "Save failed and rollback could not be confirmed", [f"Do not continue this {record_noun}; contact the trial lead."])
+            refuse("Save failed and rollback could not be confirmed", [f"Do not continue this {record_noun}; contact the trial lead."])
         else:
-            message_panel("error", "Save failed", [f"No {record_description} was committed. Your selected photos remain available to retry."])
-        st.stop()
+            refuse("Save failed", [f"No {record_description} was committed. Your selected photos remain available to retry."])  # redraws: the Save button is back, not stuck busy
     finally:
         rollback_copy.unlink(missing_ok=True)
 
@@ -4166,8 +4170,10 @@ def necropsy_consistency_errors(status: str, assessment: str, final: str) -> lis
         errors.append("A supportive necropsy must have a final humane-kill result of Yes.")
     if assessment == "Does not support humane kill" and final != "No":
         errors.append("A non-supportive necropsy must have a final humane-kill result of No.")
-    if status in ["Not completed", "Unable to assess"] and final in ["Yes", "No"]:
-        errors.append("Do not record a definite final result when the necropsy was not completed or assessable.")
+    # 11 Nov 2026 (owner): a kill whose body was not recovered can still be recorded as NOT humane from what was seen (video, field notes), so it counts in the
+    # humane rate; a HUMANE result still needs a completed necropsy.
+    if status in ["Not completed", "Unable to assess"] and final == "Yes":
+        errors.append("A humane result needs a completed necropsy. Without one, record No if it was not humane, or Unclear or Not assessable.")
     return errors
 
 
@@ -4885,6 +4891,15 @@ def set_flash(kind: str, title: str, lines=None, **extra):
     st.session_state.flash_message = {"kind": kind, "title": title, "lines": lines or [], **extra}
 
 
+def refuse(title: str, lines=None) -> None:
+    """How a button that was drawn busy ("Saving…") turns a refusal or a failure into something the operator can act on: the reason is kept as a flash and the page redraws, so the
+    button is back to its normal label and enabled. Never show a refusal in place and carry on, or st.stop(): this run has already drawn the button busy, and it would stay on the
+    screen disabled until something else happened to rerun the page (inside a form, nothing does: 11 Nov 2026, eight necropsy tasks that could not be closed).
+    tests/test_no_stuck_buttons.py holds every armed button to this."""
+    set_flash("error", title, lines)
+    st.rerun()
+
+
 def show_flash():
     flash = st.session_state.pop("flash_message", None)
     if flash:
@@ -5136,6 +5151,7 @@ def render_necropsy_task(data, item) -> None:
                 status = st.radio("Necropsy status", ["Complete", "Not completed", "Unable to assess"], index=None, key=f"rows_nec_status_{fid}")
                 assessment = st.radio("Necropsy assessment", ["Supports humane kill", "Does not support humane kill", "Unclear", "Not assessable"], index=None, key=f"rows_nec_assessment_{fid}")
                 weight_range = st.pills("Animal weight range", weight_ranges_for_species(species), selection_mode="single", key=f"chips_nec_weight_{fid}_{species}")
+                st.markdown('<div class="r1-meta">Only needed when the necropsy is complete.</div>', unsafe_allow_html=True)
                 final = st.radio("Final humane-kill result", ["Yes", "No", "Unclear", "Not assessable"], index=None, key=f"rows2_nec_final_{fid}")
                 st.markdown('<div class="r1-meta">Saving this updates the kill result, the humane-kill figures, the review status and the photos.</div>', unsafe_allow_html=True)
                 photo_blocked = bool(photo_gate.get("expected_count", 0) and not photo_gate.get("ready"))
@@ -5152,15 +5168,20 @@ def render_necropsy_task(data, item) -> None:
                 # visible "Saving…" state comes from arming on the first submit and doing the work on the next run.
                 lock_key = f"{prefix}_saving"
                 arm_key = f"{prefix}_armed"
+                error_key = f"{prefix}_errors"
                 armed = st.session_state.get(arm_key, False)
                 already_saving = st.session_state.get(lock_key, False)
                 errors_slot = st.container()
+                if st.session_state.get(error_key):  # a refused Save: the reasons stay up until the next Save
+                    with errors_slot:
+                        st.markdown(design.message_html("error", "Please correct the necropsy review", "<br>".join(html.escape(e) for e in st.session_state[error_key])), unsafe_allow_html=True)
                 submitted = st.form_submit_button(
                     "Saving…" if armed else ("Please wait" if photo_blocked else "Save necropsy review"),
                     type="primary", disabled=armed or photo_blocked or already_saving,
                 )
         if submitted and not armed:
             st.session_state[arm_key] = True
+            st.session_state.pop(error_key, None)
             st.rerun()
         if not armed:
             return
@@ -5171,8 +5192,10 @@ def render_necropsy_task(data, item) -> None:
             errors.append("Choose the species.")
         if species == "Rat" and not rat_type:
             errors.append("Choose the rat type.")
-        if status is None or assessment is None or weight_range is None or final is None:
-            errors.append("Complete every necropsy field, including the weight range.")
+        # The weight range is needed only for a completed necropsy: with no body there is nothing to weigh.
+        weight_needed = status is None or status == "Complete"
+        if status is None or assessment is None or final is None or (weight_needed and weight_range is None):
+            errors.append("Complete every necropsy field, including the weight range." if weight_needed else "Complete every necropsy field.")
         else:
             errors.extend(necropsy_consistency_errors(status, assessment, final))
         idxs = data["Windows"].index[data["Windows"]["Window ID"] == item["Window ID"]].tolist()
@@ -5180,17 +5203,16 @@ def render_necropsy_task(data, item) -> None:
             errors.append("The linked test window cannot be found.")
         if errors:
             st.session_state[lock_key] = False
-            with errors_slot:
-                st.markdown(design.message_html("error", "Please correct the necropsy review", "<br>".join(html.escape(e) for e in errors)), unsafe_allow_html=True)
-            return
+            st.session_state[error_key] = errors
+            st.rerun()  # redraw with the reasons, and Save back to "Save necropsy review" instead of stuck on "Saving…"
+        st.session_state.pop(error_key, None)
         expected_photo_count = int(photo_gate.get("expected_count", 0))
         if expected_photo_count:
             # Verify again at the final commit boundary using the durable pending manifest.
             photo_gate = {**photo_gate, **verify_pending_photo_transaction(DATA_ROOT, photo_gate["context"], MAX_SAVED_PHOTO_BYTES)}
             if not (photo_gate.get("ready") and photo_gate.get("expected_count") == photo_gate.get("file_count") == photo_gate.get("row_count")):
                 st.session_state[lock_key] = False
-                message_panel("error", "One or more selected photos are not safely stored yet", ["Check that every photo has finished uploading, then try again."])
-                st.stop()
+                refuse("One or more selected photos are not safely stored yet", ["Check that every photo has finished uploading, then try again."])
         original_data = {name: frame.copy(deep=True) for name, frame in data.items()}
         staged = {name: frame.copy(deep=True) for name, frame in data.items()}
         idx = idxs[0]
@@ -5202,9 +5224,12 @@ def render_necropsy_task(data, item) -> None:
             w.at[idx, "Field-Recorded Species"] = prior_species
             w.at[idx, "Field-Recorded Rat Type"] = prior_rat
         guess_species_now, guess_rat_now = str(w.at[idx, "Field-Recorded Species"]).strip(), str(w.at[idx, "Field-Recorded Rat Type"]).strip()
-        for k, v in {"Necropsy Status": status, "Necropsy Assessment": assessment, "Animal Weight Range": weight_range, "Final Humane Kill": final,
+        prior_final = str(w.at[idx, "Final Humane Kill"]).strip()
+        for k, v in {"Necropsy Status": status, "Necropsy Assessment": assessment, "Animal Weight Range": weight_range or "", "Final Humane Kill": final,
                      "Species": species, "Rat Type": rat_type, "Species Confirmed": "Yes"}.items():
             w.at[idx, k] = v
+        if status != "Complete":  # a not-humane result with no necropsy is allowed (11 Nov); the audit log says it was set without one
+            audit_change(staged, "Window", item["Window ID"], "Final Humane Kill", prior_final, final, f"Recorded without a completed necropsy (necropsy status: {status})")
         # Logged automatically, no typed reason: this is the intended first resolution of a provisional value.
         audit_change(staged, "Window", item["Window ID"], "Species", guess_species_now, species, "Confirmed at necropsy" if species == guess_species_now else "Corrected at necropsy")
         if species == "Rat":
@@ -6814,7 +6839,7 @@ def render_setup_builds(data) -> None:
                             try:
                                 remove_unused_build(data, str(ex["Product"]), str(ex["Build Version"]), reason)
                             except Exception as exc:
-                                st.markdown(design.message_html("error", "The build was not removed", html.escape(str(exc))), unsafe_allow_html=True)
+                                refuse("The build was not removed", [str(exc)])
                             else:
                                 set_flash("success", f"{build_short_label(ex['Product'], ex['Build Version'])} removed.")
                                 for x in ("build_mode", "setup_build", "build_remove_open"):
@@ -7135,7 +7160,7 @@ def render_data_quality(data) -> None:
             try:
                 void_check_as_test_data(data, reviewing, reason)
             except ValueError as exc:
-                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                refuse("Nothing was changed", [str(exc)])
             else:
                 for key in (flag, "data_quality_review"):
                     ss.pop(key, None)
@@ -7573,7 +7598,7 @@ def render_correct_visit(data) -> None:
             try:
                 abandon_incomplete_visit(data, selected, reason.strip())
             except Exception as exc:
-                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                refuse("Nothing was changed", [str(exc)])
             else:
                 ss.pop(flag, None)
                 _correction_flash("Visit closed.", [f"{site_name(data, visit['Site ID'])}'s in-progress visit was abandoned.", f"{len(checks)} previously recorded check(s) were left untouched.", "Recorded in the audit log."])
@@ -7600,7 +7625,7 @@ def render_correct_nocarcass(data) -> None:
             try:
                 corrected = correct_kill_to_no_carcass(data, selected)
             except ValueError as exc:
-                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                refuse("Nothing was changed", [str(exc)])
             else:
                 _correction_flash("Kill corrected.", [f"{kill['Trap ID']} is now recorded as a kill with no carcass.",
                                                       f"{corrected['tasks_resolved']} necropsy task closed" + (f" and bag {corrected['bag_id']} cleared." if corrected["bag_id"] else "."),
@@ -7628,7 +7653,7 @@ def render_correct_stray(data) -> None:
             try:
                 repaired = close_stray_window(data, selected)
             except ValueError as exc:
-                st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                refuse("Nothing was changed", [str(exc)])
             else:
                 _correction_flash("Stray window closed.", [f"{repaired['trap_id']}'s leftover window was closed (zero length) and excluded from results.", "No check, follow-up or photo referred to it. Recorded in the audit log."])
 
@@ -7686,7 +7711,7 @@ def render_window_starts(data) -> None:
                                 raise ValueError("Enter the true deployment date and time.")
                             changed = correct_window_start(data, c["Window ID"], datetime.combine(new_date, new_time), reason.strip())
                         except ValueError as exc:
-                            st.markdown(design.message_html("error", "Nothing was changed", html.escape(str(exc))), unsafe_allow_html=True)
+                            refuse("Nothing was changed", [str(exc)])
                         else:
                             ss.pop("winfix_errors_shown", None)
                             if changed:
@@ -10177,9 +10202,9 @@ elif page == "check":
             if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
                 try:
                     repair_missing_window(data, trap_id)
-                    st.rerun()
                 except Exception as exc:
-                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
+                    refuse("The window was not started", [str(exc)])
+                st.rerun()
             return
         st.markdown(design.message_html("error", "This trap has no active test window", "It has earlier history, so enter when it actually went back into service. Then carry on with this check."), unsafe_allow_html=True)
         st.markdown('<div class="r1-label">Back in service from</div>', unsafe_allow_html=True)
@@ -10190,7 +10215,7 @@ elif page == "check":
         repair_reason = st.text_area("Reason", placeholder="Why the window was missing", key=f"repair_reason_{suffix}", label_visibility="collapsed")
         if two_phase_button("Start window and continue", f"repair_window_{suffix}", "Starting…", type="primary"):
             if not repair_reason.strip():
-                st.markdown(design.message_html("error", "Enter a reason before starting the window."), unsafe_allow_html=True)
+                refuse("Enter a reason before starting the window.")
             else:
                 try:
                     repair_missing_window(
@@ -10198,9 +10223,9 @@ elif page == "check":
                         effective_time=datetime.combine(repair_date, repair_time).replace(microsecond=0),
                         reason=repair_reason.strip(),
                     )
-                    st.rerun()
                 except Exception as exc:
-                    st.markdown(design.message_html("error", html.escape(str(exc))), unsafe_allow_html=True)
+                    refuse("The window was not started", [str(exc)])
+                st.rerun()
 
     _render_check_page()
 
