@@ -78,6 +78,26 @@ def test_the_phone_menu_lists_the_same_rows_as_the_desktop_administration_menu(p
         assert "Administration" not in phone.inner_text()
 
 
+def test_the_operator_label_in_the_menu_is_the_size_of_the_rows_on_a_phone_and_a_desktop(page: Page, tmp_path: Path) -> None:
+    """The owner (11 Nov): a small grey heading in a menu of full-size rows reads as a different kind of item; the label keeps its weight and colour, not its small size."""
+    data_dir = tmp_path / "d"; data_dir.mkdir()
+    size = "e => { const s = getComputedStyle(e); return [s.fontSize, s.lineHeight]; }"
+    with _serve(data_dir, END_SEED) as url:
+        for viewport, opener, dialog in ((PHONE, "More", "More"), (DESKTOP, "Administration", "Administration")):
+            page.set_viewport_size(viewport)
+            _home(page, url)
+            page.get_by_role("button", name=opener, exact=True).click()
+            menu = page.get_by_role("dialog", name=dialog)
+            expect(menu).to_be_visible(timeout=10_000)
+            label = menu.locator(".r1-menu-group", has_text="Operator")
+            expect(label).to_be_visible()
+            row = menu.locator('[data-testid="stPageLink"] a p').first
+            assert label.evaluate(size) == row.evaluate(size) == ["16px", "22px"], (opener, label.evaluate(size), row.evaluate(size))
+            assert label.evaluate("e => getComputedStyle(e).fontWeight") == "700"
+            help_line = menu.locator(".r1-menu-help")  # the rule after the label's must survive an edit to it: the help stays small and grey, with the divider above Sign out
+            assert help_line.evaluate("e => [getComputedStyle(e).fontSize, getComputedStyle(e).borderBottomWidth, getComputedStyle(e).paddingLeft]") == ["13px", "1px", "16px"]
+
+
 def test_every_administration_item_stays_reachable_on_a_phone(page: Page, tmp_path: Path) -> None:
     data_dir = tmp_path / "d"; data_dir.mkdir()
     page.set_viewport_size(PHONE)
