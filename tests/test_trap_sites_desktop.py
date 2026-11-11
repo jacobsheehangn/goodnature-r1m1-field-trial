@@ -225,7 +225,7 @@ def test_the_phone_more_menu_is_in_the_same_style(tmp_path, page: Page):
         page.get_by_role("button", name="More").first.click()
         page.wait_for_timeout(1000)
         body = page.locator('[data-testid="stPopoverBody"]').first
-        expect(body.locator(".r1-menu-group", has_text="Administration")).to_be_visible()
+        expect(body.locator(".r1-menu-group", has_text="Administration")).to_have_count(0)  # no group heading: the rows are the desktop menu's rows (20 Oct, owner)
         expect(body.locator(".r1-menu-group", has_text="Operator")).to_be_visible()
         expect(body.locator(".r1-menu-help")).to_be_visible()
         for row in body.locator('[data-testid="stPageLink"] a').all():

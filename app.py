@@ -9445,8 +9445,7 @@ def draw_top_navigation(current: str) -> None:
             with st.container(key="navmore_on_phone" if (current == "performance" or current in NAV_ADMIN_KEYS) else "navmore_off_phone"):
                 with st.popover("More", key=f"app_top_navigation_more_popover_{page_key}"):
                     _nav_link("performance", current, width="stretch")
-                    st.markdown('<div class="r1-menu-group">Administration</div>', unsafe_allow_html=True)
-                    _admin_menu_items(current, "phone")
+                    _admin_menu_items(current, "phone")  # the same items as the desktop's Administration menu, in the same rows: no small grey group heading above them
 
 
 if st.session_state.get("page", "sites") not in NAV_HIDDEN_PAGES:

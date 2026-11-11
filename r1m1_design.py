@@ -633,7 +633,8 @@ body [data-testid="stPopoverBody"] div.stButton button{justify-content:flex-star
 body [data-testid="stPopoverBody"] div.stButton button>div{width:100%;justify-content:flex-start}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a p,body [data-testid="stPopoverBody"] div.stButton button p{font-size:16px;line-height:22px;font-weight:400;color:var(--ink)}
 body [data-testid="stPopoverBody"] [data-testid="stPageLink"] a:is([aria-disabled="true"],[disabled]) p{font-weight:700}
-body .r1-menu-group{font-size:13px;line-height:16px;font-weight:700;color:var(--ink-70);padding:16px 16px 6px}
+/* the Operator label is the size of the rows around it and stays bold and grey so it reads as a label */
+body .r1-menu-group{font-size:16px;line-height:22px;font-weight:700;color:var(--ink-70);padding:16px 16px 6px}
 /* the help under the Operator field is a visible line, not a tooltip, and carries the divider above Sign out */
 body .r1-menu-help{font-size:13px;line-height:18px;color:var(--ink-70);padding:0 16px 12px;border-bottom:1px solid var(--ink-05)}
 /* the Operator name sits in the menu like any other row: same side padding, a 44px field */
